@@ -1,0 +1,2 @@
+rootProject.name = 'example_android_ble_gatt_fido2'
+include('app')
