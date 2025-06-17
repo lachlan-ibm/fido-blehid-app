@@ -1,9 +1,69 @@
+/*IBM Confidential
+* OCO Source Materials
+* 5725-V89 5725-V90
+*
+* Copyright IBM Corp. 2025
+*
+* The source code for this program is not published or otherwise divested of its trade secrets,
+* irrespective of what has been deposited with the U.S. Copyright Office.
+*/
+
+package com.isfs.blekey.hidsvc;
+
+import java.util.Collections;
+import java.util.UUID;
+import java.util.Set;
+import java.util.Queue;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Arrays;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
+import android.app.Activity;
+import android.content.Context;
+import android.os.Handler;
+import android.os.ParcelUuid;
+import android.os.Build.VERSION_CODES;
+import android.os.Build;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.BroadcastReceiver;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattServer;
+import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothGattServerCallback;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
+import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.le.AdvertiseCallback;
+import android.bluetooth.le.AdvertiseData;
+import android.bluetooth.le.AdvertiseData.Builder;
+import android.bluetooth.le.AdvertiseSettings;
+import android.bluetooth.le.BluetoothLeAdvertiser;
+import android.content.pm.PackageManager;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.isfs.blekey.util.BleUtils;
+
+
 public class HIDService {
 
-    private static final String TAG = HidPeripheral.class.getSimpleName();
+    private static final String TAG = HIDService.class.getSimpleName();
 
     private String manufacturer = "lowkey";
-    private String deviceName = "BeeKey HID";
+    private String deviceName = "IBleKey HID Passkey";
     private String serialNumber = "13371337";
 
     private final Context applicationContext;
@@ -46,8 +106,8 @@ public class HIDService {
     /**
      * Gatt Characteristic Descriptor
      */
-    private static final UUID DESCRIPTOR_REPORT_REFERENCE = BleUuidUtils.fromShortValue(0x2908);
-    private static final UUID DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION = BleUuidUtils.fromShortValue(0x2902);
+    private static final UUID DESCRIPTOR_REPORT_REFERENCE = BleUtils.getCharateristicUuid(0x2908);
+    private static final UUID DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION = BleUtils.getCharateristicUuid(0x2902);
 
     private static final byte[] EMPTY_BYTES = {};
     private static final byte[] RESPONSE_HID_INFORMATION = {0x11, 0x01, 0x00, 0x03};
@@ -116,6 +176,73 @@ public class HIDService {
 
         //create the passkey object
         this.passkey = new HIDPasskey(this);
+    }
+
+    /**
+     * Add GATT service to gattServer
+     *
+     * @param service the service
+     */
+    private void addService(final BluetoothGattService service) {
+        assert gattServer != null;
+        boolean serviceAdded = false;
+        while (!serviceAdded) {
+            try {
+                serviceAdded = gattServer.addService(service);
+            } catch (final Exception e) {
+                Log.d(TAG, "Adding Service failed", e);
+            }
+        }
+        Log.d(TAG, "Service: " + service.getUuid() + " added.");
+    }
+
+    /**
+     * Setup Device Information Service
+     *
+     * @return the service
+     */
+    private static BluetoothGattService setUpDeviceInformationService() {
+        final BluetoothGattService service = new BluetoothGattService(SERVICE_DEVICE_INFORMATION, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+        {
+            final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(CHARACTERISTIC_MANUFACTURER_NAME, BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED);
+            while (!service.addCharacteristic(characteristic));
+        }
+        {
+            final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(CHARACTERISTIC_MODEL_NUMBER, BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED);
+            while (!service.addCharacteristic(characteristic));
+        }
+        {
+            final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(CHARACTERISTIC_SERIAL_NUMBER, BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED);
+            while (!service.addCharacteristic(characteristic)) ;
+        }
+
+        return service;
+    }
+
+
+    /**
+     * Setup Battery Service
+     *
+     * @return the service
+     */
+    private static BluetoothGattService setUpBatteryService() {
+        final BluetoothGattService service = new BluetoothGattService(SERVICE_BATTERY, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+
+        // Battery Level
+        final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(
+                CHARACTERISTIC_BATTERY_LEVEL,
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY | BluetoothGattCharacteristic.PROPERTY_READ,
+                BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED);
+
+        final BluetoothGattDescriptor clientCharacteristicConfigurationDescriptor = new BluetoothGattDescriptor(
+                DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION,
+                BluetoothGattDescriptor.PERMISSION_READ | BluetoothGattDescriptor.PERMISSION_WRITE);
+        clientCharacteristicConfigurationDescriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+        characteristic.addDescriptor(clientCharacteristicConfigurationDescriptor);
+
+        while (!service.addCharacteristic(characteristic));
+
+        return service;
     }
 
     private BluetoothGattService setUpHidService() {
@@ -421,32 +548,32 @@ public class HIDService {
                 public void run() {
 
                     final UUID characteristicUuid = characteristic.getUuid();
-                    if (BleUuidUtils.matches(CHARACTERISTIC_HID_INFORMATION, characteristicUuid)) {
+                    if (BleUtils.matches(CHARACTERISTIC_HID_INFORMATION, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, RESPONSE_HID_INFORMATION);
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_REPORT_MAP, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_REPORT_MAP, characteristicUuid)) {
                         if (offset == 0) {
                             gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, HIDPasskey.getReportMap());
                         } else {
-                            final int remainLength = getReportMap().length - offset;
+                            final int remainLength = HIDPasskey.getReportMap().length - offset;
                             if (remainLength > 0) {
                                 final byte[] data = new byte[remainLength];
-                                System.arraycopy(getReportMap(), offset, data, 0, remainLength);
+                                System.arraycopy(HIDPasskey.getReportMap(), offset, data, 0, remainLength);
                                 gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, data);
                             } else {
                                 gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null);
                             }
                         }
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_HID_CONTROL_POINT, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_HID_CONTROL_POINT, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, new byte []{0});
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_REPORT, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_REPORT, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_MANUFACTURER_NAME, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_MANUFACTURER_NAME, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, manufacturer.getBytes(StandardCharsets.UTF_8));
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_SERIAL_NUMBER, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_SERIAL_NUMBER, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, serialNumber.getBytes(StandardCharsets.UTF_8));
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_MODEL_NUMBER, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_MODEL_NUMBER, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, deviceName.getBytes(StandardCharsets.UTF_8));
-                    } else if (BleUuidUtils.matches(CHARACTERISTIC_BATTERY_LEVEL, characteristicUuid)) {
+                    } else if (BleUtils.matches(CHARACTERISTIC_BATTERY_LEVEL, characteristicUuid)) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, new byte[] {0x64}); // always 100%
                     } else {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, characteristic.getValue());
@@ -470,7 +597,7 @@ public class HIDService {
             handler.post(new Runnable() {
                 @Override
                 public void run() {
-                    if (BleUuidUtils.matches(DESCRIPTOR_REPORT_REFERENCE, descriptor.getUuid())) {
+                    if (BleUtils.matches(DESCRIPTOR_REPORT_REFERENCE, descriptor.getUuid())) {
                         final int characteristicProperties = descriptor.getCharacteristic().getProperties();
                         if (characteristicProperties == (BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_NOTIFY)) {
                             // Input Report
@@ -505,7 +632,7 @@ public class HIDService {
             }
 
             if (responseNeeded) {
-                if (BleUuidUtils.matches(CHARACTERISTIC_REPORT, characteristic.getUuid())) {
+                if (BleUtils.matches(CHARACTERISTIC_REPORT, characteristic.getUuid())) {
                     if (characteristic.getProperties() == (BluetoothGattCharacteristic.PROPERTY_READ 
                                                             | BluetoothGattCharacteristic.PROPERTY_WRITE 
                                                             | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE)) {
@@ -537,7 +664,7 @@ public class HIDService {
             descriptor.setValue(value);
 
             if (responseNeeded) {
-                if (BleUuidUtils.matches(DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION, descriptor.getUuid())) {
+                if (BleUtils.matches(DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION, descriptor.getUuid())) {
                     // send empty
                     if (gattServer != null) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
@@ -609,5 +736,99 @@ public class HIDService {
         } else {
             serialNumber = newSerialNumber;
         }
+    }
+
+    /**
+     * Check if Bluetooth LE device supported on the running environment.
+     *
+     * @param context the context
+     * @return true if supported
+     */
+    public static boolean isBleSupported(@NonNull final Context context) {
+        try {
+            if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) == false) {
+                return false;
+            }
+
+            final BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+
+            final BluetoothAdapter bluetoothAdapter;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                bluetoothAdapter = bluetoothManager.getAdapter();
+            } else {
+                bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+            }
+
+            if (bluetoothAdapter != null) {
+                return true;
+            }
+        } catch (final Throwable ignored) {
+            // ignore exception
+        }
+        return false;
+    }
+
+    /**
+     * Check if Bluetooth LE Peripheral mode supported on the running environment.
+     *
+     * @param context the context
+     * @return true if supported
+     */
+    public static boolean isBlePeripheralSupported(@NonNull final Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return false;
+        }
+
+        final BluetoothAdapter bluetoothAdapter =  (
+                (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter();
+
+        if (bluetoothAdapter == null) {
+            return false;
+        }
+
+        return bluetoothAdapter.isMultipleAdvertisementSupported();
+    }
+
+    /**
+     * Check if bluetooth function enabled
+     *
+     * @param context the context
+     * @return true if bluetooth enabled
+     */
+    public static boolean isBluetoothEnabled(@NonNull final Context context) {
+        final BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+
+        if (bluetoothManager == null) {
+            return false;
+        }
+
+        final BluetoothAdapter bluetoothAdapter;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            bluetoothAdapter = bluetoothManager.getAdapter();
+        } else {
+            bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        }
+
+        if (bluetoothAdapter == null) {
+            return false;
+        }
+
+        return bluetoothAdapter.isEnabled();
+    }
+
+    /**
+     * Request code for bluetooth enabling
+     */
+    public static final int REQUEST_CODE_BLUETOOTH_ENABLE = 0xb1e;
+
+    /**
+     * Enables bluetooth function.<br />
+     * the Activity may implement the `onActivityResult` method with the request code `REQUEST_CODE_BLUETOOTH_ENABLE`.
+     *
+     * @param activity the activity
+     */
+    public static void enableBluetooth(@NonNull final Activity activity) {
+        activity.startActivityForResult(
+                new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQUEST_CODE_BLUETOOTH_ENABLE);
     }
 }

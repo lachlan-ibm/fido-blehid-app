@@ -1,0 +1,8 @@
+*.class
+bin
+*.swp
+build
+gradle*
+.gradle
+gradlew*
+.vscode

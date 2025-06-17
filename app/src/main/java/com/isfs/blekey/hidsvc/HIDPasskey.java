@@ -1,15 +1,21 @@
-package com.example.blehidfido2.server;
+/*IBM Confidential
+* OCO Source Materials
+* 5725-V89 5725-V90
+*
+* Copyright IBM Corp. 2025
+*
+* The source code for this program is not published or otherwise divested of its trade secrets,
+* irrespective of what has been deposited with the U.S. Copyright Office.
+*/
+
+package com.isfs.blekey.hidsvc;
 
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothGattDescriptor;
 
-import com.welie.blessed.BluetoothCentral;
-import com.welie.blessed.BluetoothPeripheralManager;
-
-import com.example.blehidfido2.util.BleUtils;
-import com.example.blehidfido2.ctap.CtapHid;
+import com.isfs.blekey.ctap.CtapHid;
 
 import java.util.Arrays;
 import java.util.UUID;
@@ -19,29 +25,29 @@ import org.slf4j.LoggerFactory;
 
 
 public class HIDPasskey {
-    private HIDService s;
 
-    public HIDPasskey(HIDService s) {
-        this.service = s;
+    private HIDService _s;
+
+    public HIDPasskey(HIDService service) {
+        this._s = service;
     }
 
-    private static final Logger logger = LoggerFactory.getLogger(PasskeyPeripheral.class);
+    private static final Logger logger = LoggerFactory.getLogger(HIDPasskey.class);
 
-    @Override
     protected static byte[] getReportMap() {
         return new byte[]{
-            (byte) 0x06, (byte) 0xD0, 0xF1,       // Usage Page (FIDO Alliance)
+            (byte) 0x06, (byte) 0xD0, (byte) 0xF1,       // Usage Page (FIDO Alliance)
             (byte) 0x09, 0x01,                   // Usage (U2F HID Authenticator Device)
             (byte) 0xA1, 0x01,                   // Collection (Application)
             (byte) 0x09, 0x20,                   //   Usage (Input Report Data)
             (byte) 0x15, 0x00,                   //   Logical Minimum (0)
-            (byte) 0x26, (byte) 0xFF, 0x00,      //   Logical Maximum (255)
+            (byte) 0x26, (byte) 0xFF, (byte) 0x00,      //   Logical Maximum (255)
             (byte) 0x75, 0x08,                   //   Report Size (8)
             (byte) 0x95, 0x40,                   //   Report Count (64)
             (byte) 0x81, 0x02,                   //   Input (Data, Variable, Absolute)
             (byte) 0x09, 0x21,                   //   Usage (Output Report Data)
             (byte) 0x15, 0x00,
-            (byte) 0x26, (byte) 0xFF, 0x00,
+            (byte) 0x26, (byte) 0xFF, (byte) 0x00,
             (byte) 0x75, 0x08,
             (byte) 0x95, 0x40,
             (byte) 0x91, 0x02,                   //   Output (Data, Variable, Absolute)
@@ -55,7 +61,7 @@ public class HIDPasskey {
             // Parse the CTAPHID command
             byte cmdByte = report[4];
             CtapHid cmd = null;
-            if(cmdByte & 0x80) {
+            if((cmdByte & 0x80) > 0) {
                 cmd = new CtapHid(report);
             } else {
                 cmd = CtapHid.getPendingByCid(cid);
@@ -64,14 +70,23 @@ public class HIDPasskey {
                 }
             }
             if(cmd != null && cmd.hasSufficientBytes()) {
-                cmd.processMessage();
-                // queue any response back
-                while(cmd.hasMoreResponses()) {
-                    service.addInputReport(cmd.getResponse());
+                try {
+                    cmd.processMessage();
+                    // queue any response back
+                    while(cmd.hasMoreResponses()) {
+                        byte[] r_f = cmd.getResponseSegment();
+                        this._s.addInputReport(r_f);
+                    }
+                } catch (Exception e) {
+                    logger.error(HIDPasskey.class.getSimpleName() +  "onOutputReport", e);
                 }
             }
 
         }
+    }
+
+    protected void offerInputReport(byte[] report) {
+        this._s.addInputReport(report);
     }
 }
 

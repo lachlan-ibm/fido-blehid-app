@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Eye Ble Key</string>
+    <string name="requires_bl_enabled">This app requires bluetooth enabled.</string>
+    <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. The app will exit.</string>
+    <string name="not_supported">Not supported</string>
+    <string name="ok">OK</string>
+    <string name="ble_hid">BLE HID</string>
+    <string name="ble_beekey">BleKey</string>
+    
+</resources>

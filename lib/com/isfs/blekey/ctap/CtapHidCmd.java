@@ -1,7 +1,8 @@
 
-package com.example.blehidfido2.ctap;
+package com.isfs.blekey.ctap;
 
 public enum CtapHidCmd {
+    ERR(0x00),
     MSG(0x03),
     CBOR(0x10),
     INIT(0x06),

@@ -1,12 +1,12 @@
-package com.example.blehidfido2;
+package com.isfs.blekey;
 
-import android.bluetooth.BluetoothDevice;
+
 import android.os.Bundle;
+import android.view.View;
+import android.content.Intent;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
-import com.welie.blessed.BluetoothCentral;
-import com.welie.blessed.BluetoothPeripheralManager;
-import com.welie.blessed.BluetoothPeripheralManagerCallback;
+import android.view.View.OnClickListener;
 
 import android.widget.ToggleButton;
 
@@ -18,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        setTitle(getString(string.ble_hid));
+        setTitle(getString(R.string.ble_hid));
         //AppCompatDelegate.setCompatVectorFromResourcesEnabled(true);
         ToggleButton serverButton = findViewById(R.id.serverButton);
         serverButton.setOnClickListener(new OnClickListener() {

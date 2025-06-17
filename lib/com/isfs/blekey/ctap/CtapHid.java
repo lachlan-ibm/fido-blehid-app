@@ -1,14 +1,13 @@
 
-package com.example.blehidfido2.ctap;
+package com.isfs.blekey.ctap;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.security.PrivateKey;
 import java.security.SecureRandom;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,20 +15,21 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.example.blehidfido2.PasskeyPeripheral;
-import com.example.blehidfido2.authenticator.AuthenticatorAPI;
-import com.example.blehidfido2.util.Cbor;
+import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import com.isfs.blekey.util.Cbor;
 
 
 /**
  * This class accumulates HID message frames until a complete message
- * has been recieved. It then unpacks the message and generates a 
+ * has been received. It then unpacks the message and generates a 
  * response.
  * 
- * Responses can be collected by using the static method CtapHid.getPendingResponse
- * which will fetch the next pending response buffer from the internal queue.
+ * Responses can be collected by using the method cmd.getPendingResponse method,
+ * which will fetch the next pending response buffer.
  */
-public class CtapHid {  
+public class CtapHid {
+
+    private final int MAX_SIZE = 64;
 
     private byte[] cmdFrame;
     private List<byte[]> sequenceFrames;
@@ -41,8 +41,6 @@ public class CtapHid {
     private boolean responseReady = false;
     private int responseSegment = -1; //send init then start sequences at 0
     
-    // List of outportReport requests which have not been replied to.
-    private static Deque<CtapHidTimeoutRsp> pending = new ArrayDeque<CtapHidTimeoutRsp>();
     // Map of assigned CID's and the last message processed on the given CID.
     private static Map<byte[], CtapHid> assignedCids = new HashMap<byte[], CtapHid>();
 
@@ -66,15 +64,30 @@ public class CtapHid {
         this.byteCount = (high << 8) | low; // combine to 16-bit int
     }
 
-    public static byte[] getPendingByCid(byte[] cid) {
+    public static CtapHid getPendingByCid(byte[] cid) {
         if (assignedCids.containsKey(cid)) {
-            return assignedCids.get(cid).getCid();
+            return assignedCids.get(cid);
         } //else 
         return null;
     }
 
+    public static boolean hasOpenCid(byte[] cid) {
+        return assignedCids.containsKey(cid);
+    }
+
+    public static void addKeyToCid(byte[] cid, PrivateKey key) {
+        assignedCids.get(cid);
+    }
+
     public CtapHid processSequence(byte[] segment) {
         this.sequenceFrames.add(segment);
+        if(this.hasSufficientBytes()) {
+            try {
+                this.processMessage();
+            } catch (Exception e) {
+                logger.error("processSequence", e);
+            }
+        }
         return this;
     }
 
@@ -99,7 +112,7 @@ public class CtapHid {
         return this.responseReady;
     }
 
-    private byte[] getResponseSegment() {
+    public byte[] getResponseSegment() {
         if(this.responseSegment < 0) {//Init packet
             this.responseSegment = 0;
             return this.initResponse;
@@ -143,27 +156,53 @@ public class CtapHid {
     }
 
     public void processMessage() throws Exception {
-        Map<CtapHidCmd, CtapFcnPtr> fcnPtrs = Map.of(
-            CtapHidCmd.MSG, this::u2f,
-            CtapHidCmd.CBOR, this::cbor,
-            CtapHidCmd.INIT, this::init,
-            CtapHidCmd.PING, this::ping,
-            CtapHidCmd.CANCEL, this::cancel,
-            CtapHidCmd.ERROR, this::error,
-            CtapHidCmd.KEEP_ALIVE, this::keepAlive,
-            CtapHidCmd.WINK, this::wink,
-            CtapHidCmd.LOCK, this::lock
-        );
-        fcnPtrs.get(this.messageType).process( this.getCtapHidData() );
-        if(this.responseReady == true) {
-            CtapHidTimeoutRsp pendingRsp = CtapHid.pending.pollFirst();
-            if (pendingRsp != null && !pendingRsp.hasResponded()) {
-                pendingRsp.setResponded(true);
-                PasskeyPeripheral.sendResponse(pendingRsp.getCentral(),
-                                               pendingRsp.getCharacteristic(),
-                                               this.getResponseSegment());
-            }
+        switch(this.messageType)
+        {
+            case MSG:
+                this.u2f(this.getCtapHidData()); break;
+            case CBOR:
+                this.cbor(this.getCtapHidData()); break;
+            case INIT:
+                this.init(this.getCtapHidData()); break;
+            case PING:
+                this.ping(this.getCtapHidData()); break;
+            case CANCEL:
+                this.cancel(this.getCtapHidData()); break;
+            case KEEP_ALIVE:
+                this.keepAlive(this.getCtapHidData()); break;
+            case WINK:
+                this.wink(this.getCtapHidData()); break;
+            case LOCK:
+                this.lock(this.getCtapHidData()); break;
+            default:
+                this.ctapErr(Ctap2StatusCode.INVALID_COMMAND);
         }
+    }
+
+    private void ctapAck(int bcnt, byte[] data) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
+        bos.write(this.getCid());
+        bos.write(this.messageType.getValue());
+        bos.write((bcnt & 0xFF00) >> 8);
+        bos.write(bcnt & 0xFF);
+        if (data != null) {
+            bos.write(data);
+        }
+        bos.write(new byte[MAX_SIZE - bos.size()]);
+        this.initResponse = bos.toByteArray();
+        this.responseReady = true;
+    }
+
+    private void ctapErr(Ctap2StatusCode code) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
+        bos.write(this.getCid());
+        bos.write(CtapHidCmd.ERROR.getValue());
+        bos.write(0);
+        bos.write(1);
+        bos.write(code.getCode());
+        bos.write(new byte[MAX_SIZE - bos.size()]);
+        this.initResponse = bos.toByteArray();
+        this.responseReady = true;  
     }
 
     private void u2f(byte[] data) {   
@@ -199,27 +238,25 @@ public class CtapHid {
         }
     }
 
-    private void invalidCborRequest() {
-        logger.warn("Invalid CBOR Data recieved, PANIC!");
-        this.initResponse = new byte[64];
-        System.arraycopy(this.getCid(), 0, this.initResponse, 0, 4);
-        this.initResponse[6] = 0x01;
-        this.initResponse[7] = (byte) Ctap2StatusCode.INVALID_CBOR.getCode();
-    }
-
-    private void cbor(byte[] data) {
+    private void cbor(byte[] data) throws IOException {
         if(data.length < 1) {
-            invalidCborRequest();
+            this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
         } else {
             int api = (int) data[0];
             byte[] cborBytes = new byte[data.length - 1];
             System.arraycopy(data, 1, cborBytes, 0, data.length - 1);
             Object cborObj = Cbor.decode(cborBytes);
             if(cborObj == null || !(cborObj instanceof Map)) {
-                invalidCborRequest();
+                this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
             } else {
-                Map cbor = (Map) cborObj;
-                buildCborInitAndSequencePackets(AuthenticatorAPI.process(api, (Map<String, Object>) cbor));
+                try {
+                    Map cbor = (Map) cborObj;
+                    buildCborInitAndSequencePackets(
+                        AuthenticatorAPI.process(this.cid, api, (Map<Integer, Object>) cbor));
+                } catch (Exception e) {
+                    logger.error("cbor", e);
+                    this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
+                }
             }
         }
         this.responseReady = true;
@@ -231,109 +268,42 @@ public class CtapHid {
         SecureRandom random = new SecureRandom();
         byte[] newCid = new byte[4];
         random.nextBytes(newCid);
-        byte[] rsp = new byte[64];
-        rsp[0] = (byte) CtapHidCmd.INIT.getValue();
-        rsp[1] = (17  & 0xFF00) >> 8; // Byte count
-        rsp[2] = (17 & 0xFF);
-        System.arraycopy(nonce, 0, rsp, 3, 8);
-        System.arraycopy(newCid, 0, rsp, 11, 4);
+        this.initResponse = new byte[64];
+        this.initResponse[0] = (byte) CtapHidCmd.INIT.getValue();
+        this.initResponse[1] = (17  & 0xFF00) >> 8; // Byte count
+        this.initResponse[2] = (17 & 0xFF);
+        System.arraycopy(nonce, 0, this.initResponse, 3, 8);
+        System.arraycopy(newCid, 0, this.initResponse, 11, 4);
                                     //version 2; leeet; CAPABILITY_CBOR | CAPABILITY_NMSG
         byte[] specStuff = new byte[] {0x02, 0x13, 0x33, 0x37, 0x0C};
-        System.arraycopy(specStuff, 0, rsp, 15, 5);
-        this.initResponse = rsp;
+        System.arraycopy(specStuff, 0, this.initResponse, 15, 5);
         this.responseReady = true;
     }
 
-    private void ping(byte[] data) {
-        this.initResponse = new byte[0];
+    private void ping(byte[] data) throws IOException {
+        ctapAck(this.byteCount, data);
     }
 
-    private void cancel(byte[] data) {
-        this.initResponse = new byte[0];
-    }
-
-    private void error(byte[] data) {
-        this.initResponse = new byte[0];
-    }
-
-    private void keepAlive(byte[] data) {
-        this.initResponse = new byte[0];
-    }
-
-    private void wink(byte[] data) {
-        this.initResponse = new byte[0];
-    }
-
-    private void lock(byte[] data) {
-        this.initResponse = new byte[0];
-    }
-
-    public static byte[] getPendingResponse() {
-        for(byte[] cid: CtapHid.assignedCids.keySet()) {
-            CtapHid cmd = CtapHid.assignedCids.get(cid);
-            if(cmd.isResponseReady() && cmd.hasMoreResponse()) {
-                return cmd.getResponseSegment();
-            }
-        }
-        return null;
-
-    }
-
-    public static void sendOrQueuePendingResponse(
-            BluetoothCentral central, 
-            BluetoothGattCharacteristic characteristic) {
-        byte[] maybeRsp = CtapHid.getPendingResponse();
-        if(maybeRsp != null) {
-            PasskeyPeripheral.sendResponse(central, characteristic, maybeRsp);
-        } else {
-            CtapHidTimeoutRsp timeoutRsp = new CtapHidTimeoutRsp(central, characteristic);
-            timeoutRsp.start();
-            CtapHid.pending.addLast(timeoutRsp);
+    private void cancel(byte[] data) throws IOException  {
+        if(assignedCids.keySet().contains(this.getCid())) {
+            //TODO cleanup request in progress
+            ctapAck(0, null);
         }
     }
 
-    public class CtapHidTimeoutRsp extends Thread {
+    private void keepAlive(byte[] data) throws IOException {
+        ctapAck(1, new byte[] {0x01});
+    }
 
-        private volatile boolean responded = false;
-        private BluetoothCentral central;
-        private BluetoothGattCharacteristic characteristic;
+    private void wink(byte[] data) throws IOException {
+        ctapAck(0, null);
+    }
 
-        public CtapHidTimeoutRsp(BluetoothCentral cent, BluetoothGattCharacteristic character) {
-            this.central = cent;
-            this.characteristic = character;
-         }
+    private void lock(byte[] data) throws IOException {
+        ctapAck(0, null);
+    }
 
-        @Override
-        public void run() {
-            // Leave a report as pending for 0.5s at most
-            long timeout = System.currentTimeMillis() + 500;
-            while(!responded) {
-                sleep(5);
-                long now = System.currentTimeMillis();
-                if(now >= timeout && !responded) {
-                    responded = true;
-                    PasskeyPeripheral.sendResponse(central, characteristic, 
-                                            //CTAPHID_KEEPALIVE; length 1; STATUS_PROCESSING
-                            new byte[] {(byte) CtapHidCmd.KEEP_ALIVE.getValue(), 0x01, 0x02});
-                    break;
-                }
-            }
-        }
-
-        public void setResponded(boolean rsp) {
-            this.responded = rsp;
-        }
-
-        public boolean hasResponded() {
-            return this.responded;
-        }
-
-        public BluetoothCentral getCentral() {
-            return this.central;
-        }
-
-        public BluetoothGattCharacteristic getCharacteristic() {
-            return this.characteristic;
-        }
+    public boolean hasMoreResponses(){
+        return this.hasMoreResponse();
     }
 }

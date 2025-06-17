@@ -1,4 +1,4 @@
-package com.example.blehidfido2.util;
+package com.isfs.blekey.util;
 
 import java.util.UUID;
 

@@ -1,5 +1,26 @@
-package com.example.blehidfido2;
+package com.isfs.blekey;
 
+import com.isfs.blekey.hidsvc.HIDService;
+import com.isfs.blekey.util.BleUtils;
+
+import android.content.DialogInterface;
+import android.content.DialogInterface.OnClickListener;
+import android.content.DialogInterface.OnDismissListener;
+import android.os.Bundle;
+import android.os.Handler;
+import android.content.Intent;
+import android.bluetooth.BluetoothManager;
+import android.content.Context;
+import android.util.Log;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AlertDialog.Builder;
+import android.widget.Toast;
+
+
+import com.isfs.blekey.R;
 
 public class PasskeyActivity extends AppCompatActivity {
 
@@ -9,17 +30,17 @@ public class PasskeyActivity extends AppCompatActivity {
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        if (!BleUtils.isBluetoothEnabled(this)) {
-            BleUtils.enableBluetooth(this);
+        if (!HIDService.isBluetoothEnabled(this)) {
+            HIDService.enableBluetooth(this);
             return;
         }
 
-        if (!BleUtils.isBleSupported(this) || !BleUtils.isBlePeripheralSupported(this)) {
+        if (!HIDService.isBleSupported(this) || !HIDService.isBlePeripheralSupported(this)) {
             // display alert and exit
             final AlertDialog alertDialog = new Builder(this).create();
-            alertDialog.setTitle(getString(string.not_supported));
-            alertDialog.setMessage(getString(string.ble_perip_not_supported));
-            alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, getString(string.ok),
+            alertDialog.setTitle(getString(R.string.not_supported));
+            alertDialog.setMessage(getString(R.string.ble_perip_not_supported));
+            alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, getString(R.string.ok),
                     new OnClickListener() {
                         @Override
                         public void onClick(final DialogInterface dialog, final int which) {
@@ -41,7 +62,7 @@ public class PasskeyActivity extends AppCompatActivity {
     public void setupPasskeyPeripheralProvider() {
         //TODO start HIDService
         passkeyService = new HIDService(this);
-        passkeyService.setDeviceName(getString(string.ble_beekey));
+        passkeyService.setDeviceName(getString(R.string.ble_beekey));
         passkeyService.startAdvertising();
     };
 
@@ -49,20 +70,20 @@ public class PasskeyActivity extends AppCompatActivity {
     protected void onActivityResult(final int requestCode, final int resultCode, final Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (requestCode == BleUtils.REQUEST_CODE_BLUETOOTH_ENABLE) {
-            if (!BleUtils.isBluetoothEnabled(this)) {
+        if (requestCode == HIDService.REQUEST_CODE_BLUETOOTH_ENABLE) {
+            if (!HIDService.isBluetoothEnabled(this)) {
                 // User selected NOT to use Bluetooth.
                 // do nothing
-                Toast.makeText(this, string.requires_bl_enabled, Toast.LENGTH_LONG).show();
+                Toast.makeText(this, R.string.requires_bl_enabled, Toast.LENGTH_LONG).show();
                 return;
             }
 
-            if (!BleUtils.isBleSupported(this) || !BleUtils.isBlePeripheralSupported(this)) {
+            if (!HIDService.isBleSupported(this) || !HIDService.isBlePeripheralSupported(this)) {
                 // display alert and exit
                 final AlertDialog alertDialog = new Builder(this).create();
-                alertDialog.setTitle(getString(string.not_supported));
-                alertDialog.setMessage(getString(string.ble_perip_not_supported));
-                alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, getString(string.ok),
+                alertDialog.setTitle(getString(R.string.not_supported));
+                alertDialog.setMessage(getString(R.string.ble_perip_not_supported));
+                alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, getString(R.string.ok),
                         new OnClickListener() {
                             @Override
                             public void onClick(final DialogInterface dialog, final int which) {
