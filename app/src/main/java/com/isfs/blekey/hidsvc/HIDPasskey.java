@@ -23,17 +23,39 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-
+/**
+ * Implements the FIDO2 passkey functionality over the HID protocol.
+ * This class bridges between the BLE HID service and the CTAP protocol,
+ * handling HID reports and translating them to CTAP commands and responses.
+ */
 public class HIDPasskey {
 
+    /**
+     * Reference to the parent HID service that manages BLE connections.
+     */
     private HIDService _s;
 
+    /**
+     * Logger for debugging and error reporting.
+     */
+    private static final Logger logger = LoggerFactory.getLogger(HIDPasskey.class);
+
+    /**
+     * Constructs a new HIDPasskey instance with a reference to the parent HID service.
+     *
+     * @param service The HID service that will handle BLE communication
+     */
     public HIDPasskey(HIDService service) {
         this._s = service;
     }
 
-    private static final Logger logger = LoggerFactory.getLogger(HIDPasskey.class);
-
+    /**
+     * Returns the HID report descriptor map for a FIDO CTAP HID device.
+     * This descriptor defines the input and output report formats according to
+     * the FIDO CTAP HID specification.
+     *
+     * @return A byte array containing the HID report descriptor
+     */
     protected static byte[] getReportMap() {
         return new byte[]{
             (byte) 0x06, (byte) 0xD0, (byte) 0xF1,       // Usage Page (FIDO Alliance)
@@ -55,6 +77,13 @@ public class HIDPasskey {
         };
     }
 
+    /**
+     * Processes an output report received from the host device.
+     * Parses the report as a CTAP HID command or sequence, processes it,
+     * and queues any response back to the host.
+     *
+     * @param report The output report data received from the host
+     */
     public void onOutputReport(byte[] report) {
         if(report != null && report.length > 5) { //cid + (cmd || seq) === 5 bytes min
             byte[] cid = Arrays.copyOfRange(report, 0, 4);
@@ -78,15 +107,19 @@ public class HIDPasskey {
                         this._s.addInputReport(r_f);
                     }
                 } catch (Exception e) {
-                    logger.error(HIDPasskey.class.getSimpleName() +  "onOutputReport", e);
+                    logger.error(HIDPasskey.class.getSimpleName() + "onOutputReport", e);
                 }
             }
-
         }
     }
 
+    /**
+     * Offers an input report to be sent to the host device.
+     * This method is used to send CTAP responses back to the host.
+     *
+     * @param report The input report data to be sent to the host
+     */
     protected void offerInputReport(byte[] report) {
         this._s.addInputReport(report);
     }
 }
-

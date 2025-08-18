@@ -1,5 +1,11 @@
+/*
+ * Copyright IBM 2025
+ */
 apply plugin: 'java'
 apply plugin: 'maven-publish'
+
+// Apply the copyright hook
+apply from: 'copyright-hook.gradle'
 
 version = "0.00.10"
 
@@ -11,13 +17,12 @@ repositories {
     }
 }
 
-sourceSets {
-    main {
-        java {
-            srcDirs = ['lib']
-        }
-    }
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
+
+// We're using the lib directory as a separate module now, so we don't need to include it as a source directory
 
 dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.0'
@@ -51,3 +56,10 @@ publishing {
         mavenLocal()
     }
 }
+
+// Run copyright check before build
+tasks.withType(JavaCompile) {
+    dependsOn checkCopyrightHeaders
+}
+
+// Made with Bob

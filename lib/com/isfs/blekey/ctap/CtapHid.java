@@ -1,4 +1,3 @@
-
 package com.isfs.blekey.ctap;
 
 import java.io.ByteArrayOutputStream;
@@ -18,7 +17,6 @@ import org.slf4j.LoggerFactory;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.util.Cbor;
 
-
 /**
  * This class accumulates HID message frames until a complete message
  * has been received. It then unpacks the message and generates a 
@@ -29,28 +27,83 @@ import com.isfs.blekey.util.Cbor;
  */
 public class CtapHid {
 
+    /**
+     * Maximum size of a CTAP HID frame (64 bytes).
+     */
     private final int MAX_SIZE = 64;
 
+    /**
+     * The initial command frame received from the host.
+     */
     private byte[] cmdFrame;
+    
+    /**
+     * List of sequence frames that follow the initial command frame.
+     */
     private List<byte[]> sequenceFrames;
+    
+    /**
+     * The channel identifier for this CTAP HID transaction.
+     */
     private byte[] cid;
+    
+    /**
+     * The number of bytes expected in the complete message.
+     */
     private int byteCount;
+    
+    /**
+     * The type of CTAP HID command being processed.
+     */
     private CtapHidCmd messageType;
+    
+    /**
+     * The initial response frame to be sent back to the host.
+     */
     private byte[] initResponse;
+    
+    /**
+     * List of sequence response frames that follow the initial response.
+     */
     private List<byte[]> responseSegments;
+    
+    /**
+     * Flag indicating whether a response is ready to be sent.
+     */
     private boolean responseReady = false;
+    
+    /**
+     * Index of the current response segment (-1 for init, 0+ for sequences).
+     */
     private int responseSegment = -1; //send init then start sequences at 0
     
-    // Map of assigned CID's and the last message processed on the given CID.
-    private static Map<byte[], CtapHid> assignedCids = new HashMap<byte[], CtapHid>();
+    /**
+     * Map of assigned channel IDs and their ongoing CTAP transaction context.
+     */
+    private static Map<byte[], CtapTxn> assignedCids = new HashMap<byte[], CtapHid>();
 
+    /**
+     * Logger for debugging and error reporting.
+     */
     private static final Logger logger = LoggerFactory.getLogger(CtapHid.class);
 
+    /**
+     * Constructs a new CtapHid instance from an initial command frame.
+     * Parses the frame to extract the channel ID, command type, and byte count.
+     *
+     * @param request The initial command frame
+     * @throws IllegalArgumentException if the command frame is too short
+     */
     public CtapHid(byte[] request) {
         this.cmdFrame = request;
         if (cmdFrame.length < 6) {
             throw new IllegalArgumentException("Command frame too short");
         }
+
+        this.sequenceFrames = new ArrayList<byte[]>();
+        this.response = new ArrayList<byte[]>();
+        this.responseReady = false;
+        this.responseSegment = -1;
 
         ByteBuffer byteBuffer = ByteBuffer.wrap(request);
         this.cid = new byte[4];
@@ -64,21 +117,37 @@ public class CtapHid {
         this.byteCount = (high << 8) | low; // combine to 16-bit int
     }
 
+    /**
+     * Retrieves a pending CTAP HID instance for a given channel ID.
+     *
+     * @param cid The channel ID to look up
+     * @return The associated CtapHid instance, or null if none exists
+     */
     public static CtapHid getPendingByCid(byte[] cid) {
         if (assignedCids.containsKey(cid)) {
-            return assignedCids.get(cid);
+            return assignedCids.get(cid).getCmd();;
         } //else 
         return null;
     }
 
+    /**
+     * Checks if a channel ID has an open CTAP HID transaction.
+     *
+     * @param cid The channel ID to check
+     * @return true if the channel ID has an open transaction, false otherwise
+     */
     public static boolean hasOpenCid(byte[] cid) {
         return assignedCids.containsKey(cid);
     }
 
-    public static void addKeyToCid(byte[] cid, PrivateKey key) {
-        assignedCids.get(cid);
-    }
-
+    /**
+     * Processes a sequence frame for an ongoing CTAP HID transaction.
+     * Adds the frame to the list of sequence frames and attempts to process
+     * the complete message if enough bytes have been received.
+     *
+     * @param segment The sequence frame to process
+     * @return This CtapHid instance
+     */
     public CtapHid processSequence(byte[] segment) {
         this.sequenceFrames.add(segment);
         if(this.hasSufficientBytes()) {
@@ -91,15 +160,30 @@ public class CtapHid {
         return this;
     }
 
+    /**
+     * Gets the channel ID for this CTAP HID transaction.
+     *
+     * @return The channel ID as a byte array
+     */
     public byte[] getCid() {
         return this.cid;
     }
 
+    /**
+     * Checks if enough bytes have been received to process the complete message.
+     *
+     * @return true if enough bytes have been received, false otherwise
+     */
     public boolean hasSufficientBytes() {
         int totalBytes = cmdFrame.length - 7 + sumOfSegmentFrames(); // subtract cid, cmd and byte count
         return totalBytes >= this.byteCount;
     }
 
+    /**
+     * Calculates the total number of payload bytes in all sequence frames.
+     *
+     * @return The total number of payload bytes
+     */
     private int sumOfSegmentFrames() {
         int totalBytes = 0;
         for (byte[] sequenceFrames : this.sequenceFrames) {
@@ -108,10 +192,22 @@ public class CtapHid {
         return totalBytes;
     }
 
+    /**
+     * Checks if a response is ready to be sent.
+     *
+     * @return true if a response is ready, false otherwise
+     */
     private boolean isResponseReady() {
         return this.responseReady;
     }
 
+    /**
+     * Gets the next response segment to be sent to the host.
+     * Returns the initial response frame first, then sequence frames.
+     *
+     * @return The next response segment as a byte array
+     * @throws RuntimeException if there are no more response segments
+     */
     public byte[] getResponseSegment() {
         if(this.responseSegment < 0) {//Init packet
             this.responseSegment = 0;
@@ -123,16 +219,26 @@ public class CtapHid {
         }
     }
 
+    /**
+     * Checks if there are more response segments to be sent.
+     *
+     * @return true if there are more response segments, false otherwise
+     */
     private boolean hasMoreResponse() {
         if(this.responseSegment < 0) {
             return true;
         } else if (this.responseSegments != null) {
-            return this.responseSegment >= this.responseSegments.size();
+            return this.responseSegment < this.responseSegments.size();
         } // else
         return false;
     }
 
-
+    /**
+     * Extracts the CTAP HID data payload from all received frames.
+     *
+     * @return The complete CTAP HID data payload
+     * @throws IOException if the command frame is too short
+     */
     public byte[] getCtapHidData() throws IOException {
         if(cmdFrame.length < 7) {
             throw new IOException("Command frame too short");
@@ -151,10 +257,18 @@ public class CtapHid {
         return outputStream.toByteArray();
     }
 
+    /**
+     * Functional interface for CTAP command processing.
+     */
     private interface CtapFcnPtr {
         void process(byte[] request);
     }
 
+    /**
+     * Processes the complete CTAP HID message based on its message type.
+     *
+     * @throws Exception if an error occurs during processing
+     */
     public void processMessage() throws Exception {
         switch(this.messageType)
         {
@@ -179,6 +293,13 @@ public class CtapHid {
         }
     }
 
+    /**
+     * Creates a CTAP acknowledgement response.
+     *
+     * @param bcnt The byte count for the response
+     * @param data The data payload for the response
+     * @throws IOException if an error occurs while creating the response
+     */
     private void ctapAck(int bcnt, byte[] data) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
         bos.write(this.getCid());
@@ -193,6 +314,12 @@ public class CtapHid {
         this.responseReady = true;
     }
 
+    /**
+     * Creates a CTAP error response.
+     *
+     * @param code The error code to include in the response
+     * @throws IOException if an error occurs while creating the response
+     */
     private void ctapErr(Ctap2StatusCode code) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
         bos.write(this.getCid());
@@ -205,10 +332,20 @@ public class CtapHid {
         this.responseReady = true;  
     }
 
+    /**
+     * Processes a U2F message (not implemented).
+     *
+     * @param data The U2F message data
+     */
     private void u2f(byte[] data) {   
         return;
     }
 
+    /**
+     * Builds CBOR response packets, splitting large responses into multiple segments.
+     *
+     * @param cborResponse The CBOR response data
+     */
     private void buildCborInitAndSequencePackets(byte[] cborResponse) {
         this.initResponse = new byte[64];
         System.arraycopy(this.getCid(), 0, this.initResponse, 0, 4);
@@ -238,6 +375,12 @@ public class CtapHid {
         }
     }
 
+    /**
+     * Processes a CBOR message, decoding it and passing it to the AuthenticatorAPI.
+     *
+     * @param data The CBOR message data
+     * @throws IOException if an error occurs while processing the message
+     */
     private void cbor(byte[] data) throws IOException {
         if(data.length < 1) {
             this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
@@ -262,6 +405,11 @@ public class CtapHid {
         this.responseReady = true;
     }
 
+    /**
+     * Processes an initialization message, generating a new channel ID.
+     *
+     * @param data The initialization message data
+     */
     private void init(byte[] data) {
         byte[] nonce = new byte[8];
         System.arraycopy(data, 0, nonce, 0, 8);
@@ -277,13 +425,28 @@ public class CtapHid {
                                     //version 2; leeet; CAPABILITY_CBOR | CAPABILITY_NMSG
         byte[] specStuff = new byte[] {0x02, 0x13, 0x33, 0x37, 0x0C};
         System.arraycopy(specStuff, 0, this.initResponse, 15, 5);
+        CtapTxn txn = new CtapTxn(newCid, this, null, null);
+        this.assignedCids.put(newCid, txn);
+
         this.responseReady = true;
     }
 
+    /**
+     * Processes a ping message, echoing back the data.
+     *
+     * @param data The ping message data
+     * @throws IOException if an error occurs while creating the response
+     */
     private void ping(byte[] data) throws IOException {
         ctapAck(this.byteCount, data);
     }
 
+    /**
+     * Processes a cancel message, canceling any ongoing transaction.
+     *
+     * @param data The cancel message data
+     * @throws IOException if an error occurs while creating the response
+     */
     private void cancel(byte[] data) throws IOException  {
         if(assignedCids.keySet().contains(this.getCid())) {
             //TODO cleanup request in progress
@@ -291,18 +454,41 @@ public class CtapHid {
         }
     }
 
+    /**
+     * Processes a keep-alive message.
+     *
+     * @param data The keep-alive message data
+     * @throws IOException if an error occurs while creating the response
+     */
     private void keepAlive(byte[] data) throws IOException {
         ctapAck(1, new byte[] {0x01});
     }
 
+    /**
+     * Processes a wink message, which can be used to identify the device.
+     *
+     * @param data The wink message data
+     * @throws IOException if an error occurs while creating the response
+     */
     private void wink(byte[] data) throws IOException {
         ctapAck(0, null);
     }
 
+    /**
+     * Processes a lock message, which can be used to lock the channel.
+     *
+     * @param data The lock message data
+     * @throws IOException if an error occurs while creating the response
+     */
     private void lock(byte[] data) throws IOException {
         ctapAck(0, null);
     }
 
+    /**
+     * Checks if there are more response segments to be sent.
+     *
+     * @return true if there are more response segments, false otherwise
+     */
     public boolean hasMoreResponses(){
         return this.hasMoreResponse();
     }

@@ -1,2 +1,5 @@
-rootProject.name = 'example_android_ble_gatt_fido2'
-include('app')
+rootProject.name = 'fido_blehid_app'
+include ':app'
+include ':lib'
+
+project(':lib').projectDir = new File(rootDir, 'lib')

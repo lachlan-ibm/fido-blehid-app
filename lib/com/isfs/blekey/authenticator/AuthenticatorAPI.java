@@ -2,6 +2,7 @@ package com.isfs.blekey.authenticator;
 
 import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
+import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.util.KeyUtils;
 
 import jakarta.json.JsonObject;
@@ -15,40 +16,72 @@ import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.Map;
 
-
+/**
+ * Implements the FIDO2 Client to Authenticator Protocol (CTAP2) API.
+ * This class handles CTAP2 commands and generates appropriate responses,
+ * interfacing with the Fido2Authenticator to perform cryptographic operations.
+ */
 public class AuthenticatorAPI {
 
+    /**
+     * Number of PIN retry attempts allowed before lockout.
+     */
     private static int pinRetries = 5;
 
+    /**
+     * Key pair used for platform authentication.
+     */
     private static KeyPair platKeyPair = KeyUtils.getKeyPair("EC");
-    // cid and associated platform public key, 
+    
+    /**
+     * Map of channel IDs to their associated platform keys and passkeys.
+     * Maps CID to a map containing the passkey and platform public key.
+     */
     private static Map<byte[], Map<String, Object>> openKeys = new HashMap<byte[], Map<String, Object>>();
 
-
+    /**
+     * Creates an error response with the specified status code.
+     *
+     * @param code The CTAP2 status code for the error
+     * @return A byte array containing the error response
+     */
     private static byte[] error(Ctap2StatusCode code) {
         return new byte[] {(byte) code.getCode()};
     }
 
+    /**
+     * Creates a success response with the specified payload.
+     *
+     * @param rsp The response payload to include
+     * @return A byte array containing the success response with the payload
+     */
     private static byte[] success(byte[] rsp) {
         ByteBuffer bb = ByteBuffer.allocate(rsp.length + 1);
         bb.put((byte) Ctap2StatusCode.SUCCESS.getCode()); bb.put(rsp);
         return bb.array(); //[SUCCESS, *cbor]
     }
 
-    protected static byte[] err(byte[] cid, Map<Integer, Object> req) {
+    /**
+     * Creates an error response for an invalid command.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the error response
+     */
+    protected static byte[] err(CtapTxn txn, Map<Integer, Object> req) {
         return error(Ctap2StatusCode.INVALID_COMMAND);
     }
 
-    private static Fido2Authenticator getAuthenticator(byte[]cid) {
-        Map<String, Object> openChannel = openKeys.getOrDefault(cid, null);
-        if(openChannel == null) {
-            return null;//No open key
-        }
-        return (Fido2Authenticator) openChannel.get("passkey");
-    }
-
-    protected static byte[] makeCredential(byte[] cid, Map<Integer, Object> req) {
-        Fido2Authenticator pkey = getAuthenticator(cid);
+    /**
+     * Processes a makeCredential request (CTAP2 authenticatorMakeCredential command).
+     * Creates a new credential and returns an attestation object.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    protected static byte[] makeCredential(CtapTxn txn, Map<Integer, Object> req) {
+        Fido2Authenticator pkey = Fido2Authenticator(txn.getPasskey());
         if(pkey == null) {
             return error(Ctap2StatusCode.NOT_ALLOWED); //No open key
         }
@@ -68,20 +101,30 @@ public class AuthenticatorAPI {
         }
     }
 
-    protected static byte[] getAssertion(byte[] cid, Map<Integer, Object> req) {
-        Fido2Authenticator pkey = getAuthenticator(cid);
+    /**
+     * Processes a getAssertion request (CTAP2 authenticatorGetAssertion command).
+     * Signs a challenge using an existing credential.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
+        Fido2Authenticator pkey = Fido2Authenticator(txn.getPasskey());
         if(pkey == null) {
             return error(Ctap2StatusCode.NOT_ALLOWED);
         }
         try {
             Map<String, Object> cred = Map.of("id", pkey.getCredIdBytes(),
                         "type", "public-key");
-            Map<String, Object> pubKeyMap = Map.of("rpID", req.getOrDefault(0x02, "NULL"));
-            JsonObject clientDataJSON = pkey.buildClientDataJson(pubKeyMap);
             byte[] authData = pkey.buildAuthenticatorData(clientDataJSON, pubKeyMap, "packed", 
                         (Map) new HashMap<String, String>(), (Map) new HashMap<String, String>(), pkey.getKeyPair());
-            byte[] sig = pkey.signData(authData, pkey.getPrivKey(), "SHA256withECDSA"); 
-            Map<Integer, Object> rsp = (Map<Integer, Object>) Map.of(
+            byte[] clientDataHash = (byte[]) req.get(0x01);
+            ByteBuffer bb = ByteBuffer.allocate(authData.length + clientDataHash.length);
+            bb.put(authData);
+            bb.put(clientDataHash);
+            byte[] sig = pkey.signData(bb.array(), pkey.getPrivKey(), "SHA256withECDSA"); 
+            Map<Integer, Object> rsp = Map.of(
                         0x01, cred, 0x02, authData, 0x03, sig);
             return success(Cbor.encode(rsp));
         } catch (Exception e) {
@@ -89,7 +132,15 @@ public class AuthenticatorAPI {
         }
     }
 
-    protected static byte[] getInfo(byte[] cid, Map<Integer, Object> req) {
+    /**
+     * Processes a getInfo request (CTAP2 authenticatorGetInfo command).
+     * Returns information about the authenticator's capabilities.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    protected static byte[] getInfo(CtapTxn txn, Map<Integer, Object> req) {
         Map<String, Boolean> capabilities = Map.of("rk", true,
                                                    "plat", true, //XD
                                                    "clientPint", true);
@@ -104,30 +155,53 @@ public class AuthenticatorAPI {
         return success(Cbor.encode(info));
     }
 
-
-    protected static byte[] pinRequest(byte[] cid, Map<Integer, Object> req) {
+    /**
+     * Processes a PIN request (CTAP2 authenticatorClientPIN command).
+     * Handles PIN-related operations such as getting retries, keys, and tokens.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    protected static byte[] pinRequest(CtapTxn txn, Map<Integer, Object> req) {
         PinSubCmd cmd = PinSubCmd.fromInt((int) req.getOrDefault(2, 0));
         switch(cmd)
         {
             case GETRETRY:
-                return pinRty(cid, req);
+                return pinRty(txn, req);
             case GETKEY:
-                return getKey(cid, req);
+                return getKey(txn, req);
             case GETTKN:
-                return getTkn(cid, req);
+                return getTkn(txn, req);
             default:
                 return error(Ctap2StatusCode.INVALID_COMMAND);
         }
     }
 
-    private static byte[] getKey(byte[] cid, Map<Integer, Object> req) {
+    /**
+     * Handles the getKey PIN subcommand.
+     * Returns the platform public key in COSE format.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    private static byte[] getKey(CtapTxn txn, Map<Integer, Object> req) {
         Map<Integer, Object> rsp = Map.of(0x01, 
                 KeyUtils.toCoseKey(AuthenticatorAPI.platKeyPair.getPublic()));
         byte[] key = Cbor.encode(rsp);
         return success(key);
     }
 
-    private static byte[] getTkn(byte[] cid, Map<Integer, Object> req) {
+    /**
+     * Handles the getToken PIN subcommand.
+     * Verifies the PIN and returns an authentication token.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    private static byte[] getTkn(CtapTxn txn, Map<Integer, Object> req) {
         //Decapsulate shared secret
         byte[] pinHashEnc = (byte[]) req.get(0x06);
         PublicKey theirKey = KeyUtils.fromCoseKey((Map<Integer, Object>) req.get(0x03));
@@ -135,7 +209,7 @@ public class AuthenticatorAPI {
                     AuthenticatorAPI.platKeyPair.getPrivate());
         //Verify pin hash
         Passkey pkeyFile = Passkey.openKey(pinHashEnc);
-        if (pkeyFile != null) {
+        if (pkeyFile == null) {
             return AuthenticatorAPI.error(Ctap2StatusCode.PIN_AUTH_INVALID);
         }
         try {
@@ -144,35 +218,54 @@ public class AuthenticatorAPI {
             byte[] pinTkn = new byte[32];
             SecureRandom random = new SecureRandom();
             random.nextBytes(pinTkn);
-            openKeys.put(cid, Map.of("passkey", pkey, "plat", theirKey));
+            openKeys.put(txn.getCid(), Map.of("passkey", pkey, "plat", theirKey));
             pinRetries = 5;
             Map<Integer, Object> rsp = Map.of(0x02, pinTkn);
+            txn.setPinAuthTkn(pinTkn);
             return success(Cbor.encode(rsp));
         } catch (Exception e) {
             return error(Ctap2StatusCode.INVALID_PARAMETER);
         }
     }
 
-    private static byte[] pinRty(byte[] cid, Map<Integer, Object> req) {
+    /**
+     * Handles the getRetries PIN subcommand.
+     * Returns the number of PIN retry attempts remaining.
+     *
+     * @param txn The CTAP transaction
+     * @param req The request parameters
+     * @return A byte array containing the response
+     */
+    private static byte[] pinRty(CtapTxn txn, Map<Integer, Object> req) {
         Map<Integer, Object> rsp = Map.of(0x03, pinRetries--);
         return success(Cbor.encode(rsp));
     }
 
-
-    public static byte[] process(byte[] cid, int api, Map<Integer, Object> request) {
+    /**
+     * Main entry point for processing CTAP2 commands.
+     * Routes the request to the appropriate handler based on the command type.
+     *
+     * @param txn The CTAP transaction
+     * @param api The CTAP2 command identifier
+     * @param request The request parameters
+     * @return A byte array containing the response
+     */
+    public static byte[] process(CtapTxn txn, int api, Map<Integer, Object> request) {
         AuthenticatorCmd cmd = AuthenticatorCmd.fromInt(api);
         switch(cmd)
         {
             case MKCRED:
-                return makeCredential(cid,request);
+                return makeCredential(txn, request);
             case NXTAST:
-                return getAssertion(cid,request);
+                return getAssertion(txn, request);
             case GETINF:
-                return getInfo(cid,request);
+                return getInfo(txn, request);
             case ATHPIN:
-                return pinRequest(cid,request);
+                return pinRequest(txn, request);
             default:
                 return error(Ctap2StatusCode.INVALID_COMMAND);
         }
     }
 }
+
+// Made with Bob

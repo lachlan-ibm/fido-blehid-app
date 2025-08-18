@@ -1,0 +1,222 @@
+/*
+ * Copyright IBM 2025
+ */
+
+/**
+ * Gradle build hook to check and update copyright headers in source files.
+ * This script:
+ * 1. Checks if files have a copyright header
+ * 2. Updates the year if the file has been modified in the current year
+ * 3. Ensures the copyright year format is correct (at most two years)
+ */
+
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.regex.Pattern
+import java.text.SimpleDateFormat
+
+// Configuration
+ext {
+    // File patterns to check for copyright headers
+    sourceFilePatterns = [
+        '**/*.java',
+        '**/*.gradle',
+        '**/*.sh',
+        '**/*.md',
+        '**/*.properties',
+        '**/*.xml',
+        '**/*.html',
+        '**/*.css',
+        '**/*.js',
+        '**/*.py',
+        '**/*.kt',
+        '**/*.c',
+        '**/*.cpp',
+        '**/*.h',
+        '**/*.hpp',
+        '**/*.json',
+        '**/*.yaml',
+        '**/*.yml'
+    ]
+    
+    // Directories to exclude
+    excludeDirs = [
+        'build',
+        '.gradle',
+        '.git'
+    ]
+    
+    // Copyright header pattern - more flexible to handle various formats
+    copyrightPattern = ~/(?:\s*\/\*|\s*#|\s*\/\/|\s*<!--)?\s*Copyright\s+(?:©|\(c\)|&copy;)?\s*(?:IBM)?\s+(\d{4})(?:[-,\s]+(\d{4}))?\s*(?:IBM)?\s*(?:All\s+[Rr]ights\s+[Rr]eserved\.?)?\s*(?:\*\/|\s*-->)?/
+    
+    // Current year
+    currentYear = LocalDate.now().getYear().toString()
+    
+    // Dry run mode (default: false)
+    dryRun = project.hasProperty('dryRun') ? project.property('dryRun').toBoolean() : false
+}
+
+// Task to check and update copyright headers
+task checkCopyrightHeaders {
+    description = 'Checks and updates copyright headers in source files'
+    group = 'verification'
+    
+    doLast {
+        def fileCount = 0
+        def updatedCount = 0
+        def missingCount = 0
+        def dryRunPrefix = dryRun ? "[DRY RUN] " : ""
+        
+        println "${dryRunPrefix}Checking copyright headers..."
+        if (dryRun) {
+            println "Running in dry-run mode. No files will be modified."
+        }
+        
+        // Find all source files
+        fileTree(projectDir) {
+            sourceFilePatterns.each { include it }
+            excludeDirs.each { exclude "**/${it}/**" }
+        }.each { file ->
+            fileCount++
+            
+            // Check if file has been modified this year
+            def lastModified = new Date(file.lastModified())
+            def lastModifiedYear = new SimpleDateFormat("yyyy").format(lastModified)
+            def isModifiedThisYear = lastModifiedYear == currentYear
+            
+            // Read the file content
+            def content = file.text
+            def lines = content.readLines()
+            def matcher = null
+            def hasCopyright = false
+            
+            // Check first 20 lines for copyright header
+            def copyrightLines = []
+            for (int i = 0; i < Math.min(20, lines.size()); i++) {
+                matcher = copyrightPattern.matcher(lines[i])
+                if (matcher.find()) {
+                    hasCopyright = true
+                    copyrightLines.add(i + 1) // Store line number (1-based)
+                }
+            }
+            
+            // If multiple copyright headers found, log a warning
+            if (copyrightLines.size() > 1) {
+                println "${dryRunPrefix}WARNING: Multiple copyright headers found in ${file.path} at lines ${copyrightLines}"
+            }
+            
+            if (hasCopyright) {
+                // Copyright header found, check if it needs updating
+                // Use the first copyright header found
+                def lineIndex = copyrightLines[0] - 1 // Convert to 0-based
+                matcher = copyrightPattern.matcher(lines[lineIndex])
+                matcher.find() // We know it matches from the previous check
+                
+                def firstYear = matcher.group(1)
+                def secondYear = matcher.group(2)
+                
+                if (isModifiedThisYear && currentYear != firstYear && currentYear != secondYear) {
+                    // File modified this year, but copyright doesn't include current year
+                    def updatedHeader
+                    if (firstYear != null && secondYear == null) {
+                        // Single year format, add second year
+                        updatedHeader = "Copyright IBM ${firstYear}, ${currentYear}"
+                    } else if (firstYear != null && secondYear != null) {
+                        // Two years format, update second year
+                        updatedHeader = "Copyright IBM ${firstYear}, ${currentYear}"
+                    }
+                    
+                    // Replace the copyright line
+                    def updatedContent = content.replaceFirst(copyrightPattern, updatedHeader)
+                    if (!dryRun) {
+                        file.text = updatedContent
+                    }
+                    updatedCount++
+                    println "${dryRunPrefix}Updated copyright in: ${file.path}"
+                }
+            } else {
+                // No copyright header found
+                missingCount++
+                println "Missing copyright header in: ${file.path}"
+                
+                // Determine file type and appropriate comment style
+                def extension = file.name.substring(file.name.lastIndexOf('.') + 1).toLowerCase()
+                def copyrightHeader
+                
+                switch (extension) {
+                    case 'java':
+                    case 'gradle':
+                    case 'js':
+                    case 'kt':
+                    case 'c':
+                    case 'cpp':
+                    case 'h':
+                    case 'hpp':
+                    case 'css':
+                        copyrightHeader = "/*\n * Copyright IBM ${currentYear}\n */\n"
+                        break
+                    case 'sh':
+                    case 'properties':
+                    case 'py':
+                    case 'yaml':
+                    case 'yml':
+                        copyrightHeader = "# Copyright IBM ${currentYear}\n"
+                        break
+                    case 'md':
+                    case 'html':
+                    case 'xml':
+                        copyrightHeader = "<!--\n Copyright IBM ${currentYear}\n-->\n"
+                        break
+                    case 'json':
+                        // JSON doesn't support comments, but we'll add it as a special case
+                        // with a warning that it might not be valid JSON afterward
+                        println "WARNING: Adding copyright to JSON file ${file.path}. This may make the JSON invalid."
+                        copyrightHeader = "// Copyright IBM ${currentYear}\n"
+                        break
+                    default:
+                        copyrightHeader = "# Copyright IBM ${currentYear}\n"
+                }
+                
+                // Add copyright header to the beginning of the file
+                // Check for shebang in shell scripts
+                if (extension == 'sh' && content.startsWith("#!/")) {
+                    def shebangEnd = content.indexOf('\n')
+                    if (shebangEnd != -1) {
+                        def shebang = content.substring(0, shebangEnd + 1)
+                        def rest = content.substring(shebangEnd + 1)
+                        if (!dryRun) {
+                            file.text = shebang + "\n" + copyrightHeader + rest
+                        }
+                    }
+                } else {
+                    if (!dryRun) {
+                        file.text = copyrightHeader + content
+                    }
+                }
+                
+                updatedCount++
+                println "${dryRunPrefix}Added copyright header to: ${file.path}"
+            }
+        }
+        
+        println "\n${dryRunPrefix}Copyright header check completed:"
+        println "  Total files checked: ${fileCount}"
+        println "  Files updated: ${updatedCount}"
+        println "  Files missing copyright: ${missingCount}"
+        println "  Success rate: ${fileCount > 0 ? String.format('%.1f%%', (fileCount - missingCount) * 100.0 / fileCount) : '0.0%'}"
+        
+        if (dryRun) {
+            println "\nThis was a dry run. No files were modified."
+            println "To apply changes, run without the -PdryRun=true flag."
+        }
+    }
+}
+
+// Hook into the build process
+gradle.projectsEvaluated {
+    tasks.withType(JavaCompile) {
+        dependsOn checkCopyrightHeaders
+    }
+}
+
+// Made with Bob

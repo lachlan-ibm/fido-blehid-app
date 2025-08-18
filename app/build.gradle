@@ -73,14 +73,46 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'com.github.tony19:logback-android:3.0.0'
     implementation 'no.nordicsemi.android:ble:2.6.1'
-    implementation 'isfs:com.isfs.blekey.common:0.00.10'
-
+    
+    // Use the lib module directly instead of the published artifact
+    implementation project(':lib')
 }
 
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(17)
     }
+}
+
+// JavaDoc configuration for Android app
+tasks.register('androidJavadoc', Javadoc) {
+    description = 'Generates Javadoc API documentation for the Android app code.'
+    source = android.sourceSets.main.java.srcDirs
+    classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
+    classpath += configurations.implementation
+    options.memberLevel = JavadocMemberLevel.PROTECTED
+    options.addStringOption('Xdoclint:none', '-quiet')
+    options.encoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    options.links = ['https://docs.oracle.com/en/java/javase/17/docs/api/']
+    title = "FIDO BLE HID Android App API Documentation"
+    
+    // Exclude generated files
+    exclude '**/BuildConfig.java'
+    exclude '**/R.java'
+    
+    // Handle Android-specific annotations
+    options.tags = [ "hide", "attr" ]
+    
+    // Avoid errors on missing documentation
+    failOnError false
+}
+
+// Create a task to generate all JavaDocs
+tasks.register('generateAllJavadocs') {
+    dependsOn 'androidJavadoc'
+    dependsOn ':lib:libJavadoc'
+    description = 'Generates all JavaDoc documentation for both app and library code'
 }
 
 task wrapper(type: Wrapper){
