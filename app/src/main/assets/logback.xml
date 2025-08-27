@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+ Copyright IBM 2025
+-->
 <configuration>
 
     <appender name="LOGCAT" class="ch.qos.logback.classic.android.LogcatAppender">

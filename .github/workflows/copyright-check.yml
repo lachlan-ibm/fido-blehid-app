@@ -1,10 +1,11 @@
+# Copyright IBM 2025
 name: Copyright Header Check
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ development, stable ]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ development, stable ]
   workflow_dispatch:  # Allow manual triggering
 
 jobs:

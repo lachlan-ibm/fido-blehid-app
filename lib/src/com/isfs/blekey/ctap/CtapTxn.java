@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey.ctap;
 
 import com.isfs.blekey.data.Passkey;
@@ -28,6 +31,8 @@ public class CtapTxn {
      */
     private Passkey passkey;
 
+    private byte[] pinHash;
+
     /**
      * Default constructor for creating an empty CTAP transaction.
      */
@@ -43,11 +48,12 @@ public class CtapTxn {
      * @param pinAuthTkn The PIN authentication token
      * @param passkey The passkey for this transaction
      */
-    public CtapTxn(byte[] cid, CtapHid cmd, byte[] pinAuthTkn, Passkey passkey) {
+    public CtapTxn(byte[] cid, CtapHid cmd, byte[] pinAuthTkn, Passkey passkey, byte[] pinHash) {
         this.cid = cid != null ? cid.clone() : null;
         this.cmd = cmd;
         this.pinAuthTkn = pinAuthTkn != null ? pinAuthTkn.clone() : null;
         this.passkey = passkey;
+        this.pinHash = pinHash != null ? pinHash.clone() : null;
     }
     
     /**

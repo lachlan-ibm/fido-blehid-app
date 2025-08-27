@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey.authenticator;
 
 import com.isfs.blekey.util.Cbor;
@@ -13,8 +16,13 @@ import java.nio.ByteBuffer;
 import java.security.KeyPair;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.interfaces.ECPrivateKey;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Implements the FIDO2 Client to Authenticator Protocol (CTAP2) API.
@@ -81,18 +89,19 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     protected static byte[] makeCredential(CtapTxn txn, Map<Integer, Object> req) {
-        Fido2Authenticator pkey = Fido2Authenticator(txn.getPasskey());
-        if(pkey == null) {
-            return error(Ctap2StatusCode.NOT_ALLOWED); //No open key
-        }
         try {
+            Fido2Authenticator pkey = Fido2Authenticator.fromPasskey(txn.getPasskey());
+            if(pkey == null) {
+                return error(Ctap2StatusCode.NOT_ALLOWED); //No open key
+            }
             Map<String, Object> rp = Map.of("rp", req.get(0x02));
             byte[] cdh = (byte[]) req.get(0x01);
-            JsonObject cdj = pkey.buildClientDataJson(rp);
-            byte[] authData = pkey.buildAuthenticatorData(cdj, rp, "packed", 
+            byte[] authData = pkey.buildAuthenticatorData(rp, "packed", 
                         (Map) new HashMap<String, String>(), (Map) new HashMap<String, String>(), pkey.getKeyPair());
+            KeyPair caKp = new KeyPair(KeyUtils.getPubKey((ECPrivateKey) txn.getPasskey().getPrivateKey()),
+                    txn.getPasskey().getPrivateKey());
             Map<String, Object> attStmt = pkey.processAttestationStatement("packed", cdh, authData, 
-                        pkey.getCredIdBytes(), pkey.getKeyPair(), pkey.getCaKeyPair(), pkey.getCaCert());
+                        pkey.getCredId(), pkey.getKeyPair(), caKp, txn.getPasskey().getCertificate());
             Map<Integer, Object> rsp = Map.of(0x01, "packed",
                                             0x02, authData, 0x03, attStmt);
             return success(Cbor.encode(rsp));
@@ -110,15 +119,48 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
-        Fido2Authenticator pkey = Fido2Authenticator(txn.getPasskey());
+        Fido2Authenticator pkey = null;
+        try {
+            pkey = Fido2Authenticator.fromPasskey(txn.getPasskey());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
         if(pkey == null) {
-            return error(Ctap2StatusCode.NOT_ALLOWED);
+            return error(Ctap2StatusCode.OTHER);
+        }
+        ArrayList<Map<String, byte[]>> allowList = (ArrayList<Map<String, byte[]>>) req.get(0x03);
+        if(allowList == null ) {
+            allowList = new ArrayList<>();
+        }
+        Map<byte[],Map> resCreds = txn.getPasskey().getResCreds();
+        if(resCreds != null) {
+            for(byte[] rpId: resCreds.keySet()) {
+                Map<String, byte[]> cred = (Map<String, byte[]>) resCreds.get(rpId);
+                allowList.add(Map.of("id", cred.get("credId"), 
+                                    "user", cred.get("userHandle")));
+            }
+        }
+        if(allowList.size() == 0) {
+            return error(Ctap2StatusCode.NO_CREDENTIALS);
+        }
+        boolean initSuccess = false;
+        for(Map<String, byte[]> cred: allowList) {
+            try {
+                pkey.initFromCredId(cred.get("id"));
+                initSuccess = true;
+            } catch (Exception e) {
+                continue;
+            }
+        }
+        if(!initSuccess) {
+            return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
         try {
-            Map<String, Object> cred = Map.of("id", pkey.getCredIdBytes(),
+            Map<String, Object> pubKeyMap = (Map<String, Object>) req.get(0x02);
+            Map<String, Object> cred = Map.of("id", pkey.getCredId(),
                         "type", "public-key");
-            byte[] authData = pkey.buildAuthenticatorData(clientDataJSON, pubKeyMap, "packed", 
-                        (Map) new HashMap<String, String>(), (Map) new HashMap<String, String>(), pkey.getKeyPair());
+            byte[] authData = pkey.buildAuthenticatorData(pubKeyMap, "packed", 
+                        null, null, pkey.getKeyPair());
             byte[] clientDataHash = (byte[]) req.get(0x01);
             ByteBuffer bb = ByteBuffer.allocate(authData.length + clientDataHash.length);
             bb.put(authData);
@@ -207,12 +249,19 @@ public class AuthenticatorAPI {
         PublicKey theirKey = KeyUtils.fromCoseKey((Map<Integer, Object>) req.get(0x03));
         byte[] sharedSecret = KeyUtils.decapsulate(theirKey,
                     AuthenticatorAPI.platKeyPair.getPrivate());
-        //Verify pin hash
-        Passkey pkeyFile = Passkey.openKey(pinHashEnc);
-        if (pkeyFile == null) {
-            return AuthenticatorAPI.error(Ctap2StatusCode.PIN_AUTH_INVALID);
-        }
+        // Create AES key from shared secret
+        SecretKeySpec secretKeySpec = new SecretKeySpec(sharedSecret, "AES");
+        // Create all-zero IV for CBC mode
+        IvParameterSpec ivSpec = new IvParameterSpec(new byte[16]);
         try {
+            // Initialize cipher with CBC mode and zero IV
+            Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivSpec);
+            byte[] pinHash = cipher.doFinal(pinHashEnc);
+            Passkey pkeyFile = Passkey.openKey(pinHash);
+            if (pkeyFile == null) {
+                return AuthenticatorAPI.error(Ctap2StatusCode.PIN_AUTH_INVALID);
+            }
             Fido2Authenticator pkey = Fido2Authenticator.fromPasskey(pkeyFile);
             //Return pin auth token
             byte[] pinTkn = new byte[32];

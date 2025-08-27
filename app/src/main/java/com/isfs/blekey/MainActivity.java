@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey;
 
 import android.os.Bundle;

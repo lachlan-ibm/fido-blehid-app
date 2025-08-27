@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey.authenticator;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -6,7 +9,6 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
-import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -18,7 +20,6 @@ import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.KeyUtils;
 
 import jakarta.json.Json;
-import jakarta.json.JsonObject;
 
 /**
  * Integration tests for the Fido2Authenticator class.
@@ -37,7 +38,7 @@ public class Fido2AuthenticatorIntegrationTest {
         
         // Generate CA key pair and certificate for attestation tests
         caKeyPair = KeyUtils.getKeyPair("EC");
-        caCert = CertUtils.generateCACertificate(caKeyPair, "CN=Test CA");
+        caCert = CertUtils.generateCaCert( "CN=Test CA", caKeyPair, 365, true);
     }
     
     /**

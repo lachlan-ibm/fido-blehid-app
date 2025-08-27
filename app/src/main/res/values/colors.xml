@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright IBM 2025
+-->
 <resources>
     <color name="ibm_blue">#0F62FE</color>
     <color name="ibm_black">#000000</color>

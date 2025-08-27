@@ -178,8 +178,9 @@ task checkCopyrightHeaders {
                 }
                 
                 // Add copyright header to the beginning of the file
-                // Check for shebang in shell scripts
+                // Special handling for different file types
                 if (extension == 'sh' && content.startsWith("#!/")) {
+                    // For shell scripts, preserve shebang line
                     def shebangEnd = content.indexOf('\n')
                     if (shebangEnd != -1) {
                         def shebang = content.substring(0, shebangEnd + 1)
@@ -188,7 +189,27 @@ task checkCopyrightHeaders {
                             file.text = shebang + "\n" + copyrightHeader + rest
                         }
                     }
+                } else if ((extension == 'xml' || extension == 'html') && content.trim().startsWith("<?xml")) {
+                    // For XML files, preserve XML declaration
+                    def xmlDeclEnd = content.indexOf("?>") + 2
+                    if (xmlDeclEnd > 1) { // Found XML declaration
+                        def xmlDecl = content.substring(0, xmlDeclEnd)
+                        def rest = content.substring(xmlDeclEnd)
+                        // Add a newline after the XML declaration if it doesn't already have one
+                        if (!xmlDecl.endsWith("\n")) {
+                            xmlDecl += "\n"
+                        }
+                        if (!dryRun) {
+                            file.text = xmlDecl + copyrightHeader + rest.trim()
+                        }
+                    } else {
+                        // Shouldn't happen, but just in case
+                        if (!dryRun) {
+                            file.text = copyrightHeader + content
+                        }
+                    }
                 } else {
+                    // Default behavior for all other files
                     if (!dryRun) {
                         file.text = copyrightHeader + content
                     }

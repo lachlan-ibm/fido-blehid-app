@@ -1,13 +1,14 @@
+# Copyright IBM 2025
 name: Lib Unit Tests
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ development, stable ]
     paths:
       - 'lib/**'
       - '.github/workflows/lib-tests.yml'
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ development, stable ]
     paths:
       - 'lib/**'
       - '.github/workflows/lib-tests.yml'

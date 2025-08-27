@@ -1,3 +1,6 @@
+<!--
+ Copyright IBM 2025
+-->
 # Copyright Header Management
 
 This project includes an automated system for checking and updating copyright headers in source files. The system ensures that all source files have the appropriate copyright headers with the correct year format.
@@ -55,31 +58,6 @@ With dry run mode:
 ```bash
 ./gradlew checkCopyrightHeaders -PdryRun=true
 ```
-
-## CI/CD Integration
-
-### Copyright Check
-
-The copyright check is integrated into the CI/CD pipeline using GitHub Actions. The workflow:
-
-1. Runs on push to main branches and pull requests
-2. Checks all source files for copyright headers
-3. Fails the build if any files are missing copyright headers
-4. Provides a report of the results as an artifact
-
-The workflow file is located at `.github/workflows/copyright-check.yml`.
-
-### Unit Tests
-
-The library unit tests are also integrated into the CI/CD pipeline using GitHub Actions. The workflow:
-
-1. Runs on push to main branches and pull requests that modify files in the lib directory
-2. Runs the JUnit tests for the lib module
-3. Generates HTML test reports
-4. Publishes the test results as an artifact
-5. Fails the build if any tests fail
-
-The workflow file is located at `.github/workflows/lib-tests.yml`.
 
 ## Copyright Header Format
 

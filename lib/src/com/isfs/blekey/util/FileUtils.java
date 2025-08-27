@@ -1,7 +1,11 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey.util;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.nio.file.Files;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,8 +16,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.isfs.blekey.ctap.CtapHid;
-import com.isfs.blekey.data.Passkey;
 
 import jakarta.xml.bind.DatatypeConverter;
 
@@ -54,7 +56,7 @@ public class FileUtils {
     }
 
     public static List<File> listPasskeys() {
-        String fidoHomeStr = System.getenv("FIDO_HOME");
+        String fidoHomeStr = System.getenv("FIDO2_HOME");
         if (fidoHomeStr == null || fidoHomeStr.isEmpty()) {
             return null;
         }
@@ -71,4 +73,23 @@ public class FileUtils {
         }
         return result;
     }
+
+
+    /**
+     * Reads all bytes from a file using Java NIO.
+     * 
+     * @param file The file to read
+     * @return The byte contents of the file
+     * 
+     */
+    public static byte[] readFileBytes(File file) {
+        try {
+            return Files.readAllBytes(file.toPath());
+        } catch (IOException e) {
+            logger.error("Error reading file", e);
+            return new byte[0];
+        }
+
+    }
+
 }

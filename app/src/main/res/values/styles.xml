@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright IBM 2025
+-->
 <resources>
     <!-- Base application theme -->
     <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.DarkActionBar">

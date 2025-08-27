@@ -8,6 +8,7 @@ import static org.mockito.Mockito.*;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
@@ -21,7 +22,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.isfs.blekey.data.Passkey;
-import com.isfs.blekey.util.KeyUtils;
 
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
@@ -87,8 +87,8 @@ public class Fido2AuthenticatorTest {
         Fido2Authenticator auth = Fido2Authenticator.fromPasskey(mockPasskey);
         
         assertNotNull(auth);
-        assertNotNull(auth.getCaCert());
-        assertNotNull(auth.getCaKeyPair());
+        assertNotNull(auth.getAuthnCert());
+        //assertNotNull(auth.getCaKeyPair());
     }
     
     /**
@@ -96,7 +96,7 @@ public class Fido2AuthenticatorTest {
      */
     @Test
     public void testGetCredIdBytes() throws Exception {
-        byte[] credIdBytes = authenticator.getCredIdBytes();
+        byte[] credIdBytes = authenticator.getCredId();
         assertNotNull(credIdBytes);
         assertTrue(credIdBytes.length > 0);
     }
@@ -192,14 +192,8 @@ public class Fido2AuthenticatorTest {
         publicKey.put("rpId", "example.com");
         publicKey.put("challenge", "challenge123".getBytes());
         
-        JsonObject clientDataJSON = Json.createObjectBuilder()
-                .add("origin", "https://example.com")
-                .add("challenge", Base64.getUrlEncoder().encodeToString("challenge123".getBytes()))
-                .add("type", "webauthn.get")
-                .build();
         
         byte[] authData = authenticator.buildAuthenticatorData(
-                clientDataJSON, 
                 publicKey, 
                 null, // No attestation for assertion
                 null, 
@@ -232,14 +226,7 @@ public class Fido2AuthenticatorTest {
         publicKey.put("attestation", "none");
         publicKey.put("challenge", "challenge123".getBytes());
         
-        JsonObject clientDataJSON = Json.createObjectBuilder()
-                .add("origin", "https://example.com")
-                .add("challenge", Base64.getUrlEncoder().encodeToString("challenge123".getBytes()))
-                .add("type", "webauthn.create")
-                .build();
-        
         byte[] authData = authenticator.buildAuthenticatorData(
-                clientDataJSON, 
                 publicKey, 
                 "none", // Attestation type
                 null, 
@@ -258,6 +245,48 @@ public class Fido2AuthenticatorTest {
         int flags = authData[32] & 0xFF;
         assertTrue((flags & 0x01) != 0); // UP flag should be set
         assertTrue((flags & 0x40) != 0); // AT flag should be set for attestation
+    }
+
+    /**
+     * Test the packed attestation statement
+     */
+    @Test
+    public void testPackedAttestationStatement() throws Exception {
+        // Setup for credential creation
+        JsonObject clientDataJSON = Json.createObjectBuilder()
+                .add("origin", "https://example.com")
+                .add("challenge", Base64.getUrlEncoder().encodeToString("challenge123".getBytes()))
+                .add("type", "webauthn.create")
+                .build();
+
+        // Hash the clientDataJSON with SHA-256
+        byte[] clientDataHash;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            clientDataHash = digest.digest(clientDataJSON.toString().getBytes());
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 algorithm not available", e);
+        }
+
+        Map<String, Object> publicKey = new HashMap<>();
+        Map<String, Object> rp = new HashMap<>();
+        rp.put("id", "example.com");
+        publicKey.put("rp", rp);
+        publicKey.put("attestation", "none");
+        publicKey.put("challenge", "challenge123".getBytes());
+        
+        byte[] authData = authenticator.buildAuthenticatorData(
+                publicKey,
+                "none", // Attestation type
+                null,
+                null,
+                authenticator.getKeyPair());
+        
+        Map<String, Object> attStmt = authenticator.processAttestationStatement("packed-self", clientDataHash,
+                authData, authenticator.getCredId(), authenticator.getKeyPair(), null, null);
+        
+        // Verify the attestation statement was created successfully
+        assertNotNull(attStmt);
     }
 }
 

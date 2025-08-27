@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey.authenticator;
 
 import java.util.stream.Collectors;
@@ -31,7 +34,8 @@ public enum PinSubCmd {
     }
 
     private static Map<Integer, PinSubCmd> reverseLookup = 
-            Arrays.stream(PinSubCmd.values()).collect(Collectors.toMap(PinSubCmd::getValue, Function.identity()));
+            Arrays.stream(PinSubCmd.values())
+                  .collect(Collectors.toMap(PinSubCmd::getValue, Function.identity()));
 
     public static PinSubCmd fromInt(final int id) {
         return reverseLookup.getOrDefault(id, ERR);

@@ -41,7 +41,7 @@ public class TestHelper {
      */
     public static Object[] createTestCA() throws Exception {
         KeyPair caKeyPair = createTestKeyPair("EC");
-        X509Certificate caCert = CertUtils.generateCACertificate(caKeyPair, "CN=Test CA");
+        X509Certificate caCert = CertUtils.generateCaCert("CN=Test CA", caKeyPair, 365, true );
         return new Object[] { caKeyPair, caCert };
     }
     

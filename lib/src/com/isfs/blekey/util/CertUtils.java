@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 /*IBM Confidential
 * OCO Source Materials
 * 5725-V89 5725-V90
@@ -11,8 +14,10 @@ package com.isfs.blekey.util;
 
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
+import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DEROctetString;
 import org.bouncycastle.asn1.DERSequence;
+import org.bouncycastle.asn1.DERTaggedObject;
 import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
@@ -59,6 +64,7 @@ import java.util.Base64;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
+import java.util.function.Function;
 
 public class CertUtils implements java.io.Serializable {
 
@@ -93,6 +99,11 @@ public class CertUtils implements java.io.Serializable {
         return cert;
     }
 
+    public static Certificate readBytes(byte[] certBytes, String alg)
+            throws CertificateException, IOException, InvalidKeySpecException {
+        CertificateFactory certFactory = CertificateFactory.getInstance(alg);
+        return certFactory.generateCertificate(new ByteArrayInputStream(certBytes));
+    }
 
     /**
      * 
@@ -126,6 +137,50 @@ public class CertUtils implements java.io.Serializable {
         return certificateBuilder(null, dn, pubKey, expiry);
     }
 
+    public static X509Certificate generateAppleAttestationCertificate(String dn, KeyPair keyPair,
+            int days, byte[] nonce, KeyPair signKeyPair, X509Certificate signCert) throws Exception {
+        ASN1ObjectIdentifier appleOid = new ASN1ObjectIdentifier("1.2.840.113635.100.8.2");
+        ASN1Sequence nonceEncoded = (ASN1Sequence) new DERSequence(
+                new DERTaggedObject(true, 0, new DEROctetString(nonce))).toASN1Primitive();
+        X509v3CertificateBuilder certBuilder = certificateBuilder(signCert, dn, keyPair.getPublic(),
+                days);
+        certBuilder.addExtension(appleOid, false, nonceEncoded);
+        
+        X509Certificate result = new JcaX509CertificateConverter()
+                .getCertificate(certBuilder.build(new JcaContentSignerBuilder("SHA256withRSA")
+                .setProvider("BC")
+                .build(signKeyPair.getPrivate())));
+        return result;        
+    }
+    
+    public static X509Certificate generatePackedBatchCertificate(String dn, KeyPair keyPair,
+            int days, byte[] aaguid,
+            Function<X509v3CertificateBuilder, X509v3CertificateBuilder> addExtensions, KeyPair signKP, X509Certificate caCert)
+            throws IOException, OperatorCreationException, CertificateException {
+        Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
+        X509Certificate result = null;
+
+        X509v3CertificateBuilder certBuilder = certificateBuilder(caCert, dn, keyPair.getPublic(),
+                days);
+
+
+        ASN1ObjectIdentifier oid = new ASN1ObjectIdentifier("1.3.6.1.4.1.45724.1.1.4");
+        // value must be a double encoded octet stream
+        if (aaguid != null) {
+        ASN1OctetString value = new DEROctetString(aaguid);
+
+        certBuilder.addExtension(oid, false, value);
+        }
+        if (addExtensions != null) {
+            certBuilder = addExtensions.apply(certBuilder);
+        }
+        result = new JcaX509CertificateConverter()
+                .getCertificate(certBuilder.build(new JcaContentSignerBuilder("SHA256withRSA")
+                        .setProvider("BC").build(signKP.getPrivate())));
+
+        return result;
+    }
+
     public static X509Certificate generatePackedBasicCertificate(String dn, KeyPair keyPair,
             int days, String aaguid)
             throws IOException, OperatorCreationException, CertificateException {
@@ -146,7 +201,7 @@ public class CertUtils implements java.io.Serializable {
     }
 
     public static X509Certificate gereatePackedAttCACertificate(X509Certificate caCert,
-            String dn, KeyPair keyPair, int days, String aaguid, KeyPair signKeyPair)
+            String dn, KeyPair keyPair, int days, byte[] aaguid, KeyPair signKeyPair)
             throws IOException, OperatorCreationException, CertificateException {
         Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
         X509Certificate result = null;
@@ -156,13 +211,14 @@ public class CertUtils implements java.io.Serializable {
 
         ASN1ObjectIdentifier oid = new ASN1ObjectIdentifier("1.3.6.1.4.1.45724.1.1.4");
         // value must be a double encoded octet stream
-        ASN1OctetString value = new DEROctetString(new byte[16]);
+        ASN1OctetString value = new DEROctetString(aaguid);
         certBuilder.addExtension(oid, false, value);
         result = new JcaX509CertificateConverter().getCertificate(certBuilder.build(
                 new JcaContentSignerBuilder("SHA256withRSA").build(signKeyPair.getPrivate())));
 
         return result;
     }
+
 
     public static X509Certificate generateU2FCertificate(X509Certificate caCert, String dn,
             KeyPair keyPair, int days) throws CertificateException, OperatorCreationException {
@@ -286,6 +342,8 @@ public class CertUtils implements java.io.Serializable {
         return result;
     }
 
+
+    
     public static X509Certificate generateIntermediateCACert(X509Certificate caCert, String dn,
             int days, KeyPair keyPair, KeyPair caKeyPair)
             throws CertIOException, OperatorCreationException, CertificateException {

@@ -1,3 +1,6 @@
+<!--
+ Copyright IBM 2025
+-->
 <resources>
     <string name="app_name">Eye Ble Key</string>
     <string name="requires_bl_enabled">This app requires bluetooth enabled.</string>

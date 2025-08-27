@@ -1,3 +1,6 @@
+/*
+ * Copyright IBM 2025
+ */
 package com.isfs.blekey.ctap;
 
 import java.io.ByteArrayOutputStream;
@@ -80,7 +83,7 @@ public class CtapHid {
     /**
      * Map of assigned channel IDs and their ongoing CTAP transaction context.
      */
-    private static Map<byte[], CtapTxn> assignedCids = new HashMap<byte[], CtapHid>();
+    private static Map<byte[], CtapTxn> assignedCids = new HashMap<byte[], CtapTxn>();
 
     /**
      * Logger for debugging and error reporting.
@@ -101,7 +104,7 @@ public class CtapHid {
         }
 
         this.sequenceFrames = new ArrayList<byte[]>();
-        this.response = new ArrayList<byte[]>();
+        this.responseSegments = new ArrayList<byte[]>();
         this.responseReady = false;
         this.responseSegment = -1;
 
@@ -125,7 +128,7 @@ public class CtapHid {
      */
     public static CtapHid getPendingByCid(byte[] cid) {
         if (assignedCids.containsKey(cid)) {
-            return assignedCids.get(cid).getCmd();;
+            return assignedCids.get(cid).getCmd();
         } //else 
         return null;
     }
@@ -395,7 +398,8 @@ public class CtapHid {
                 try {
                     Map cbor = (Map) cborObj;
                     buildCborInitAndSequencePackets(
-                        AuthenticatorAPI.process(this.cid, api, (Map<Integer, Object>) cbor));
+                        AuthenticatorAPI.process(
+                                        assignedCids.get(this.cid), api, (Map<Integer, Object>) cbor));
                 } catch (Exception e) {
                     logger.error("cbor", e);
                     this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
@@ -425,7 +429,7 @@ public class CtapHid {
                                     //version 2; leeet; CAPABILITY_CBOR | CAPABILITY_NMSG
         byte[] specStuff = new byte[] {0x02, 0x13, 0x33, 0x37, 0x0C};
         System.arraycopy(specStuff, 0, this.initResponse, 15, 5);
-        CtapTxn txn = new CtapTxn(newCid, this, null, null);
+        CtapTxn txn = new CtapTxn(newCid, this, null, null, null);
         this.assignedCids.put(newCid, txn);
 
         this.responseReady = true;
