@@ -8,8 +8,6 @@ import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.util.KeyUtils;
 
-import jakarta.json.JsonObject;
-
 import com.isfs.blekey.data.Passkey;
 
 import java.nio.ByteBuffer;
@@ -24,12 +22,17 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Implements the FIDO2 Client to Authenticator Protocol (CTAP2) API.
  * This class handles CTAP2 commands and generates appropriate responses,
  * interfacing with the Fido2Authenticator to perform cryptographic operations.
  */
 public class AuthenticatorAPI {
+
+    private static final Logger logger = LoggerFactory.getLogger(AuthenticatorAPI.class);
 
     /**
      * Number of PIN retry attempts allowed before lockout.
@@ -97,7 +100,7 @@ public class AuthenticatorAPI {
             Map<String, Object> rp = Map.of("rp", req.get(0x02));
             byte[] cdh = (byte[]) req.get(0x01);
             byte[] authData = pkey.buildAuthenticatorData(rp, "packed", 
-                        (Map) new HashMap<String, String>(), (Map) new HashMap<String, String>(), pkey.getKeyPair());
+                        null, null, pkey.getKeyPair());
             KeyPair caKp = new KeyPair(KeyUtils.getPubKey((ECPrivateKey) txn.getPasskey().getPrivateKey()),
                     txn.getPasskey().getPrivateKey());
             Map<String, Object> attStmt = pkey.processAttestationStatement("packed", cdh, authData, 
@@ -110,6 +113,88 @@ public class AuthenticatorAPI {
         }
     }
 
+    private static Fido2Authenticator createAuthenticator(CtapTxn txn) {
+        try {
+            return Fido2Authenticator.fromPasskey(txn.getPasskey());
+        } catch (Exception e) {
+            //logger.error("Failed to create authenticator", e);
+            return null;
+        }
+    }
+
+    private static boolean initializeAuthenticatorWithCredential(
+            Fido2Authenticator authenticator, 
+            ArrayList<Map<String, byte[]>> credentials) {
+        
+        for (Map<String, byte[]> cred : credentials) {
+            try {
+                authenticator.initFromCredId(cred.get("id"));
+                return true;
+            } catch (Exception e) {
+                // Continue trying other credentials
+                continue;
+            }
+        }
+        return false;
+    }
+
+    private static ArrayList<Map<String, byte[]>> processCredentials(
+            Map<Integer, Object> req, Passkey passkey) {
+        @SuppressWarnings("unchecked")
+        ArrayList<Map<String, byte[]>> allowList = 
+                (ArrayList<Map<String, byte[]>>) req.get(0x03);
+        
+        if (allowList == null) {
+            allowList = new ArrayList<>();
+        }
+        // Add resident credentials if available
+        Map<byte[], Map<String, Object>> resCreds = passkey.getResCreds();
+        if (resCreds != null) {
+            for (byte[] rpId : resCreds.keySet()) {
+                Map<String, Object> cred = resCreds.get(rpId);
+                allowList.add(Map.of(
+                    "id", (byte[]) cred.get("credId"),
+                    "user", (byte[]) cred.get("userHandle")
+                ));
+            }
+        }
+        return allowList;
+    }
+
+
+    private static byte[] generateSignedAssertion(
+            Map<Integer, Object> req, 
+            Fido2Authenticator authenticator) {
+        
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> pubKeyMap = (Map<String, Object>) req.get(0x02);
+            
+            Map<String, Object> cred = Map.of(
+                "id", authenticator.getCredId(),
+                "type", "public-key"
+            );
+            
+            byte[] authData = authenticator.buildAuthenticatorData(
+                pubKeyMap, "packed", null, null, authenticator.getKeyPair());
+            
+            byte[] clientDataHash = (byte[]) req.get(0x01);
+            ByteBuffer bb = ByteBuffer.allocate(authData.length + clientDataHash.length);
+            bb.put(authData);
+            bb.put(clientDataHash);
+            byte[] sig = authenticator.signData(
+                bb.array(), authenticator.getPrivKey(), "SHA256withECDSA");
+            
+            Map<Integer, Object> rsp = Map.of(
+                0x01, cred, 0x02, authData, 0x03, sig);
+            
+            return success(Cbor.encode(rsp));
+        } catch (Exception e) {
+            //logger.error("Failed to generate signed assertion", e);
+            return error(Ctap2StatusCode.OTHER);
+        }
+    }
+
     /**
      * Processes a getAssertion request (CTAP2 authenticatorGetAssertion command).
      * Signs a challenge using an existing credential.
@@ -118,60 +203,27 @@ public class AuthenticatorAPI {
      * @param req The request parameters
      * @return A byte array containing the response
      */
-    protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
-        Fido2Authenticator pkey = null;
-        try {
-            pkey = Fido2Authenticator.fromPasskey(txn.getPasskey());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        if(pkey == null) {
+     protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
+        logger.debug("getAssertion");
+        Fido2Authenticator authenticator = createAuthenticator(txn);
+        if (authenticator == null) {
+            logger.debug("authenticator is null");
             return error(Ctap2StatusCode.OTHER);
         }
-        ArrayList<Map<String, byte[]>> allowList = (ArrayList<Map<String, byte[]>>) req.get(0x03);
-        if(allowList == null ) {
-            allowList = new ArrayList<>();
-        }
-        Map<byte[],Map> resCreds = txn.getPasskey().getResCreds();
-        if(resCreds != null) {
-            for(byte[] rpId: resCreds.keySet()) {
-                Map<String, byte[]> cred = (Map<String, byte[]>) resCreds.get(rpId);
-                allowList.add(Map.of("id", cred.get("credId"), 
-                                    "user", cred.get("userHandle")));
-            }
-        }
-        if(allowList.size() == 0) {
+        logger.debug("created authenticator");
+        // Process credentials from allowList and resident credentials
+        ArrayList<Map<String, byte[]>> credentials = processCredentials(req, txn.getPasskey());
+        if (credentials.isEmpty()) {
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
-        boolean initSuccess = false;
-        for(Map<String, byte[]> cred: allowList) {
-            try {
-                pkey.initFromCredId(cred.get("id"));
-                initSuccess = true;
-            } catch (Exception e) {
-                continue;
-            }
-        }
-        if(!initSuccess) {
+
+        // Initialize authenticator with a valid credential
+        if (!initializeAuthenticatorWithCredential(authenticator, credentials)) {
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
-        try {
-            Map<String, Object> pubKeyMap = (Map<String, Object>) req.get(0x02);
-            Map<String, Object> cred = Map.of("id", pkey.getCredId(),
-                        "type", "public-key");
-            byte[] authData = pkey.buildAuthenticatorData(pubKeyMap, "packed", 
-                        null, null, pkey.getKeyPair());
-            byte[] clientDataHash = (byte[]) req.get(0x01);
-            ByteBuffer bb = ByteBuffer.allocate(authData.length + clientDataHash.length);
-            bb.put(authData);
-            bb.put(clientDataHash);
-            byte[] sig = pkey.signData(bb.array(), pkey.getPrivKey(), "SHA256withECDSA"); 
-            Map<Integer, Object> rsp = Map.of(
-                        0x01, cred, 0x02, authData, 0x03, sig);
-            return success(Cbor.encode(rsp));
-        } catch (Exception e) {
-            return error(Ctap2StatusCode.OTHER);
-        }
+
+        // Generate and sign assertion
+        return generateSignedAssertion(req, authenticator);
     }
 
     /**
@@ -183,6 +235,7 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     protected static byte[] getInfo(CtapTxn txn, Map<Integer, Object> req) {
+        logger.debug("getInfo");
         Map<String, Boolean> capabilities = Map.of("rk", true,
                                                    "plat", true, //XD
                                                    "clientPint", true);
@@ -193,7 +246,8 @@ public class AuthenticatorAPI {
             0x04, capabilities, //capabilities
             0x05, 4096, // maxMsgSize
             0x06, new int[] {1} //PIN/UV Auth Protocol One
-        );  
+        );
+        logger.debug("getInfo response: {}", info);
         return success(Cbor.encode(info));
     }
 
@@ -246,6 +300,7 @@ public class AuthenticatorAPI {
     private static byte[] getTkn(CtapTxn txn, Map<Integer, Object> req) {
         //Decapsulate shared secret
         byte[] pinHashEnc = (byte[]) req.get(0x06);
+        @SuppressWarnings("unchecked")
         PublicKey theirKey = KeyUtils.fromCoseKey((Map<Integer, Object>) req.get(0x03));
         byte[] sharedSecret = KeyUtils.decapsulate(theirKey,
                     AuthenticatorAPI.platKeyPair.getPrivate());

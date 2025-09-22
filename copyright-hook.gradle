@@ -51,9 +51,6 @@ ext {
     
     // Current year
     currentYear = LocalDate.now().getYear().toString()
-    
-    // Dry run mode (default: false)
-    dryRun = project.hasProperty('dryRun') ? project.property('dryRun').toBoolean() : false
 }
 
 // Task to check and update copyright headers
@@ -61,14 +58,23 @@ task checkCopyrightHeaders {
     description = 'Checks and updates copyright headers in source files'
     group = 'verification'
     
+    // Disable configuration cache for this task
+    notCompatibleWithConfigurationCache("This task uses Gradle script objects in closures")
+    
+    // Define dryRun property with a default value
+    // Only set to true if explicitly provided as 'true'
+    ext.dryRun = project.hasProperty('dryRun') && project.property('dryRun').toString() == 'true'
+    
     doLast {
+        def isDryRun = ext.dryRun
+        
         def fileCount = 0
         def updatedCount = 0
         def missingCount = 0
-        def dryRunPrefix = dryRun ? "[DRY RUN] " : ""
+        def dryRunPrefix = isDryRun ? "[DRY RUN] " : ""
         
         println "${dryRunPrefix}Checking copyright headers..."
-        if (dryRun) {
+        if (isDryRun) {
             println "Running in dry-run mode. No files will be modified."
         }
         
@@ -128,7 +134,7 @@ task checkCopyrightHeaders {
                     
                     // Replace the copyright line
                     def updatedContent = content.replaceFirst(copyrightPattern, updatedHeader)
-                    if (!dryRun) {
+                    if (!isDryRun) {
                         file.text = updatedContent
                     }
                     updatedCount++
@@ -185,7 +191,7 @@ task checkCopyrightHeaders {
                     if (shebangEnd != -1) {
                         def shebang = content.substring(0, shebangEnd + 1)
                         def rest = content.substring(shebangEnd + 1)
-                        if (!dryRun) {
+                        if (!isDryRun) {
                             file.text = shebang + "\n" + copyrightHeader + rest
                         }
                     }
@@ -199,18 +205,18 @@ task checkCopyrightHeaders {
                         if (!xmlDecl.endsWith("\n")) {
                             xmlDecl += "\n"
                         }
-                        if (!dryRun) {
+                        if (!isDryRun) {
                             file.text = xmlDecl + copyrightHeader + rest.trim()
                         }
                     } else {
                         // Shouldn't happen, but just in case
-                        if (!dryRun) {
+                        if (!isDryRun) {
                             file.text = copyrightHeader + content
                         }
                     }
                 } else {
                     // Default behavior for all other files
-                    if (!dryRun) {
+                    if (!isDryRun) {
                         file.text = copyrightHeader + content
                     }
                 }
@@ -226,7 +232,7 @@ task checkCopyrightHeaders {
         println "  Files missing copyright: ${missingCount}"
         println "  Success rate: ${fileCount > 0 ? String.format('%.1f%%', (fileCount - missingCount) * 100.0 / fileCount) : '0.0%'}"
         
-        if (dryRun) {
+        if (isDryRun) {
             println "\nThis was a dry run. No files were modified."
             println "To apply changes, run without the -PdryRun=true flag."
         }

@@ -16,6 +16,7 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -23,7 +24,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 import javax.crypto.Cipher;
@@ -89,7 +89,7 @@ public class Passkey {
      * List of resident credentials associated with this passkey.
      * Each credential is a map from relying party ID to credential data.
      */
-    private Map<byte[], Map> resCreds;
+    private Map<byte[], Map<String, Object>> resCreds;
     
     /**
      * Seed value used for key derivation.
@@ -206,7 +206,7 @@ public class Passkey {
      * @param seed The seed value for key derivation
      * @param creds The list of resident credentials
      */
-    protected Passkey(PrivateKey key, X509Certificate cert, byte[] seed, Map<byte[], Map> creds) {
+    protected Passkey(PrivateKey key, X509Certificate cert, byte[] seed, Map<byte[], Map<String, Object>> creds) {
         this.pk = key;
         this.ca = cert;
         this.resCreds = creds;
@@ -344,30 +344,12 @@ public class Passkey {
         final byte[] iv;
         final byte[] tag;
         final byte[] encryptedData;
-        final Cipher cipher;
         
         // Constructor for read operations (from file)
         CryptoData(byte[] iv, byte[] tag, byte[] encryptedData) {
             this.iv = iv;
             this.tag = tag;
             this.encryptedData = encryptedData;
-            this.cipher = null;
-        }
-        
-        // Constructor for write operations (to file)
-        CryptoData(byte[] iv, Cipher cipher) {
-            this.iv = iv;
-            this.cipher = cipher;
-            this.tag = null;
-            this.encryptedData = null;
-        }
-        
-        // Constructor for encrypted data with tag
-        CryptoData(byte[] data, byte[] tag) {
-            this.encryptedData = data;
-            this.tag = tag;
-            this.iv = null;
-            this.cipher = null;
         }
     }
     
@@ -471,32 +453,10 @@ public class Passkey {
     }
 
     /**
-     * Decrypts the data using AES-GCM.
-     */
-    private static byte[] decryptData(CryptoData data, byte[] seed) throws Exception {
-        // Create AES key from seed
-        SecretKeySpec secretKeySpec = new SecretKeySpec(Arrays.copyOf(seed, AES_KEY_SIZE), AES_ALGORITHM);
-        
-        // Create GCM parameter spec with IV
-        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(GCM_TAG_BIT_LENGTH, data.iv);
-        
-        // Initialize cipher for decryption
-        Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-        cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, gcmParamSpec);
-        
-        // Combine encrypted data with tag for decryption
-        byte[] ciphertextWithTag = new byte[data.encryptedData.length + data.tag.length];
-        System.arraycopy(data.encryptedData, 0, ciphertextWithTag, 0, data.encryptedData.length);
-        System.arraycopy(data.tag, 0, ciphertextWithTag, data.encryptedData.length, data.tag.length);
-        
-        // Decrypt and return
-        return cipher.doFinal(ciphertextWithTag);
-    }
-
-    /**
      * Deserializes CBOR bytes into a Passkey object.
      */
     private static Passkey deserializePasskey(byte[] cborBytes) throws Exception {
+        @SuppressWarnings("unchecked")
         HashMap<String, Object> pkey = (HashMap<String, Object>) Cbor.decode(cborBytes);
         
         // Validate that only expected keys are present
@@ -514,11 +474,12 @@ public class Passkey {
                 throw new IllegalArgumentException("Missing required key in passkey CBOR data: " + requiredKey);
             }
         }
-
+        @SuppressWarnings("unchecked")
         PrivateKey pk = KeyUtils.fromECPrivateKeyParameters((Map<String, Object>) pkey.get("pk"));
         X509Certificate ca = (X509Certificate) CertUtils.readBytes((byte[]) pkey.get("ca"), "SHA256withECDSA");
         byte[] seed = (byte[]) pkey.get("seed");
-        Map<byte[], Map> resCreds = (Map<byte[], Map>) pkey.get("res_creds");
+        @SuppressWarnings("unchecked")
+        Map<byte[], Map<String, Object>> resCreds = (Map<byte[], Map<String, Object>>) pkey.get("res_creds");
         
         return new Passkey(pk, ca, seed, resCreds);
     }
@@ -610,29 +571,6 @@ public class Passkey {
         return cipher.doFinal(ciphertextWithTag);
     }
 
-
-
-    /**
-     * Tests if a Cipher has been initialized.
-     * 
-     * @param cipher The Cipher to test
-     * @return true if the Cipher has been initialized, false otherwise
-     */
-    private boolean isCipherInitialized(Cipher cipher) {
-        if (cipher == null) {
-            return false;
-        }
-        try {
-            // Attempt an operation that requires initialization
-            // Using a zero-length array to avoid modifying any data
-            cipher.update(new byte[0]);
-            return true;
-        } catch (IllegalStateException e) {
-            // If we get this exception, the cipher is not initialized
-            return false;
-        }
-    }
-
     /**
      * Writes a passkey to a file, encrypting it with the provided PIN hash using the two-layer encryption scheme.
      *
@@ -702,30 +640,6 @@ public class Passkey {
         return true;
     }
     
-    // Removed redundant classes (EncryptionComponents and EncryptedData)
-    // Now using the unified CryptoData class
-    
-    /**
-     * Initializes the encryption cipher with a random IV.
-     */
-    private static CryptoData initializeEncryptionCipher(byte[] pinHash) throws Exception {
-        // Generate a random IV
-        SecureRandom secureRandom = new SecureRandom();
-        byte[] iv = new byte[IV_SIZE];
-        secureRandom.nextBytes(iv);
-        
-        // Create the AES key from pinHash
-        SecretKeySpec secretKeySpec = new SecretKeySpec(
-                                            Arrays.copyOf(pinHash, AES_KEY_SIZE), AES_ALGORITHM);
-        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(GCM_TAG_BIT_LENGTH, iv);
-        
-        // Initialize cipher for encryption
-        Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-        cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, gcmParamSpec);
-        
-        return new CryptoData(iv, cipher);
-    }
-    
     /**
      * Serializes a Passkey object to CBOR.
      */
@@ -754,30 +668,6 @@ public class Passkey {
         assert passkeyMap.size() == 4 : "Unexpected number of keys in passkey map";
         
         return Cbor.encode(passkeyMap);
-    }
-
-    
-    /**
-     * Encrypts data and extracts the authentication tag.
-     */
-    private static CryptoData encryptData(Cipher cipher, byte[] data) throws Exception {
-        byte[] encryptedData = cipher.doFinal(data);
-        byte[] tag = extractGcmTag(cipher);
-        
-        return new CryptoData(encryptedData, tag);
-    }
-    
-    /**
-     * Writes encrypted data to a file.
-     */
-    private static boolean writeEncryptedDataToFile(byte[] iv, byte[] tag, byte[] encryptedData, File file) throws Exception {
-        try (FileOutputStream fos = new FileOutputStream(file)) {
-            fos.write(iv);
-            fos.write(tag);
-            fos.write(encryptedData);
-            fos.flush();
-            return true;
-        }
     }
     
     /**
@@ -824,7 +714,7 @@ public class Passkey {
      * 
      * @return The map of resident credentials
      */
-    public Map<byte[], Map> getResCreds() {
+    public Map<byte[], Map<String, Object>> getResCreds() {
         return resCreds;
     }
 
@@ -866,7 +756,7 @@ public class Passkey {
     public void addResCred(byte[] rpId, byte[] credId, byte[] userHandle) {
         Map<String, Object> cred = Map.of("credId", credId, "userHandle", userHandle);
         if(resCreds == null) {
-            resCreds = new HashMap<byte[], Map>();
+            resCreds = new HashMap<byte[], Map<String, Object>>();
         }
         resCreds.put(rpId, cred);
     }
@@ -896,6 +786,21 @@ public class Passkey {
             }
         }
         return null;
+    }
+
+    /**
+     * Opens a passkey from a file using the lower pin hash for decryption.
+     * 
+     * @param lowerHash The 16-byte lower hash used for decryption
+     * @param passkeyFile The file to open the passkey from
+     * @return The decrypted passkey, or null if decryption fails
+     */
+    public static Passkey openKey(byte[] lowerHash, File passkeyFile) {
+        try {
+            return readKey(passkeyFile, lowerHash);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -986,8 +891,7 @@ public class Passkey {
             return null;
         }
         // Calculate PIN hash using SHA-256
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        return digest.digest(pin.getBytes());
+        return KeyUtils.getLowerPinHash(pin);
     }
 
     private static void generateMain(Scanner scanner) {
@@ -1028,37 +932,64 @@ public class Passkey {
     public static void manageMain(Scanner scanner) {
         File passkeyFile = collectPasskeyFileInfo(scanner);
         if (!passkeyFile.exists()) {
-            System.out.println("Failed to find passkey {}.".format(passkeyFile.getName()));
+            System.out.println(String.format("Failed to find passkey %s.", passkeyFile.getName()));
             return;
         }
-        byte[] pinHash;
+        byte[] lowerHash;
         try {
-            pinHash = collectPinInfo(scanner);
-            if(pinHash == null) {
+            lowerHash = collectPinInfo(scanner);
+            if(lowerHash == null) {
                 return;
             }
         } catch (NoSuchAlgorithmException e) {
             System.out.println("Error: Failed to get hasing function.");
             return;
         }
-        byte[] lowerHash = new byte[HALF_HASH];
-        System.arraycopy(pinHash, 0, lowerHash, 0, HALF_HASH);
         Passkey passkey = readKey(passkeyFile, lowerHash);
         if (passkey == null) {
             System.out.println("Failed to open passkey.");
             return;
         }
         System.out.println("Passkey successfully opened.");
-        Map<byte[], Map> resCreds = passkey.getResCreds();
+        Map<byte[], Map<String, Object>> resCreds = passkey.getResCreds();
+        ArrayList<byte[]> credsToRemove = new ArrayList<>();
         for(byte[] rpId: resCreds.keySet()) {
-            Map cred = resCreds.get(rpId);
             try {
                 String rpStr = new String(rpId, "utf-8");
-                System.out.println("Credential relying party id: {}".format(rpStr));
-                //TODO ask user if should delete and maybe remove cred
+                System.out.println(String.format("Credential relying party id: %s", rpStr));
+                if(confirmDelete()) {
+                    credsToRemove.add(rpId);
+                }
             } catch (UnsupportedEncodingException e) {
                 System.out.println("Failed read relying party id for resident credential.");
                 continue;
+            }
+        }
+        // Remove credentials outside the loop to avoid concurrent modification
+        for(byte[] rpId: credsToRemove) {
+            resCreds.remove(rpId);
+        }
+    }
+
+    /**
+     * Prompts the user to confirm deletion of a credential.
+     * The default action is to preserve the credential.
+     *
+     * @return true if the user confirms deletion, false otherwise
+     */
+    private static boolean confirmDelete() {
+        Scanner scanner = null;
+        try {
+            scanner = new Scanner(System.in);
+            System.out.print("Delete this credential? (y/N): ");
+            String response = scanner.nextLine().trim().toLowerCase();
+            
+            // Default is to preserve (return false)
+            // Only return true if user explicitly confirms with 'y' or 'yes'
+            return response.equals("y") || response.equals("yes");
+        } finally {
+            if (scanner != null) {
+                scanner.close();
             }
         }
     }
@@ -1074,7 +1005,7 @@ public class Passkey {
         try {
             if(args.length != 1) {
                 System.out.println(
-                    "Usage: java -cp com.isfs.blekey.jar {} <generate|manage>".format(
+                    String.format("Usage: java -cp com.isfs.blekey.jar %s <generate|manage>",
                                                         Passkey.class.getName().toString()));
                 return;
             }

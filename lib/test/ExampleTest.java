@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.security.KeyPair;
 import java.security.cert.X509Certificate;
-import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
@@ -31,9 +30,11 @@ public class ExampleTest {
         
         // Use TestHelper to get test data
         String jsonOptions = TestHelper.createCredentialCreationOptionsJson();
+        System.err.println(jsonOptions);
         
         // Perform the test
         String response = authenticator.credentialCreate(jsonOptions, attestationType, keyPair, caKeyPair, caCert);
+        System.err.println(response);
         
         // Assert on the result
         assertNotNull(response);

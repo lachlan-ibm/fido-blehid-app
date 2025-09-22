@@ -12,14 +12,37 @@
         android:id="@+id/textView"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="BLE HID FIDO2 Peripheral"
-        android:textSize="18sp" />
+        android:text="BLE HID Passkey Peripheral"
+        android:textSize="18sp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Passkey Device Controls"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
 
     <ToggleButton
         android:id="@+id/serverButton"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Turn BLE HID Server On/Off"
-        android:layout_centerInParent="true"/>
+        android:textOn="Passkeys advertiesed via BLE HID"
+        android:textOff="Start BLE HID Server"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Passkey Management"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <ToggleButton
+        android:id="@+id/manageButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textOn="Managing Passkey"
+        android:textOff="Manage Passkey Resident Credentials" />
 
 </LinearLayout>

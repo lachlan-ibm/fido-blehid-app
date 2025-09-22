@@ -55,6 +55,7 @@ import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECPoint;
@@ -213,8 +214,12 @@ public class CertUtils implements java.io.Serializable {
         // value must be a double encoded octet stream
         ASN1OctetString value = new DEROctetString(aaguid);
         certBuilder.addExtension(oid, false, value);
+        String javaAglName = "SHA256withRSA";
+        if(signKeyPair.getPrivate() instanceof ECPrivateKey) {
+                javaAglName = "SHA256withECDSA";
+        }
         result = new JcaX509CertificateConverter().getCertificate(certBuilder.build(
-                new JcaContentSignerBuilder("SHA256withRSA").build(signKeyPair.getPrivate())));
+                new JcaContentSignerBuilder(javaAglName).build(signKeyPair.getPrivate())));
 
         return result;
     }

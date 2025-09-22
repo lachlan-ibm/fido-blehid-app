@@ -27,6 +27,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -72,6 +73,9 @@ import org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8DecryptorProviderBuilder;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.bouncycastle.pkcs.PKCSException;
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.util.SubjectPublicKeyInfoFactory;
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 
 public class KeyUtils {
     
@@ -88,12 +92,30 @@ public class KeyUtils {
     private static final String ERROR_INVALID_OKP_KEY = "Invalid COSE OKP key: missing required parameters";
     private static final String ERROR_UNSUPPORTED_OKP_CURVE = "Unsupported OKP curve: ";
     private static final String ERROR_UNSUPPORTED_OKP_ALGORITHM = "Unsupported OKP algorithm: ";
+    private static final String ERROR_INVALID_EC_KEY = "Invalid COSE EC key: missing required parameters";
+    private static final String ERROR_UNSUPPORTED_EC_CURVE = "Unsupported curve: ";
+    private static final String ERROR_UNSUPPORTED_EC_ALGORITHM = "Unsupported EC algorithm: ";
+
+    // Algorithm Constants
+    private static final String EC_ALGORITHM = "EC";
+    private static final String RSA_ALGORITHM = "RSA";
+    private static final String ED25519_ALGORITHM = "Ed25519";
+    private static final String EDDSA_ALGORITHM = "EdDSA";
 
     // COSE Elliptic Curve Parameters
     private static final int COSE_EC_CRV = -1;  // Curve
     private static final int COSE_EC_X = -2;    // X Coordinate
     private static final int COSE_EC_Y = -3;    // Y Coordinate
     private static final int COSE_EC_CRV_P256 = 1;  // P-256 Curve
+    private static final int COSE_EC_CRV_P384 = 2; // P-384 Curve
+    private static final int COSE_EC_CRV_P521 = 3; // P-521 Curve
+    
+    // Map of COSE curve identifiers to standard curve names
+    private static final Map<Integer, String> COSE_CURVE_TO_STD_NAME = Map.of(
+        COSE_EC_CRV_P256, "secp256r1",
+        COSE_EC_CRV_P384, "secp384r1",
+        COSE_EC_CRV_P521, "secp521r1"
+    );
 
     // COSE RSA Parameters
     private static final int COSE_RSA_N = -1;  // Modulus
@@ -111,17 +133,16 @@ public class KeyUtils {
     private static final int COSE_ALG_RS256 = -257;  // RSASSA-PKCS1-v1_5 with SHA-256
     
     private KeyUtils() { }
-
     
     public static KeyPair getKeyPair(String alg) {
         try {
-            if (alg == "RSA") {
+            if (RSA_ALGORITHM.equals(alg)) {
                 return getRSAKeyPair();
             }
-            else if (alg == "EC") {
+            else if (EC_ALGORITHM.equals(alg)) {
                 return getECKeyPair();
             }
-            else if (alg == "E25519") {
+            else if (ED25519_ALGORITHM.equals(alg)) {
                 return getE25519KeyPair();
             }
         } catch (Exception e) {
@@ -146,6 +167,9 @@ public class KeyUtils {
    /**
     * Converts a public key to a COSE key format with a specified algorithm.
     * Supports EC P256, RSA, and Ed25519 keys.
+    * 
+    * The algorithm is used to allow for switching between EC and ECDH COSE keys. This
+    * is requried fro mthe platfomr key exchange as part of the pin auth algorithm.
     *
     * @param pubkey The public key to convert
     * @param algorithm Optional algorithm to use for the key (can be null for default)
@@ -169,17 +193,6 @@ public class KeyUtils {
        
        throw new UnsupportedOperationException(
            "Unsupported key type: " + pubkey.getClass().getName());
-   }
-   
-   /**
-    * Creates a COSE key representation of an EC public key.
-    * Currently supports P-256 curve only.
-    *
-    * @param ecKey The EC public key
-    * @return A map containing the COSE key parameters
-    */
-   private static Map<Integer, Object> createCoseEcKey(ECPublicKey ecKey) {
-       return createCoseEcKey(ecKey, null);
    }
    
    /**
@@ -361,6 +374,61 @@ public class KeyUtils {
     }
     
     /**
+     * Validates a COSE EC key map to ensure it contains all required parameters
+     * and has supported curve and algorithm values.
+     *
+     * @param coseKey The COSE key map to validate
+     * @throws IllegalArgumentException if the key is invalid or contains unsupported values
+     */
+    private static void validateCoseEcKey(Map<Integer, Object> coseKey) throws IllegalArgumentException {
+       // Extract curve and coordinates
+       Integer crv = (Integer) coseKey.get(COSE_EC_CRV);
+       byte[] x = (byte[]) coseKey.get(COSE_EC_X);
+       byte[] y = (byte[]) coseKey.get(COSE_EC_Y);
+       
+       if (crv == null || x == null || y == null) {
+           throw new IllegalArgumentException(ERROR_INVALID_EC_KEY);
+       }
+       
+       // Check if curve is supported
+       if (!COSE_CURVE_TO_STD_NAME.containsKey(crv)) {
+           throw new IllegalArgumentException(ERROR_UNSUPPORTED_EC_CURVE + crv);
+       }
+       
+       // Check algorithm if present (optional)
+       Integer alg = (Integer) coseKey.get(COSE_KEY_ALG);
+       if (alg != null && alg != COSE_ALG_ES256 && alg != COSE_ALG_ECDH_ES_HKDF_256) {
+           throw new IllegalArgumentException(ERROR_UNSUPPORTED_EC_ALGORITHM + alg);
+       }
+    }
+    
+    /**
+     * Creates an ECPoint from x and y coordinates provided as byte arrays.
+     *
+     * @param x The x-coordinate as a byte array
+     * @param y The y-coordinate as a byte array
+     * @return The ECPoint representing the coordinates
+     */
+    private static ECPoint createECPoint(byte[] x, byte[] y) {
+       BigInteger xBi = new BigInteger(1, x);
+       BigInteger yBi = new BigInteger(1, y);
+       return new ECPoint(xBi, yBi);
+    }
+    
+    /**
+     * Creates an ECParameterSpec for the specified curve name.
+     *
+     * @param curveName The standard curve name (e.g., "secp256r1")
+     * @return The ECParameterSpec for the curve
+     * @throws Exception if the parameters cannot be created
+     */
+    private static ECParameterSpec createECParameterSpec(String curveName) throws Exception {
+       AlgorithmParameters parameters = AlgorithmParameters.getInstance(EC_ALGORITHM);
+       parameters.init(new ECGenParameterSpec(curveName));
+       return parameters.getParameterSpec(ECParameterSpec.class);
+    }
+    
+    /**
      * Converts a COSE EC key to a Java ECPublicKey.
      *
      * @param coseKey The COSE key map
@@ -368,52 +436,27 @@ public class KeyUtils {
      * @throws Exception if the key cannot be created
      */
     private static PublicKey fromCoseEcKey(Map<Integer, Object> coseKey) throws Exception {
-        // Extract curve and coordinates
-        Integer crv = (Integer) coseKey.get(COSE_EC_CRV);
-        byte[] x = (byte[]) coseKey.get(COSE_EC_X);
-        byte[] y = (byte[]) coseKey.get(COSE_EC_Y);
-        
-        if (crv == null || x == null || y == null) {
-            throw new IllegalArgumentException("Invalid COSE EC key: missing required parameters");
-        }
-        
-        // Map COSE curve identifier to standard curve name
-        String curveName;
-        switch (crv) {
-            case COSE_EC_CRV_P256:
-                curveName = "secp256r1"; // P-256
-                break;
-            // Add support for other curves as needed
-            // case 2: curveName = "secp384r1"; break; // P-384
-            // case 3: curveName = "secp521r1"; break; // P-521
-            default:
-                throw new IllegalArgumentException("Unsupported curve: " + crv);
-        }
-        
-        // Check algorithm if present (optional)
-        Integer alg = (Integer) coseKey.get(COSE_KEY_ALG);
-        if (alg != null && alg != COSE_ALG_ES256 && alg != COSE_ALG_ECDH_ES_HKDF_256) {
-            throw new IllegalArgumentException("Unsupported EC algorithm: " + alg);
-        }
-        
-        // Convert byte arrays to BigIntegers
-        BigInteger xBi = new BigInteger(1, x);
-        BigInteger yBi = new BigInteger(1, y);
-        
-        // Create EC point
-        ECPoint point = new ECPoint(xBi, yBi);
-        
-        // Get EC parameters using standard Java API
-        AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC");
-        parameters.init(new ECGenParameterSpec(curveName));
-        ECParameterSpec ecParams = parameters.getParameterSpec(ECParameterSpec.class);
-        
-        // Create key spec
-        ECPublicKeySpec keySpec = new ECPublicKeySpec(point, ecParams);
-        
-        // Generate public key
-        KeyFactory keyFactory = KeyFactory.getInstance("EC");
-        return keyFactory.generatePublic(keySpec);
+       // Validate the COSE key
+       validateCoseEcKey(coseKey);
+       
+       // Extract curve and coordinates
+       Integer crv = (Integer) coseKey.get(COSE_EC_CRV);
+       byte[] x = (byte[]) coseKey.get(COSE_EC_X);
+       byte[] y = (byte[]) coseKey.get(COSE_EC_Y);
+       
+       // Get standard curve name from map
+       String curveName = COSE_CURVE_TO_STD_NAME.get(crv);
+       
+       // Create EC point from coordinates
+       ECPoint point = createECPoint(x, y);
+       
+       // Get EC parameters
+       ECParameterSpec ecParams = createECParameterSpec(curveName);
+       
+       // Create key spec and generate public key
+       ECPublicKeySpec keySpec = new ECPublicKeySpec(point, ecParams);
+       KeyFactory keyFactory = KeyFactory.getInstance(EC_ALGORITHM);
+       return keyFactory.generatePublic(keySpec);
     }
     
     /**
@@ -466,9 +509,7 @@ public class KeyUtils {
         validateOkpAlgorithm(coseKey);
         
         // Create Ed25519 public key
-        return isModernJavaApiAvailable()
-            ? createEd25519KeyUsingModernApi(x)
-            : createEd25519KeyFromRawBytes(x);
+        return createEd25519Key(x);
     }
     
     /**
@@ -501,124 +542,30 @@ public class KeyUtils {
             throw new IllegalArgumentException(ERROR_UNSUPPORTED_OKP_ALGORITHM + alg);
         }
     }
-    
-    // Cache for Java API availability check
-    private static Boolean modernJavaApiAvailable = null;
+
     
     /**
-     * Checks if the modern Java API (Java 15+) for Ed25519 keys is available.
-     *
-     * @return true if the modern API is available, false otherwise
-     */
-    private static boolean isModernJavaApiAvailable() {
-        if (modernJavaApiAvailable == null) {
-            try {
-                Class.forName("java.security.spec.EdECPublicKeySpec");
-                Class.forName("java.security.spec.NamedParameterSpec");
-                modernJavaApiAvailable = Boolean.TRUE;
-            } catch (ClassNotFoundException e) {
-                modernJavaApiAvailable = Boolean.FALSE;
-            }
-        }
-        return modernJavaApiAvailable;
-    }
-    
-    /**
-     * Creates an Ed25519 public key using the modern Java API (Java 15+).
+     * Creates an Ed25519 public key using Bouncy Castle.
      *
      * @param publicKeyBytes The raw public key bytes
      * @return The Ed25519 public key
      * @throws Exception if the key cannot be created
      */
-    private static PublicKey createEd25519KeyUsingModernApi(byte[] publicKeyBytes) throws Exception {
+    private static PublicKey createEd25519Key(byte[] publicKeyBytes) throws Exception {
         try {
-            // Get the required classes via reflection
-            Class<?> edPublicKeyClass = Class.forName("java.security.spec.EdECPublicKeySpec");
-            Class<?> namedParamSpecClass = Class.forName("java.security.spec.NamedParameterSpec");
-            
-            // Get the named parameter spec for Ed25519
-            Object ed25519ParamSpec = namedParamSpecClass.getField("ED25519").get(null);
-            
-            // Create the key spec
-            Object keySpec = edPublicKeyClass.getConstructor(namedParamSpecClass, byte[].class)
-                .newInstance(ed25519ParamSpec, publicKeyBytes);
-            
-            // Generate the public key
-            KeyFactory keyFactory = KeyFactory.getInstance("EdDSA");
-            return keyFactory.generatePublic((java.security.spec.KeySpec) keySpec);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to create Ed25519 key using modern Java API", e);
-        }
-    }
-    
-    /**
-     * Creates an Ed25519 public key from raw bytes.
-     * This is a fallback method for Java versions that don't support the EdECPublicKeySpec API.
-     *
-     * @param rawBytes The raw public key bytes
-     * @return The corresponding Ed25519PublicKey
-     * @throws Exception if the key cannot be created
-     */
-    private static PublicKey createEd25519KeyFromRawBytes(byte[] rawBytes) throws Exception {
-        // This is a simplified approach and may need to be adjusted based on your environment
-        // For many environments, you might need to use a third-party library like Bouncy Castle
-        
-        try {
-            // Try using reflection to access the Ed25519PublicKeyImpl constructor if available
-            Class<?> keyClass = Class.forName("sun.security.ec.Ed25519PublicKeyImpl");
-            return (PublicKey) keyClass.getConstructor(byte[].class).newInstance(rawBytes);
-        } catch (Exception e) {
-            // If that fails, try to encode as X509
-            byte[] encodedKey = encodeEd25519PublicKey(rawBytes);
+            // Create an Ed25519 public key parameters object from the raw bytes
+            Ed25519PublicKeyParameters pubKeyParams = new Ed25519PublicKeyParameters(publicKeyBytes, 0);
+            // Convert to SubjectPublicKeyInfo format
+            SubjectPublicKeyInfo spki = SubjectPublicKeyInfoFactory.createSubjectPublicKeyInfo(pubKeyParams);
+            // Convert to X.509 encoded format
+            byte[] encodedKey = spki.getEncoded();
+            // Create a public key from the encoded format
+            KeyFactory keyFactory = KeyFactory.getInstance(EDDSA_ALGORITHM);
             X509EncodedKeySpec keySpec = new X509EncodedKeySpec(encodedKey);
-            
-            try {
-                KeyFactory keyFactory = KeyFactory.getInstance("EdDSA");
-                return keyFactory.generatePublic(keySpec);
-            } catch (NoSuchAlgorithmException nsae) {
-                // Try Ed25519 as algorithm name
-                KeyFactory keyFactory = KeyFactory.getInstance("Ed25519");
-                return keyFactory.generatePublic(keySpec);
-            }
+            return keyFactory.generatePublic(keySpec);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create Ed25519 key using Bouncy Castle: " + e.getMessage(), e);
         }
-    }
-    
-    /**
-     * Encodes raw Ed25519 public key bytes in X509 format.
-     * This is a simplified implementation and may need to be adjusted.
-     *
-     * @param rawBytes The raw public key bytes
-     * @return The X509 encoded key
-     */
-    private static byte[] encodeEd25519PublicKey(byte[] rawBytes) {
-        // This is a simplified ASN.1 DER encoding for Ed25519 public keys
-        // The actual implementation depends on your environment
-        
-        // Simple ASN.1 structure for Ed25519 public key:
-        // PublicKeyInfo ::= SEQUENCE {
-        //   algorithm   AlgorithmIdentifier,
-        //   publicKey   BIT STRING
-        // }
-        // AlgorithmIdentifier ::= SEQUENCE {
-        //   algorithm   OBJECT IDENTIFIER,
-        //   parameters  ANY DEFINED BY algorithm OPTIONAL
-        // }
-        
-        // This is a placeholder implementation
-        // In a real implementation, you would use a proper ASN.1 encoder
-        byte[] prefix = {
-            0x30, (byte) (rawBytes.length + 12), // SEQUENCE
-            0x30, 0x08, // SEQUENCE for AlgorithmIdentifier
-            0x06, 0x03, 0x2B, 0x65, 0x70, // OID for Ed25519 (1.3.101.112)
-            0x05, 0x00, // NULL for parameters
-            0x03, (byte) (rawBytes.length + 1), 0x00 // BIT STRING with no unused bits
-        };
-        
-        byte[] result = new byte[prefix.length + rawBytes.length];
-        System.arraycopy(prefix, 0, result, 0, prefix.length);
-        System.arraycopy(rawBytes, 0, result, prefix.length, rawBytes.length);
-        
-        return result;
     }
 
     /**
@@ -912,6 +859,26 @@ public class KeyUtils {
         return (RSAPublicKey) kf.generatePublic(spec);
     }
 
+    public static PrivateKey generatePrivate(String alg, int keySize)
+            throws NoSuchAlgorithmException {
+        return generateKeyPair(alg, keySize).getPrivate();
+    }
+    
+    
+    private static KeyPair getRSAKeyPair() throws Exception {
+        return generateKeyPair(RSA_ALGORITHM, 2048);
+    }
+    
+    
+    private static KeyPair getECKeyPair() throws Exception {
+        return generateKeyPair(EC_ALGORITHM, 521);
+    }
+    
+    
+    private static KeyPair getE25519KeyPair() throws Exception {
+        return generateKeyPair(ED25519_ALGORITHM, 512);
+    }
+
     public static KeyPair generateKeyPair(String alg, int keySize)
             throws NoSuchAlgorithmException {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance(alg);
@@ -922,11 +889,11 @@ public class KeyUtils {
     public static KeyPair getCAKeyPair(String alg) throws NoSuchAlgorithmException, InvalidKeySpecException, IOException {
         PrivateKey privateKey = null;
         PublicKey publicKey = null;
-        if (alg == "EC") {
+        if (EC_ALGORITHM.equals(alg)) {
             privateKey = generatePrivate(alg, 256);
             publicKey = getPubKey((ECPrivateKey) privateKey);
         }
-        else if (alg == "RSA") {
+        else if (RSA_ALGORITHM.equals(alg)) {
             privateKey = generatePrivate(alg, 2048);
             publicKey =  getPubKey((RSAPrivateCrtKey) privateKey);
         }
@@ -934,26 +901,6 @@ public class KeyUtils {
             throw new NoSuchAlgorithmException(String.format("Invalid alg:  %s", alg));
         }
         return new KeyPair(publicKey, privateKey);      
-    }
-    
-    public static PrivateKey generatePrivate(String alg, int keySize)
-            throws NoSuchAlgorithmException {
-        return generateKeyPair(alg, keySize).getPrivate();
-    }
-    
-    
-    private static KeyPair getRSAKeyPair() throws Exception {
-        return generateKeyPair("RSA", 2048);
-    }
-    
-    
-    private static KeyPair getECKeyPair() throws Exception {
-        return generateKeyPair("EC", 521);
-    }
-    
-    
-    private static KeyPair getE25519KeyPair() throws Exception {
-        return generateKeyPair("E25519", 512);
     }
 
     /**
@@ -1126,7 +1073,7 @@ public class KeyUtils {
             }
             
             // Get EC parameters based on curve name using AlgorithmParameters
-            AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC");
+            AlgorithmParameters parameters = AlgorithmParameters.getInstance(EC_ALGORITHM);
             parameters.init(new ECGenParameterSpec(curveName));
             ECParameterSpec ecParams = parameters.getParameterSpec(ECParameterSpec.class);
             
@@ -1134,7 +1081,7 @@ public class KeyUtils {
             ECPrivateKeySpec privateKeySpec = new ECPrivateKeySpec(privateValue, ecParams);
             
             // Generate the private key
-            KeyFactory keyFactory = KeyFactory.getInstance("EC");
+            KeyFactory keyFactory = KeyFactory.getInstance(EC_ALGORITHM);
             return keyFactory.generatePrivate(privateKeySpec);
         } catch (NoSuchAlgorithmException | InvalidParameterSpecException | InvalidKeySpecException e) {
             throw new RuntimeException("Failed to create EC private key from parameters", e);
@@ -1239,6 +1186,27 @@ public class KeyUtils {
             }
         }
         throw new KeyStoreException("No key entries found in the PKCS12 file");
+    }
+
+    public static byte[] getPinHash(String pin) {
+        try {
+            // Hash the password using SHA-256
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return digest.digest(pin.getBytes());
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not supported", e);
+        }
+    }
+
+    public static byte[] getLowerPinHash(String pin) {
+        byte[] pinHash = getPinHash(pin);
+        if(pinHash != null && pinHash.length >= 16) {
+                        // Extract the lower 16 bytes of the hash
+            byte[] lowerHash = new byte[16];
+            System.arraycopy(pinHash, 0, lowerHash, 0, 16);
+            return lowerHash;
+        }
+        return null;
     }
 
 }

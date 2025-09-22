@@ -2,23 +2,19 @@
  * Copyright IBM 2025
  */
 /**
- *Copyrite notice
+ * IBM Confidential
+ * OCO Source Materials
+ * 5725-V89 5725-V90
+ *
+ * Copyright IBM Corp. 2019
+ *
+ * The source code for this program is not published or otherwise divested of its trade secrets,
+ * irrespective of what has been deposited with the U.S. Copyright Office.
  */
-
-/*IBM Confidential
-* OCO Source Materials
-* 5725-V89 5725-V90
-*
-* Copyright IBM Corp. 2019
-*
-* The source code for this program is not published or otherwise divested of its trade secrets,
-* irrespective of what has been deposited with the U.S. Copyright Office.
-*/
 package com.isfs.blekey.authenticator;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.StringReader;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.InvalidKeyException;
@@ -36,20 +32,14 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECPoint;
 import java.util.Arrays;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
-import jakarta.json.JsonArray;
-import jakarta.json.JsonReader;
-
 import org.jose4j.jws.AlgorithmIdentifiers;
 import org.jose4j.jws.JsonWebSignature;
 import org.jose4j.jwt.JwtClaims;
@@ -65,7 +55,7 @@ import com.isfs.blekey.data.SymmetricKey;
 public class Fido2Authenticator implements java.io.Serializable {
 
     /**
-     * Don't know what this does
+     * Serial version UID for serialization compatibility
      */
     private static final long serialVersionUID = -7830063672721389698L;
 
@@ -88,7 +78,7 @@ public class Fido2Authenticator implements java.io.Serializable {
     protected byte[] TEST_AAGUID = new byte[16];
 
     protected byte[] credId = null;
-    // Subject alternative names OID
+    // TPM OID's
     protected static final String TPM_MANUFACTURER = "2.23.133.2.1";
     protected static final String TPM_VENDOR = "2.23.133.2.2";
     protected static final String TPM_FW_VERSION = "2.23.133.2.3";
@@ -121,6 +111,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         Fido2Authenticator a = new Fido2Authenticator();
         SymmetricKey aesKey = new SymmetricKey(pkey.getSeed());
         a.setSymKey(aesKey);
+        a.setAuthnCert(pkey.getCertificate());
         return a;
     }
 
@@ -131,12 +122,13 @@ public class Fido2Authenticator implements java.io.Serializable {
     /**
      * Generate the credential id for this authenticator. The original implementation
      * of this was simply the SHA256 of the authenticator public key.
-     * 
+     *
      * If the Fido2Authenticator has a AES Symmetric key, and a "CA" private key is
      * provided, then the credential id is the encrypted serialization of the authenticator's
      * private key.
-     * 
-     * @return
+     *
+     * @return The credential ID as a byte array, either from an existing ID, an encrypted private key,
+     *         or a SHA-256 hash of the public key
      */
     public byte[] getCredId() {
         if(this.credId != null) {
@@ -144,33 +136,50 @@ public class Fido2Authenticator implements java.io.Serializable {
         }
         if(aesKey != null) {
             try {
-                String cred = aesKey.encrypt(
-                        Cbor.encode(KeyUtils.getECPrivateKeyParameters(this.keyPair.getPrivate())));
-                this.credId = Base64.getUrlDecoder().decode(cred);
+                System.err.println("Using symmetric key to create cred id");
+                // Get the encrypted token as a base64-url string
+                byte[] cbor = Cbor.encode(KeyUtils.getECPrivateKeyParameters(this.keyPair.getPrivate()));
+                String cred = aesKey.encrypt(cbor);
+                System.err.println(cred);
+                byte[] recovered = aesKey.decrypt(cred);
+                System.err.println("cbor: " + cbor.length + " recovered: " + recovered.length);
+                System.err.println(Arrays.toString(cbor));
+                System.err.println(Arrays.toString(recovered));
+                this.credId = cred.getBytes();
+                System.err.println("cred ID len: " + credId.length);
+                System.err.println("cred Id Bytes: " + Arrays.toString(credId));
             } catch (Exception e) {
                 e.printStackTrace();
             }
-        }
-        try { // Fall back to default impl
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update(this.keyPair.getPublic().getEncoded());
-            this.credId = digest.digest();
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
+        } else {
+            try { // Fall back to default impl
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                digest.update(this.keyPair.getPublic().getEncoded());
+                this.credId = digest.digest();
+            } catch (NoSuchAlgorithmException e) {
+                throw new RuntimeException(e);
+            }
         }
         return this.credId;
     }
 
     public void initFromCredId(byte[] credId) throws Exception {
         this.credId = credId;
-        byte[] cborBytes = aesKey.decrypt(credId, null);
-        Map<String, Object> keyParams = (Map<String, Object>) Cbor.decode(cborBytes);
+        String credIdStr = new String(credId);
+        // Decrypt the token
+        byte[] cborBytes = aesKey.decrypt(credIdStr, null);
+        Map<String, Object> keyParams = (Map<String, Object>) Cbor.decode(cborBytes); 
+        // Generate the key pair from the parameters
         ECPrivateKey key = (ECPrivateKey) KeyUtils.fromECPrivateKeyParameters(keyParams);
         this.keyPair = new KeyPair(KeyUtils.getPubKey(key), key);
     }
 
     public void setSymKey(SymmetricKey key) {
         this.aesKey = key;
+    }
+
+    protected SymmetricKey getSymKey() {
+        return this.aesKey;
     }
     
     public void setAuthnCert(X509Certificate cert) {
@@ -206,6 +215,13 @@ public class Fido2Authenticator implements java.io.Serializable {
         return this.keyPair.getPrivate();
     }
 
+    /**
+     * Converts a BigInteger EC point coordinate to a byte array.
+     * Removes the leading zero byte if present (added when the coordinate is negative).
+     *
+     * @param point The BigInteger representing an EC point coordinate
+     * @return The byte array representation of the coordinate
+     */
     protected byte[] ECBigIntegerToByteArray(BigInteger point) {
         byte[] result = point.toByteArray();
         if (result.length == 33) { // Remove leading zero, added if coordinate is negative
@@ -214,14 +230,31 @@ public class Fido2Authenticator implements java.io.Serializable {
         return result;
     }
     
+    /**
+     * Sets the Authenticator Attestation GUID (AAGUID) bytes.
+     * The AAGUID is a 16-byte identifier that indicates the type of the authenticator.
+     *
+     * @param aaguid The 16-byte AAGUID
+     */
     public void setAAGUIDBytes(byte[] aaguid) {
         this.TEST_AAGUID = aaguid;
     }
     
+    /**
+     * Gets the Authenticator Attestation GUID (AAGUID) bytes.
+     *
+     * @return The 16-byte AAGUID
+     */
     public byte[] getAAGUIDBytes() {
         return this.TEST_AAGUID;
     }
     
+    /**
+     * Gets the Authenticator Attestation GUID (AAGUID) as a formatted string.
+     * The format follows the standard UUID representation with hyphens.
+     *
+     * @return The AAGUID as a formatted string
+     */
     public String getAAGUID() {
         StringBuilder sb = new StringBuilder(32 + 4);
         for(int i = 0; i < this.TEST_AAGUID.length; i++) {
@@ -234,71 +267,106 @@ public class Fido2Authenticator implements java.io.Serializable {
         return sb.toString();
     }
     
+    /**
+     * Sets the allowed authenticator extensions.
+     * These extensions determine which client extensions can be processed by the authenticator.
+     *
+     * @param exts Set of extension identifiers that the authenticator supports
+     */
     public void setAllowedAuthenticatorExtensions(Set<String> exts) {
         this.validAuthenticatorExtensions = exts;
     }
 
 
-    public Map<String, Object> jsonToMap(JsonObject o) {
-        Map<String, Object> result = new HashMap<>();
-
-        for (Entry<String, Object> kp : result.entrySet()) {
-            Object value = kp.getValue();
-
-            if (value instanceof JsonArray) {
-                value = jsonToList((JsonArray) value);
-            } else if (value instanceof JsonObject) {
-                value = jsonToMap((JsonObject) value);
-            }
-            result.put(kp.getKey(), value);
+    /**
+     * Gets the counter value as a 4-byte array and increments the counter.
+     * This method is called during attestation or assertion operations to provide
+     * a unique counter value for each operation, helping prevent replay attacks.
+     *
+     * @return A 4-byte array representing the current counter value
+     */
+    public byte[] getCounterBytes() {
+        // we store as a long, but only use the least significant 4 bytes
+        byte[] result = new byte[4];
+        long x = counter;
+        for (int i = 3; i >= 0; i--) {
+            result[i] = (byte) (x & 0xFF);
+            x >>= 8;
         }
-
+        counter += 1;
         return result;
     }
 
-    public List<Object> jsonToList(JsonArray a) {
-        List<Object> result = new ArrayList<>();
-        for (int i = 0; i < a.size(); i++) {
-            Object value = a.get(i);
-            if (value instanceof JsonArray) {
-                value = jsonToList((JsonArray) value);
-            } else if (value instanceof JsonObject) {
-                value = jsonToMap((JsonObject) value);
-            }
-            result.add(value);
-        }
-
-        return result;
-    }
-
+    /**
+     * Creates a credential using default "none" attestation and the authenticator's key pair.
+     *
+     * @param jsonOptions JSON string containing WebAuthn credential creation options
+     * @return JSON string containing the credential creation response
+     * @throws Exception if credential creation fails
+     */
     public String credentialCreate(String jsonOptions) throws Exception {
         return credentialCreate(jsonOptions, "none", this.getKeyPair());
     }
 
+    /**
+     * Creates a credential using the specified attestation type and the authenticator's key pair.
+     *
+     * @param jsonOptions JSON string containing WebAuthn credential creation options
+     * @param attestation The attestation type to use (e.g., "none", "packed", "fido-u2f")
+     * @return JSON string containing the credential creation response
+     * @throws Exception if credential creation fails
+     */
     public String credentialCreate(String jsonOptions, String attestation)
             throws Exception {
         return credentialCreate(jsonOptions, attestation, this.getKeyPair());
     }
 
+    /**
+     * Creates a credential using the specified attestation type and key pair.
+     *
+     * @param jsonOptions JSON string containing WebAuthn credential creation options
+     * @param attestation The attestation type to use (e.g., "none", "packed", "fido-u2f")
+     * @param kp The key pair to use for credential creation
+     * @return JSON string containing the credential creation response
+     * @throws Exception if credential creation fails
+     */
     public String credentialCreate(String jsonOptions, String attestation, KeyPair kp)
             throws Exception {
-        JsonReader jr = Json.createReader(new StringReader(jsonOptions));
-        JsonObject jo = jr.readObject();
-        Map<String, Object> options = this.jsonToMap(jo);
+        Map<String, Object> options = (HashMap<String, Object>) JsonUtils.decode(jsonOptions, HashMap.class);
         Map<String, Object> result = credentialCreate(options, attestation, kp, null, null);
         return JsonUtils.encode(result);
     }
 
+    /**
+     * Creates a credential using the specified attestation type, key pair, CA key pair, and AKI certificate.
+     *
+     * @param jsonOptions JSON string containing WebAuthn credential creation options
+     * @param attestation The attestation type to use (e.g., "none", "packed", "fido-u2f")
+     * @param kp The key pair to use for credential creation
+     * @param caKeyPair The CA key pair for attestation certificate generation
+     * @param akiCert The Authority Key Identifier certificate
+     * @return JSON string containing the credential creation response
+     * @throws Exception if credential creation fails
+     */
     public String credentialCreate(String jsonOptions, String attestation, KeyPair kp,
             KeyPair caKeyPair, X509Certificate akiCert) throws Exception {
-        JsonReader jr = Json.createReader(new StringReader(jsonOptions));
-        JsonObject jo = jr.readObject();
-        Map<String, Object> options = this.jsonToMap(jo);
+        Map<String, Object> options = (HashMap<String, Object>) JsonUtils.decode(jsonOptions, HashMap.class);
         Map<String, Object> result = credentialCreate(options, attestation, kp, caKeyPair,
                 akiCert);
         return JsonUtils.encode(result);
     }
 
+    /**
+     * Creates a credential using the specified options, attestation type, key pair, CA key pair, and AKI certificate.
+     *
+     * @param options Map containing WebAuthn credential creation options
+     * @param attestation The attestation type to use (e.g., "none", "packed", "fido-u2f")
+     * @param kp The key pair to use for credential creation
+     * @param caKeyPair The CA key pair for attestation certificate generation
+     * @param akiCert The Authority Key Identifier certificate
+     * @return Map containing the credential creation response
+     * @throws Exception if credential creation fails
+     */
     public Map<String, Object> credentialCreate(Map<String, Object> options, String attestation,
             KeyPair kp, KeyPair caKeyPair, X509Certificate akiCert)
             throws Exception {
@@ -307,27 +375,61 @@ public class Fido2Authenticator implements java.io.Serializable {
         return processCredentialCreationOptions(cco, attestation, kp, caKeyPair, akiCert);
     }
 
+    /**
+     * Processes a credential request (assertion) using the authenticator's key pair.
+     *
+     * @param jsonOptions JSON string containing WebAuthn assertion options
+     * @return JSON string containing the assertion response
+     * @throws Exception if assertion processing fails
+     */
     public String credentialRequest(String jsonOptions) throws Exception {
         return credentialRequest(jsonOptions, this.getKeyPair());
     }
 
+    /**
+     * Processes a credential request (assertion) using the specified key pair.
+     *
+     * @param jsonOptions JSON string containing WebAuthn assertion options
+     * @param kp The key pair to use for assertion
+     * @return JSON string containing the assertion response
+     * @throws Exception if assertion processing fails
+     */
     public String credentialRequest(String jsonOptions, KeyPair kp)
             throws Exception {
-        JsonReader jr = Json.createReader(new StringReader(jsonOptions));
-        JsonObject jo = jr.readObject();
-        Map<String, Object> options = this.jsonToMap(jo);
+        Map<String, Object> options = (HashMap<String, Object>) JsonUtils.decode(jsonOptions, HashMap.class);
         Map<String, Object> result = credentialRequest(options, kp);
         return JsonUtils.encode(result);
     }
 
+    /**
+     * Processes a credential request (assertion) using the specified options and key pair.
+     *
+     * @param options Map containing WebAuthn assertion options
+     * @param kp The key pair to use for assertion
+     * @return Map containing the assertion response
+     * @throws Exception if assertion processing fails
+     */
     public Map<String, Object> credentialRequest(Map<String, Object> options, KeyPair kp)
             throws Exception {
         Map<String, Object> cro = assertionOptionsResponseToCredentialRequestOptions(options);
         return processCredentialRequestOptions(cro, kp);
     }
 
-    public byte[] buildAuthenticatorData(Map<String, Object> publicKey, String attestation, 
-            Map<String, Object> extensions, Map<String, Object> extensionResults, 
+    /**
+     * Builds the authenticator data structure according to the WebAuthn specification.
+     * This includes the RP ID hash, flags, counter, attested credential data (for attestation),
+     * and extension data (if applicable).
+     *
+     * @param publicKey The public key credential data
+     * @param attestation The attestation type being used
+     * @param extensions The client extensions
+     * @param extensionResults The extension processing results
+     * @param kp The key pair to use
+     * @return The authenticator data as a byte array
+     * @throws Exception if building the authenticator data fails
+     */
+    public byte[] buildAuthenticatorData(Map<String, Object> publicKey, String attestation,
+            Map<String, Object> extensions, Map<String, Object> extensionResults,
             KeyPair kp) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
 
@@ -396,14 +498,25 @@ public class Fido2Authenticator implements java.io.Serializable {
         return authData;
     }
 
+    /**
+     * Builds the client data JSON object according to the WebAuthn specification.
+     * This includes the origin, challenge, and type (create or get).
+     *
+     * @param publicKey The public key credential data
+     * @return The client data as a JsonObject
+     */
     public JsonObject buildClientDataJson(Map<String, Object> publicKey) {
-        String rp = (String) publicKey.get("rpId");
+        String rp = null;
         String type = "webauthn.get";
-        if (rp == null) {
-            rp = (String) ((Map<String, Object>) publicKey.get("rp")).get("id");
+        if (publicKey.containsKey("origin")) {
+            rp = (String) publicKey.get("origin");
+        } else if (publicKey.containsKey("rpId")) {
+            rp = "https://" + (String) publicKey.get("rpId");
+        } else if (publicKey.containsKey("rp")) {
+            rp = "https://" + (String) ((Map<String, Object>) publicKey.get("rp")).get("id");
             type = "webauthn.create";
         }
-        JsonObject clientDataJSON = Json.createObjectBuilder().add("origin", "https://" + rp)
+        JsonObject clientDataJSON = Json.createObjectBuilder().add("origin", rp)
                 .add("challenge",
                         new String(Base64.getUrlEncoder()
                                 .encode((byte[]) publicKey.get("challenge"))))
@@ -411,7 +524,17 @@ public class Fido2Authenticator implements java.io.Serializable {
         return clientDataJSON;
     }
 
-    //static
+    /**
+     * Signs data using the specified private key and algorithm.
+     *
+     * @param toSign The data to sign
+     * @param key The private key to use for signing
+     * @param alg The signature algorithm to use (e.g., "SHA256withECDSA", "SHA256withRSA")
+     * @return The signature as a byte array
+     * @throws NoSuchAlgorithmException if the algorithm is not available
+     * @throws InvalidKeyException if the key is invalid
+     * @throws SignatureException if signing fails
+     */
     public byte[] signData(byte[] toSign, PrivateKey key, String alg)
             throws NoSuchAlgorithmException, InvalidKeyException, SignatureException {
         Signature signer = Signature.getInstance(alg);
@@ -422,6 +545,15 @@ public class Fido2Authenticator implements java.io.Serializable {
     }
 
     
+    /**
+     * Processes client extensions and returns the extension results as a CBOR-encoded byte array.
+     *
+     * @param extensionInputs The client extension inputs
+     * @param authenticatorExtensionOutputs The authenticator extension outputs
+     * @param saar The server authentication attestation response
+     * @return CBOR-encoded extension results
+     * @throws Exception if extension processing fails
+     */
     public byte[] processClientExtensions(Map<String, Object> extensionInputs,
             Map<String, Object> authenticatorExtensionOutputs, Map<String, String> saar) throws Exception {
         Map<String, Object> result = new HashMap<String, Object>();
@@ -434,11 +566,13 @@ public class Fido2Authenticator implements java.io.Serializable {
     }
     
     /**
-     * process CCO options (if present) and returns the results
+     * Processes WebAuthn extensions and returns the extension results.
+     * This method handles both attestation and assertion extensions.
      *
-     * @param extensions
-     * @return Map of extensions results OR null if no extensions to process
-     * @throws NoSuchAlgorithmException
+     * @param extensions The extensions to process
+     * @param type The type of extensions to process ("attestation" or "assertion")
+     * @return Map of extension results or null if no extensions to process
+     * @throws Exception if extension processing fails
      */
     public Map<String, Object> processExtensions(Map<String, Object> extensions, String type)
             throws Exception {
@@ -499,6 +633,13 @@ public class Fido2Authenticator implements java.io.Serializable {
      * Credentail Create helpers
      */
 
+    /**
+     * Converts attestation options response to credential creation options format.
+     * This transforms the server response format into the format expected by the WebAuthn API.
+     *
+     * @param options The attestation options from the server
+     * @return The credential creation options in the format expected by WebAuthn
+     */
     public Map<String, Map<String, Object>> attestationOptionsResponeToCredentialCreationOptions(
             Map<String, Object> options) {
         // Public Key Credential Create Option
@@ -542,7 +683,6 @@ public class Fido2Authenticator implements java.io.Serializable {
 
     public byte[] processAttestedCredentialData(PublicKey pubKey, byte[] credIdBytes)
             throws IOException, NoSuchAlgorithmException {
-
         ByteArrayOutputStream attestedCredDataBytes = new ByteArrayOutputStream();
         attestedCredDataBytes.write(TEST_AAGUID);
         byte[] length = ByteBuffer.allocate(2).putShort((short) credIdBytes.length).array();
@@ -608,7 +748,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         Map<String, Object> publicKey = cco.get("publicKey");
         Map<String, Object> extensions = null;
         if (publicKey.get("extensions") != null) {
-            extensions = (Map<String, Object>) Cbor.decode((byte[]) publicKey.get("extensions"));
+            extensions = (Map<String, Object>) publicKey.get("extensions");
         }
         Map<String, Object> extensionResults = processExtensions(extensions, "attestation");
 
@@ -618,7 +758,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         String clientDataString = Base64.getUrlEncoder().encodeToString(clientDataBytes);
 
         byte[] credIdBytes = getCredId();
-        String credIdString = new String(Base64.getUrlEncoder().encode(credIdBytes));
+        String id = new String(Base64.getUrlEncoder().encode(credIdBytes));
 
         byte[] authData = buildAuthenticatorData(publicKey, attestation,
                 extensions, extensionResults, kp);
@@ -642,15 +782,26 @@ public class Fido2Authenticator implements java.io.Serializable {
         // Server Public Key Creadential
         // https://fidoalliance.org/specs/fido-v2.0-rd-20180702/fido-server-v2.0-rd-20180702.html#serverpublickeycredential
         Map<String, Object> spkc = new HashMap<>();
-        spkc.put("id", credIdString);
-        spkc.put("rawId", spkc.get("id"));
+        spkc.put("id", id);
+        spkc.put("rawId", id);
         spkc.put("response", saar);
         spkc.put("type", "public-key");
-        // TODO extensions
         spkc.put("getClientExtensionResults", processClientExtensions(extensions, extensionResults, saar));
         return spkc;
     }
     
+    /**
+     * Builds an Apple attestation statement.
+     * This creates an Apple-specific attestation certificate and includes it in the attestation statement.
+     *
+     * @param clientDataHash The hash of the client data
+     * @param authData The authenticator data
+     * @param authenticatorKeyPair The authenticator key pair
+     * @param caKeyPair The CA key pair for certificate generation
+     * @param caCert The CA certificate
+     * @return The Apple attestation statement as a Map
+     * @throws Exception if building the attestation statement fails
+     */
     public Map<String, Object> buildAppleAttestation(byte[] clientDataHash, byte[] authData,
             KeyPair authenticatorKeyPair, KeyPair caKeyPair, X509Certificate caCert) throws Exception {
         Map<String, Object> result = new HashMap<String, Object>();
@@ -661,16 +812,27 @@ public class Fido2Authenticator implements java.io.Serializable {
         byte[] nonceHash = digest.digest(nonceBuffer.toByteArray());
         X509Certificate appleCert = CertUtils.generateAppleAttestationCertificate("CN=apple.attestation.test",
                 authenticatorKeyPair, 365, nonceHash, caKeyPair, caCert);
-        result.put("x5c", new byte[][] {appleCert.getEncoded(), caCert.getEncoded()});      
+        result.put("x5c", new byte[][] {appleCert.getEncoded(), caCert.getEncoded()});
         return result;
     }
     
     
-    public Map<String, Object> buildAndroidSafetynetAttestation(byte[] clientDataHash, byte[] authData, 
+    /**
+     * Builds an Android SafetyNet attestation statement.
+     * This creates a JWS token with the nonce derived from the client data hash and authenticator data.
+     *
+     * @param clientDataHash The hash of the client data
+     * @param authData The authenticator data
+     * @param authenticatorKeyPair The authenticator key pair
+     * @param caKeyPair The CA key pair for signing the JWS
+     * @param caCert The CA certificate
+     * @return The Android SafetyNet attestation statement as a Map
+     * @throws Exception if building the attestation statement fails
+     */
+    public Map<String, Object> buildAndroidSafetynetAttestation(byte[] clientDataHash, byte[] authData,
             KeyPair authenticatorKeyPair, KeyPair caKeyPair, X509Certificate caCert) throws Exception {
         Map<String, Object> result = new HashMap<String, Object>();
         JwtClaims claims = new JwtClaims();
-        Map<String, Object> jwt = new HashMap<String, Object>();
         //nonce == client data hash + authData
         ByteArrayOutputStream nonceBuffer = new ByteArrayOutputStream();
         nonceBuffer.write(authData);
@@ -697,6 +859,14 @@ public class Fido2Authenticator implements java.io.Serializable {
         return result;
     }
 
+    /**
+     * Builds the RSA public area structure for TPM attestation.
+     * This structure contains the RSA public key parameters in TPM format.
+     *
+     * @param aikKeyPair The Attestation Identity Key pair containing the RSA public key
+     * @return The TPM public area structure as a byte array
+     * @throws IOException if an I/O error occurs
+     */
     public byte[] buildRsaPubArea(KeyPair aikKeyPair) throws IOException {
         // build pubArea
         ByteArrayOutputStream pubAreaByteStream = new ByteArrayOutputStream();
@@ -721,7 +891,51 @@ public class Fido2Authenticator implements java.io.Serializable {
         return pubArea;
     }
 
-    public byte[] buildRsaCertInfo(byte[] attsToSign, byte[] pubInfo)
+    /**
+     * Builds the EC public area structure for TPM attestation.
+     * This structure contains the EC public key parameters in TPM format.
+     *
+     * @param aikKeyPair The Attestation Identity Key pair containing the EC public key
+     * @return The TPM public area structure as a byte array
+     * @throws IOException if an I/O error occurs
+     */
+    public byte[] buildEcPubArea(KeyPair aikKeyPair) throws IOException {
+        ByteArrayOutputStream pubAreaByteStream = new ByteArrayOutputStream();
+        pubAreaByteStream.write(new byte[] { 0, 0x23 }); // type TMP_ALG_ID = TMP_ALG_ECC
+        // name_alg (used to generate attested_name in certInfo) == TMP_ALG_SHA256
+        pubAreaByteStream.write(new byte[] { 0, 0x0B });
+        pubAreaByteStream.write(new byte[4]); // TPMA_OBJECT
+        pubAreaByteStream.write(new byte[2]); // auth policy, set length = 0 and ignore key params
+        pubAreaByteStream.write(new byte[] { 0x00, 0x10 }); // symetric == TPM__ALG_NULL
+        pubAreaByteStream.write(new byte[] { 0x00, 0x10 }); // scheme == TPM_ALG_NULL
+        pubAreaByteStream.write(new byte[] { 0x00, 0x03 }); // curve_id == TPM_ECC_NIST_P256
+        pubAreaByteStream.write(new byte[] { 0x00, 0x10 }); // kdf == TPM_ALG_NULL
+        ECPoint point = ((ECPublicKey) aikKeyPair.getPublic()).getW();
+        byte[] x = ECBigIntegerToByteArray(point.getAffineX()); // x coordinate
+        byte[] y = ECBigIntegerToByteArray(point.getAffineY()); // y coordinate
+        byte[] xLen = ByteBuffer.allocate(2).putShort((short) x.length).array();
+        byte[] yLen = ByteBuffer.allocate(2).putShort((short) y.length).array();
+        pubAreaByteStream.write(xLen[0]);
+        pubAreaByteStream.write(xLen[1]);
+        pubAreaByteStream.write(x); // x-coordinate
+        pubAreaByteStream.write(yLen[0]);
+        pubAreaByteStream.write(yLen[1]);
+        pubAreaByteStream.write(y); // x-coordinate      
+        byte[] pubArea = pubAreaByteStream.toByteArray();
+        return pubArea;
+    }
+
+    /**
+     * Builds the TPM certInfo structure for TPM attestation.
+     * This structure contains the certification information for the TPM attestation.
+     *
+     * @param attsToSign The data to be signed (typically authData + clientDataHash)
+     * @param pubInfo The public area information
+     * @return The TPM certInfo structure as a byte array
+     * @throws IOException if an I/O error occurs
+     * @throws NoSuchAlgorithmException if a required algorithm is not available
+     */
+    public byte[] buildCertInfo(byte[] attsToSign, byte[] pubInfo)
             throws IOException, NoSuchAlgorithmException {
         // build certInfo
         ByteArrayOutputStream certInfoByteStream = new ByteArrayOutputStream();
@@ -769,14 +983,23 @@ public class Fido2Authenticator implements java.io.Serializable {
 
     }
 
+    /**
+     * Builds a TPM attestation statement according to the WebAuthn specification.
+     * This includes generating certificates, creating TPM structures, and signing the data.
+     *
+     * @param clientDataHash The hash of the client data
+     * @param authData The authenticator data
+     * @param credId The credential ID
+     * @param caCert The CA certificate
+     * @param caKeyPair The CA key pair
+     * @param aikKeyPair The Attestation Identity Key pair
+     * @return The TPM attestation statement as a Map
+     * @throws Exception if building the attestation statement fails
+     */
     public Map<String, Object> buildTPMAttestationStatement(byte[] clientDataHash,
             byte[] authData, byte[] credId, X509Certificate caCert, KeyPair caKeyPair,
             KeyPair aikKeyPair) throws Exception {
         Map<String, Object> result = new HashMap<>();
-        if (aikKeyPair.getPublic() instanceof ECPublicKey) {
-            throw new RuntimeException(
-                    "Unsupported key type" + aikKeyPair.getPublic().getClass().getName());
-        }
         KeyPair intermediateKeyPair = KeyUtils.generateKeyPair("RSA", 2048);
         X509Certificate intermediateCert = CertUtils.generateIntermediateCACert(caCert,
                 "CN=intermediateCA", 365, intermediateKeyPair, caKeyPair);
@@ -797,19 +1020,42 @@ public class Fido2Authenticator implements java.io.Serializable {
         sigByteStream.write(clientDataHash);
         byte[] attsToSign = sigByteStream.toByteArray();
 
-        byte[] pubInfo = buildRsaPubArea(aikKeyPair);
+        byte[] pubInfo = null;
+        String javaAlgId = null;
+        if(aikKeyPair.getPublic() instanceof RSAPublicKey) {
+            pubInfo = buildRsaPubArea(aikKeyPair);
+            javaAlgId = "SHA256withRSA";
+        } else if(aikKeyPair.getPublic() instanceof ECPublicKey) {
+            pubInfo = buildEcPubArea(aikKeyPair);
+            javaAlgId = "SHA256withECDSA";
+        } else {
+            throw new RuntimeException(
+                    "Unsupported key type" + aikKeyPair.getPublic().getClass().getName());
+        }
         result.put("pubArea", pubInfo);
 
-        byte[] certInfo = buildRsaCertInfo(attsToSign, pubInfo);
+        byte[] certInfo = buildCertInfo(attsToSign, pubInfo);
         result.put("certInfo", certInfo);
 
         // add sig of certInfo
-        byte[] sig = signData(certInfo, aikKeyPair.getPrivate(), "SHA256withRSA");
+        byte[] sig = signData(certInfo, aikKeyPair.getPrivate(), javaAlgId);
         result.put("sig", sig);
 
         return result;
     }
 
+    /**
+     * Builds a FIDO U2F attestation statement according to the WebAuthn specification.
+     * This includes formatting the data according to the U2F specification and signing it.
+     *
+     * @param clientDataHash The hash of the client data
+     * @param authData The authenticator data
+     * @param credId The credential ID
+     * @param caKeyPair The CA key pair for signing
+     * @param caCert The CA certificate
+     * @return The FIDO U2F attestation statement as a Map
+     * @throws Exception if building the attestation statement fails
+     */
     public Map<String, Object> buildFIDOU2FAttestationStatement(byte[] clientDataHash,
             byte[] authData, byte[] credId, KeyPair caKeyPair, X509Certificate caCert)
             throws Exception {
@@ -838,62 +1084,85 @@ public class Fido2Authenticator implements java.io.Serializable {
         return result;
     }
 
+
+    /**
+     * Get the java standard name of the given key and hashing algorithm as per
+     * https://docs.oracle.com/en/java/javase/21/docs/specs/security/standard-names.html
+     * 
+     * Add the corresponding COSE key type id to the result map
+     * 
+     * @param key instance of PrivateKey to get alg for
+     * @param result Attestation response map
+     * @return The java standard name of the given key and hashing algorithm.
+     * @throws Exception if the given PrivateKey is not supported
+     */
+    private String getJavaAlgString(PrivateKey key, HashMap<String, Object> result) throws Exception{
+        String alg = null;
+        if (key instanceof ECPrivateKey) {
+            alg = "SHA256withECDSA";
+            result.put("alg", -7);
+        } else if (key instanceof RSAPrivateKey) {
+            alg = "SHA256withRSA";
+            result.put("alg", -257);
+        } else {
+            throw new Exception("Unsuported Key Type: " + key.getClass().getName());
+        }
+        return alg;
+    }
+
+    /**
+     * Builds a Packed attestation statement according to the WebAuthn specification.
+     * This supports self attestation, basic/batch attestation, and attCA attestation.
+     *
+     * @param clientDataHash The hash of the client data
+     * @param authData The authenticator data
+     * @param credId The credential ID
+     * @param attestKeyPair The attestation key pair (for self attestation)
+     * @param caKeyPair The CA key pair (for basic/batch and attCA attestation)
+     * @param akiCert The Authority Key Identifier certificate (for attCA attestation)
+     * @return The Packed attestation statement as a Map
+     * @throws Exception if building the attestation statement fails
+     */
     public Map<String, Object> buildPackedAttestationStatement(byte[] clientDataHash,
-            byte[] authData, byte[] credId, KeyPair attestnKeyPair, KeyPair caKeyPair,
+            byte[] authData, byte[] credId, KeyPair attestKeyPair, KeyPair caKeyPair,
             X509Certificate akiCert) throws Exception {
-        Map<String, Object> result = new HashMap<>();
+        HashMap<String, Object> result = new HashMap<>();
         String alg = "";
 
-        if (attestnKeyPair != null) {
+        if (attestKeyPair != null) {
             // we are doing self
-            if (attestnKeyPair.getPrivate() instanceof ECPrivateKey) {
-                alg = "SHA256withECDSA";
-                result.put("alg", -7);
-            } else if (attestnKeyPair.getPrivate() instanceof RSAPrivateKey) {
-                alg = "SHA256withRSA";
-                result.put("alg", -257);
-            } else {
-                throw new Exception("Unsuported Key Type");
-            }
+            alg = getJavaAlgString(attestKeyPair.getPrivate(), result);
         } else {
-            attestnKeyPair = getKeyPair();
-            if (attestnKeyPair.getPrivate() instanceof ECPrivateKey) {
-                throw new Exception("Not yet implemented");
-            } else if (attestnKeyPair.getPrivate() instanceof RSAPrivateKey) {
-                if (caKeyPair == null) {
-                    // we are doing basic/batch
-                    if(this.authnCert == null) {
-                        this.authnCert = CertUtils.generatePackedBatchCertificate(
-                                "C=AU,O=IBM,OU=Authenticator Attestation,CN=packedBasic",
-                                attestnKeyPair, 365, new BigInteger(this.TEST_AAGUID).toByteArray(), null, caKeyPair, null);
-                    }
-                    result.put("x5c", new byte[][] { this.authnCert.getEncoded() });
-                    alg = "SHA256withRSA";
-                    result.put("alg", -257);
-                } else {
-                    // we are doing attCA
-                    byte[] caCert = akiCert.getEncoded();
-                    byte[] attestnCert = CertUtils
-                            .gereatePackedAttCACertificate(akiCert,
-                                    "C=AU,O=IBM,OU=Authenticator Attestation,CN=packedBasicLeaf",
-                                    attestnKeyPair, 365,
-                                    new BigInteger(this.TEST_AAGUID).toByteArray(), caKeyPair)
-                            .getEncoded();
-                    if(this.authnCert != null) {
-                        attestnCert = this.authnCert.getEncoded();
-                    }
-                    result.put("x5c", new byte[][] { attestnCert, caCert });
-                    alg = "SHA256withRSA";
-                    result.put("alg", -257);
+            attestKeyPair = getKeyPair();
+            alg = getJavaAlgString(attestKeyPair.getPrivate(), result);
+            if (caKeyPair == null) {
+                // we are doing basic/batch
+                if(this.authnCert == null) {
+                    this.authnCert = CertUtils.generatePackedBatchCertificate(
+                            "C=AU,O=IBM,OU=Authenticator Attestation,CN=packedBasic",
+                            attestKeyPair, 365, new BigInteger(this.TEST_AAGUID).toByteArray(), null, caKeyPair, null);
                 }
+                result.put("x5c", new byte[][] { this.authnCert.getEncoded() });
             } else {
-                throw new Exception("Unsuported Key Type");
+                // we are doing attCA
+                byte[] caCert = akiCert.getEncoded();
+                byte[] attestnCert = CertUtils
+                        .gereatePackedAttCACertificate(akiCert,
+                                "C=AU,O=IBM,OU=Authenticator Attestation,CN=packedBasicLeaf",
+                                attestKeyPair, 365,
+                                new BigInteger(this.TEST_AAGUID).toByteArray(), caKeyPair)
+                        .getEncoded();
+                if(this.authnCert != null) {
+                    attestnCert = this.authnCert.getEncoded();
+                }
+                result.put("x5c", new byte[][] { attestnCert, caCert });
+                
             }
         }
         ByteArrayOutputStream sigByteStream = new ByteArrayOutputStream();
         sigByteStream.write(authData);
         sigByteStream.write(clientDataHash);
-        byte[] signature = signData(sigByteStream.toByteArray(), attestnKeyPair.getPrivate(),
+        byte[] signature = signData(sigByteStream.toByteArray(), attestKeyPair.getPrivate(),
                 alg);
         result.put("sig", signature);
         return result;
@@ -901,6 +1170,13 @@ public class Fido2Authenticator implements java.io.Serializable {
 
     /*
      * Credential request helpers
+     */
+    /**
+     * Converts assertion options response to credential request options format.
+     * This transforms the server response format into the format expected by the WebAuthn API.
+     *
+     * @param options The assertion options from the server
+     * @return The credential request options in the format expected by WebAuthn
      */
     public static Map<String, Object> assertionOptionsResponseToCredentialRequestOptions(
             Map<String, Object> options) {
@@ -948,6 +1224,15 @@ public class Fido2Authenticator implements java.io.Serializable {
         return cro;
     }
 
+    /**
+     * Processes credential request options to generate a credential request response.
+     * This is the core method that handles the WebAuthn assertion process.
+     *
+     * @param cro The credential request options
+     * @param kp The key pair to use for assertion
+     * @return The credential request response
+     * @throws Exception if assertion processing fails
+     */
     public Map<String, Object> processCredentialRequestOptions(Map<String, Object> cro,
             KeyPair kp) throws Exception {
         Map<String, Object> spkc = new HashMap<>();
@@ -958,7 +1243,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         Map<String, Object> extensions = null;
 
         if (publicKey.get("extensions") != null) {
-            extensions = (Map<String, Object>) Cbor.decode((byte[]) publicKey.get("extensions"));
+            extensions = (Map<String, Object>) publicKey.get("extensions");
         }
         Map<String, Object> extensionResults = processExtensions(extensions, "assertion");
 
@@ -1000,29 +1285,6 @@ public class Fido2Authenticator implements java.io.Serializable {
         }
 
         return spkc;
-    }
-
-    /*
-     * Every time we call this method, we expect to do an attestation or assertion,
-     * therefore lets icnrease the counter
-     */
-    public byte[] getCounterBytes() {
-        // we store as a long, but only use the least significant 4 bytes
-        byte[] result = new byte[4];
-        long x = counter;
-        for (int i = 3; i >= 0; i--) {
-            result[i] = (byte) (x & 0xFF);
-            x >>= 8;
-        }
-        counter += 1;
-        return result;
-    }
-
-    public static void main(String[] args) {
-        if (args.length < 1) {
-            // System.out.println("Usage: Fido2Authenticator pemfile");
-            System.exit(1);
-        }
     }
 
 }

@@ -25,6 +25,22 @@ public enum CtapHidCmd {
     public int getValue() {
         return value;
     }
+    
+    /**
+     * Looks up a CtapHidCmd enum by its integer value.
+     *
+     * @param value The integer value to look up
+     * @return The corresponding CtapHidCmd enum value
+     * @throws IllegalArgumentException if no matching enum value is found
+     */
+    public static CtapHidCmd fromValue(int value) {
+        for (CtapHidCmd cmd : CtapHidCmd.values()) {
+            if (cmd.getValue() == value) {
+                return cmd;
+            }
+        }
+        throw new IllegalArgumentException("Unknown command value: " + value);
+    }
 
     @Override
     public String toString() {

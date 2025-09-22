@@ -6,7 +6,6 @@ package com.isfs.blekey.ctap;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.security.PrivateKey;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -111,9 +110,8 @@ public class CtapHid {
         ByteBuffer byteBuffer = ByteBuffer.wrap(request);
         this.cid = new byte[4];
         byteBuffer.get(this.cid); // bytes 0–3
-
-        byte cmdByte = byteBuffer.get(); // byte 4
-        this.messageType = CtapHidCmd.values()[cmdByte & 0x7F]; // mask MSB if needed
+        int cmdByte = byteBuffer.get() & 0x7F; // byte 4, mask MSB if needed
+        this.messageType = CtapHidCmd.fromValue(cmdByte);
 
         int high = byteBuffer.get() & 0xFF; // byte 5
         int low = byteBuffer.get() & 0xFF; // byte 6
@@ -127,8 +125,8 @@ public class CtapHid {
      * @return The associated CtapHid instance, or null if none exists
      */
     public static CtapHid getPendingByCid(byte[] cid) {
-        if (assignedCids.containsKey(cid)) {
-            return assignedCids.get(cid).getCmd();
+        if (CtapHid.assignedCids.containsKey(cid)) {
+            return CtapHid.assignedCids.get(cid).getCmd();
         } //else 
         return null;
     }
@@ -140,7 +138,7 @@ public class CtapHid {
      * @return true if the channel ID has an open transaction, false otherwise
      */
     public static boolean hasOpenCid(byte[] cid) {
-        return assignedCids.containsKey(cid);
+        return CtapHid.assignedCids.containsKey(cid);
     }
 
     /**
@@ -200,7 +198,7 @@ public class CtapHid {
      *
      * @return true if a response is ready, false otherwise
      */
-    private boolean isResponseReady() {
+    public boolean isResponseReady() {
         return this.responseReady;
     }
 
@@ -215,10 +213,10 @@ public class CtapHid {
         if(this.responseSegment < 0) {//Init packet
             this.responseSegment = 0;
             return this.initResponse;
-        } else if(this.responseSegments != null) { //Sequence packet
+        } else if(this.responseSegments != null && this.responseSegment < this.responseSegments.size()) { //Sequence packet
             return this.responseSegments.get(this.responseSegment++);
         } else {
-            throw new RuntimeException("Asked for a sequence packet and I don't have any.");
+            return null;
         }
     }
 
@@ -258,13 +256,6 @@ public class CtapHid {
             }
         }
         return outputStream.toByteArray();
-    }
-
-    /**
-     * Functional interface for CTAP command processing.
-     */
-    private interface CtapFcnPtr {
-        void process(byte[] request);
     }
 
     /**
@@ -350,20 +341,24 @@ public class CtapHid {
      * @param cborResponse The CBOR response data
      */
     private void buildCborInitAndSequencePackets(byte[] cborResponse) {
+        System.err.println("raw CBOR response" + Arrays.toString(cborResponse));
         this.initResponse = new byte[64];
         System.arraycopy(this.getCid(), 0, this.initResponse, 0, 4);
-        int rspLen = cborResponse.length + 1;
+        int rspLen = cborResponse.length;
         this.initResponse[4] = (byte) CtapHidCmd.MSG.getValue();
         this.initResponse[5] = (byte) ((rspLen & 0xFF00) >> 8 );
         this.initResponse[6] = (byte) (rspLen & 0xFF);
-        this.initResponse[7] = (byte) Ctap2StatusCode.SUCCESS.getCode();
-        //Now copy in data
-        if(cborResponse != null && cborResponse.length <= 56) {
-            System.arraycopy(cborResponse, 0, this.initResponse, 8, cborResponse.length);
+        //Now copy in satus and data
+        if (cborResponse.length == 1) {
+            //Error code in response, update the buffer
+            this.initResponse[7] = cborResponse[0];
+        }
+        else if (cborResponse.length <= 56) {
+            System.arraycopy(cborResponse, 0, this.initResponse, 7, cborResponse.length);
         } else {
-            System.arraycopy(cborResponse, 0, this.initResponse, 8, 56);
+            System.arraycopy(cborResponse, 0, this.initResponse, 7, 57);
             this.responseSegments = new ArrayList<byte[]>();
-            int offset = 56;
+            int offset = 57;
             int seg = 0;
             while(offset < cborResponse.length) {
                 byte[] segment = new byte[64];
@@ -384,14 +379,17 @@ public class CtapHid {
      * @param data The CBOR message data
      * @throws IOException if an error occurs while processing the message
      */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
     private void cbor(byte[] data) throws IOException {
         if(data.length < 1) {
             this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
         } else {
             int api = (int) data[0];
+            logger.debug("api: " + api);
             byte[] cborBytes = new byte[data.length - 1];
             System.arraycopy(data, 1, cborBytes, 0, data.length - 1);
             Object cborObj = Cbor.decode(cborBytes);
+            logger.debug("cborObj" + cborObj);
             if(cborObj == null || !(cborObj instanceof Map)) {
                 this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
             } else {
@@ -399,9 +397,9 @@ public class CtapHid {
                     Map cbor = (Map) cborObj;
                     buildCborInitAndSequencePackets(
                         AuthenticatorAPI.process(
-                                        assignedCids.get(this.cid), api, (Map<Integer, Object>) cbor));
+                                        CtapHid.assignedCids.get(this.cid), api, (Map<Integer, Object>) cbor));
                 } catch (Exception e) {
-                    logger.error("cbor", e);
+                    System.err.println(e.getMessage());
                     this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
                 }
             }
@@ -430,7 +428,7 @@ public class CtapHid {
         byte[] specStuff = new byte[] {0x02, 0x13, 0x33, 0x37, 0x0C};
         System.arraycopy(specStuff, 0, this.initResponse, 15, 5);
         CtapTxn txn = new CtapTxn(newCid, this, null, null, null);
-        this.assignedCids.put(newCid, txn);
+        CtapHid.assignedCids.put(newCid, txn);
 
         this.responseReady = true;
     }
@@ -452,7 +450,7 @@ public class CtapHid {
      * @throws IOException if an error occurs while creating the response
      */
     private void cancel(byte[] data) throws IOException  {
-        if(assignedCids.keySet().contains(this.getCid())) {
+        if(CtapHid.assignedCids.keySet().contains(this.getCid())) {
             //TODO cleanup request in progress
             ctapAck(0, null);
         }

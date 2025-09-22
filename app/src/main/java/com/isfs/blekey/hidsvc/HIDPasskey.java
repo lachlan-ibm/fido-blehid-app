@@ -13,16 +13,9 @@
 
 package com.isfs.blekey.hidsvc;
 
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothGattCharacteristic;
-import android.bluetooth.BluetoothGattService;
-import android.bluetooth.BluetoothGattDescriptor;
-
 import com.isfs.blekey.ctap.CtapHid;
 
 import java.util.Arrays;
-import java.util.UUID;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,7 +29,7 @@ public class HIDPasskey {
     /**
      * Reference to the parent HID service that manages BLE connections.
      */
-    private HIDService _s;
+    private HIDService _service;
 
     /**
      * Logger for debugging and error reporting.
@@ -49,7 +42,7 @@ public class HIDPasskey {
      * @param service The HID service that will handle BLE communication
      */
     public HIDPasskey(HIDService service) {
-        this._s = service;
+        this._service = service;
     }
 
     /**
@@ -106,8 +99,8 @@ public class HIDPasskey {
                     cmd.processMessage();
                     // queue any response back
                     while(cmd.hasMoreResponses()) {
-                        byte[] r_f = cmd.getResponseSegment();
-                        this._s.addInputReport(r_f);
+                        byte[] rspFrame = cmd.getResponseSegment();
+                        this._service.addInputReport(rspFrame);
                     }
                 } catch (Exception e) {
                     logger.error(HIDPasskey.class.getSimpleName() + "onOutputReport", e);
@@ -116,13 +109,4 @@ public class HIDPasskey {
         }
     }
 
-    /**
-     * Offers an input report to be sent to the host device.
-     * This method is used to send CTAP responses back to the host.
-     *
-     * @param report The input report data to be sent to the host
-     */
-    protected void offerInputReport(byte[] report) {
-        this._s.addInputReport(report);
-    }
 }

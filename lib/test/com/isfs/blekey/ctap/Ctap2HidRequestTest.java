@@ -5,12 +5,15 @@ package com.isfs.blekey.ctap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.ByteArrayOutputStream;
 import java.security.KeyPair;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import javax.crypto.Cipher;
@@ -62,7 +65,7 @@ public class Ctap2HidRequestTest {
         random.nextBytes(seed);
         
         // Create an empty map for resident credentials
-        Map<byte[], Map> resCreds = new HashMap<>();
+        Map<byte[], Map<String, byte[]>> resCreds = new HashMap<>();
         
         // Create the passkey using the protected constructor via reflection
         java.lang.reflect.Constructor<Passkey> constructor =
@@ -97,6 +100,7 @@ public class Ctap2HidRequestTest {
         }
         
         // Get the assignedCids map
+        @SuppressWarnings("unchecked")
         Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCids =
                 (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
@@ -203,9 +207,63 @@ public class Ctap2HidRequestTest {
         return digest.digest(sharedX);
     }
     
-    private Map<Integer, Object> extractCborResponse(byte[] response) throws Exception {
-        // Skip first 8 bytes (4 bytes CID + 1 byte CMD + 2 bytes length + 1 byte status)
-        byte[] cborData = Arrays.copyOfRange(response, 8, response.length);
+    /**
+     * Helper method to extract the CBOR response from multiple CTAP HID response segments
+     *
+     * @param segments List of response segments
+     * @return The decoded CBOR object
+     * @throws Exception if decoding fails
+     */
+    @SuppressWarnings("unchecked")
+    private Map<Integer, Object> extractCborFromSegments(ArrayList<byte[]> segments) throws Exception {
+        ByteArrayOutputStream cborDataStream = new ByteArrayOutputStream();
+        
+        if (segments.isEmpty()) {
+            throw new IllegalArgumentException("No segments provided");
+        }
+        
+        byte[] firstSegment = segments.get(0);
+        
+        // Extract total message length from the first frame (bytes 5-6, big-endian)
+        int totalMessageLength = ((firstSegment[5] & 0xFF) << 8) | (firstSegment[6] & 0xFF);
+        System.err.println("Total message length: " + totalMessageLength);
+        
+        // The CBOR data starts after the command byte, so total CBOR data length is totalMessageLength - 1
+        int totalCborLength = totalMessageLength - 1; // Subtract 1 for the command byte
+        int bytesRead = 0;
+        
+        // First segment: skip first 8 bytes (4 bytes CID + 1 byte CMD + 2 bytes length + 1 byte status)
+        int firstSegmentDataLength = firstSegment.length - 8;
+        cborDataStream.write(firstSegment, 8, firstSegmentDataLength);
+        bytesRead += firstSegmentDataLength;
+        
+        // Process remaining segments
+        for (int i = 1; i < segments.size(); i++) {
+            byte[] segment = segments.get(i);
+            
+            // For continuation frames, skip first 5 bytes (4 bytes CID + 1 byte sequence number)
+            int dataStart = 5;
+            
+            // Calculate how many bytes to read from this segment
+            int bytesRemaining = totalCborLength - bytesRead;
+            int bytesToRead = Math.min(bytesRemaining, segment.length - dataStart);
+            
+            // Only read the actual data bytes, not padding
+            if (bytesToRead > 0) {
+                cborDataStream.write(segment, dataStart, bytesToRead);
+                bytesRead += bytesToRead;
+            }
+            
+            // If we've read all the data, we're done
+            if (bytesRead >= totalCborLength) {
+                break;
+            }
+        }
+        
+        System.err.println("Total CBOR bytes read: " + bytesRead + " out of " + totalCborLength);
+        
+        // Decode the complete CBOR data
+        byte[] cborData = cborDataStream.toByteArray();
         return (Map<Integer, Object>) Cbor.decode(cborData);
     }
     
@@ -213,27 +271,38 @@ public class Ctap2HidRequestTest {
      * Test 1: authenticatorGetInfo request
      * This tests the CTAP2 authenticatorGetInfo command
      */
+    @SuppressWarnings("unchecked")
     @Test
     public void testAuthenticatorGetInfo() throws Exception {
+        System.err.println("Start testAuthenticatorGetInfo");
         // Create empty parameters map for getInfo
         Map<Integer, Object> params = new HashMap<>();
         
         // Create CBOR request for authenticatorGetInfo (0x04)
         byte[] request = createCborRequest(AuthenticatorCmd.GETINF, params);
+        System.err.println("CTAP request: " + Arrays.toString(request));
         
         // Process the request
         CtapHid ctapHid = new CtapHid(request);
         ctapHid.processMessage();
-        
+
         // Get the response
         byte[] response = ctapHid.getResponseSegment();
+        System.err.println("CTAP response: " + Arrays.toString(response));
         
+        ArrayList<byte[]> segments = new ArrayList<byte[]>();
         // Verify response status is success (0x00)
         assertEquals(0x00, response[7] & 0xFF, "Response status should be success (0x00)");
-        
-        // Extract and verify CBOR response
-        Map<Integer, Object> cborResponse = extractCborResponse(response);
-        
+        segments.add(response);
+        // Get the remaining response segments
+        byte[] segment = ctapHid.getResponseSegment();
+        while(segment != null) {
+            segments.add(segment);
+            segment = ctapHid.getResponseSegment();
+        }
+        Map<Integer, Object> cborResponse = extractCborFromSegments(segments);
+        System.err.println("CBOR response: " + cborResponse);
+
         // Verify expected fields in response
         assertTrue(cborResponse.containsKey(0x01), "Response should contain versions");
         assertTrue(cborResponse.containsKey(0x02), "Response should contain extensions");
@@ -243,7 +312,7 @@ public class Ctap2HidRequestTest {
         assertTrue(cborResponse.containsKey(0x06), "Response should contain PIN protocols");
         
         // Verify versions include FIDO_2_0 and FIDO_2_1
-        String[] versions = (String[]) cborResponse.get(0x01);
+        List<String> versions = (List<String>) cborResponse.get(0x01);
         boolean hasFido20 = false;
         boolean hasFido21 = false;
         for (String version : versions) {
@@ -252,6 +321,7 @@ public class Ctap2HidRequestTest {
         }
         assertTrue(hasFido20, "Versions should include FIDO_2_0");
         assertTrue(hasFido21, "Versions should include FIDO_2_1");
+        System.err.println("End testAuthenticatorGetInfo");
     }
     
     /**
@@ -278,13 +348,23 @@ public class Ctap2HidRequestTest {
         // Verify response status is success (0x00)
         assertEquals(0x00, response[7] & 0xFF, "Response status should be success (0x00)");
         
+        // Collect all response segments
+        ArrayList<byte[]> segments = new ArrayList<>();
+        segments.add(response);
+        byte[] segment = ctapHid.getResponseSegment();
+        while(segment != null) {
+            segments.add(segment);
+            segment = ctapHid.getResponseSegment();
+        }
+        
         // Extract and verify CBOR response
-        Map<Integer, Object> cborResponse = extractCborResponse(response);
+        Map<Integer, Object> cborResponse = extractCborFromSegments(segments);
         
         // Verify expected fields in response
         assertTrue(cborResponse.containsKey(0x01), "Response should contain key agreement");
         
         // Verify key agreement is a COSE key
+        @SuppressWarnings("unchecked")
         Map<Integer, Object> coseKey = (Map<Integer, Object>) cborResponse.get(0x01);
         assertTrue(coseKey.containsKey(1), "COSE key should contain key type (kty)");
         assertTrue(coseKey.containsKey(3), "COSE key should contain algorithm (alg)");
@@ -314,7 +394,17 @@ public class Ctap2HidRequestTest {
         getKeyCtapHid.processMessage();
         byte[] getKeyResponse = getKeyCtapHid.getResponseSegment();
         
-        Map<Integer, Object> getKeyResult = extractCborResponse(getKeyResponse);
+        // Collect all response segments for the key agreement
+        ArrayList<byte[]> keySegments = new ArrayList<>();
+        keySegments.add(getKeyResponse);
+        byte[] keySegment = getKeyCtapHid.getResponseSegment();
+        while(keySegment != null) {
+            keySegments.add(keySegment);
+            keySegment = getKeyCtapHid.getResponseSegment();
+        }
+        
+        Map<Integer, Object> getKeyResult = extractCborFromSegments(keySegments);
+        @SuppressWarnings("unchecked")
         Map<Integer, Object> platformKey = (Map<Integer, Object>) getKeyResult.get(0x01);
         
         // Generate our own key pair using TestHelper
@@ -363,7 +453,16 @@ public class Ctap2HidRequestTest {
         
         // If success, verify the response contains a PIN token
         if (response[7] == 0x00) {
-            Map<Integer, Object> cborResponse = extractCborResponse(response);
+            // Collect all response segments
+            ArrayList<byte[]> segments = new ArrayList<>();
+            segments.add(response);
+            byte[] segment = ctapHid.getResponseSegment();
+            while(segment != null) {
+                segments.add(segment);
+                segment = ctapHid.getResponseSegment();
+            }
+            
+            Map<Integer, Object> cborResponse = extractCborFromSegments(segments);
             assertTrue(cborResponse.containsKey(0x02), "Response should contain PIN token");
             byte[] pinToken = (byte[]) cborResponse.get(0x02);
             assertEquals(32, pinToken.length, "PIN token should be 32 bytes");
@@ -409,6 +508,7 @@ public class Ctap2HidRequestTest {
         
         // Add PIN token
         // Get the CtapTxn from the assignedCids map
+        @SuppressWarnings("unchecked")
         Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCids =
                 (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         com.isfs.blekey.ctap.CtapTxn txn = assignedCids.get(channelId);
@@ -435,7 +535,16 @@ public class Ctap2HidRequestTest {
         
         // If success, verify the response contains attestation data
         if (response[7] == 0x00) {
-            Map<Integer, Object> cborResponse = extractCborResponse(response);
+            // Collect all response segments
+            ArrayList<byte[]> segments = new ArrayList<>();
+            segments.add(response);
+            byte[] segment = ctapHid.getResponseSegment();
+            while(segment != null) {
+                segments.add(segment);
+                segment = ctapHid.getResponseSegment();
+            }
+            
+            Map<Integer, Object> cborResponse = extractCborFromSegments(segments);
             assertTrue(cborResponse.containsKey(0x01), "Response should contain fmt");
             assertTrue(cborResponse.containsKey(0x02), "Response should contain authData");
             assertTrue(cborResponse.containsKey(0x03), "Response should contain attStmt");
@@ -471,6 +580,7 @@ public class Ctap2HidRequestTest {
         
         // Add PIN token
         // Get the CtapTxn from the assignedCids map
+        @SuppressWarnings("unchecked")
         Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCids =
                 (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         com.isfs.blekey.ctap.CtapTxn txn = assignedCids.get(channelId);
@@ -484,25 +594,36 @@ public class Ctap2HidRequestTest {
         
         // Create CBOR request for authenticatorGetAssertion (0x02)
         byte[] request = createCborRequest(AuthenticatorCmd.NXTAST, params);
-        
+        System.err.println("CTAP request: " + Arrays.toString(request));
         // Process the request
         CtapHid ctapHid = new CtapHid(request);
         ctapHid.processMessage();
         
         // Get the response
         byte[] response = ctapHid.getResponseSegment();
+        System.err.println("CTAP response: " + Arrays.toString(response));
         
         // For testing purposes, we'll just check if the response format is correct
         // If authentication fails, we'll get an error status
         
         // If success, verify the response contains assertion data
         if (response[7] == 0x00) {
-            Map<Integer, Object> cborResponse = extractCborResponse(response);
+            // Collect all response segments
+            ArrayList<byte[]> segments = new ArrayList<>();
+            segments.add(response);
+            byte[] segment = ctapHid.getResponseSegment();
+            while(segment != null) {
+                segments.add(segment);
+                segment = ctapHid.getResponseSegment();
+            }
+            
+            Map<Integer, Object> cborResponse = extractCborFromSegments(segments);
             assertTrue(cborResponse.containsKey(0x01), "Response should contain credential");
             assertTrue(cborResponse.containsKey(0x02), "Response should contain authData");
             assertTrue(cborResponse.containsKey(0x03), "Response should contain signature");
             
             // Verify credential is present
+            @SuppressWarnings("unchecked")
             Map<String, Object> credential = (Map<String, Object>) cborResponse.get(0x01);
             assertTrue(credential.containsKey("id"), "Credential should contain ID");
             assertTrue(credential.containsKey("type"), "Credential should contain type");

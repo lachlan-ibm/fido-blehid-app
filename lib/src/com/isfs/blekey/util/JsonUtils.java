@@ -41,6 +41,7 @@ public class JsonUtils {
      * @param clazz The expected class of the decoded object (Map, List, POJO, etc.)
      * @return The decoded object (typically a Map or List), or null if decoding fails
      */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
     public static Object decode(String s, Class clazz) {
         if (s == null || s.isEmpty()) {
             return null;

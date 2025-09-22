@@ -9,6 +9,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -16,7 +17,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.util.CertUtils;
+import com.isfs.blekey.util.JsonUtils;
 import com.isfs.blekey.util.KeyUtils;
 
 import jakarta.json.Json;
@@ -46,21 +49,20 @@ public class Fido2AuthenticatorIntegrationTest {
      */
     private String createCredentialCreationOptionsJson() {
         return Json.createObjectBuilder()
-                .add("publicKey", Json.createObjectBuilder()
-                    .add("rp", Json.createObjectBuilder()
-                        .add("id", "example.com")
-                        .add("name", "Example RP"))
-                    .add("user", Json.createObjectBuilder()
-                        .add("id", Base64.getEncoder().encodeToString("user123".getBytes()))
-                        .add("name", "testuser@example.com")
-                        .add("displayName", "Test User"))
-                    .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
-                    .add("pubKeyCredParams", Json.createArrayBuilder()
-                        .add(Json.createObjectBuilder()
-                            .add("type", "public-key")
-                            .add("alg", -7))) // ES256
-                    .add("timeout", 60000)
-                    .add("attestation", "direct"))
+                .add("rp", Json.createObjectBuilder()
+                    .add("id", "example.com")
+                    .add("name", "Example RP"))
+                .add("user", Json.createObjectBuilder()
+                    .add("id", Base64.getEncoder().encodeToString("user123".getBytes()))
+                    .add("name", "testuser@example.com")
+                    .add("displayName", "Test User"))
+                .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
+                .add("pubKeyCredParams", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("type", "public-key")
+                        .add("alg", -7))) // ES256
+                .add("timeout", 60000)
+                .add("attestation", "direct")
                 .build().toString();
     }
     
@@ -69,14 +71,13 @@ public class Fido2AuthenticatorIntegrationTest {
      */
     private String createAssertionOptionsJson() {
         return Json.createObjectBuilder()
-                .add("publicKey", Json.createObjectBuilder()
-                    .add("rpId", "example.com")
-                    .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
-                    .add("timeout", 60000)
-                    .add("allowCredentials", Json.createArrayBuilder()
-                        .add(Json.createObjectBuilder()
-                            .add("type", "public-key")
-                            .add("id", Base64.getEncoder().encodeToString("credentialId123".getBytes())))))
+                .add("rpId", "example.com")
+                .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
+                .add("timeout", 60000)
+                .add("allowCredentials", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("type", "public-key")
+                        .add("id", Base64.getEncoder().encodeToString("credentialId123".getBytes()))))
                 .build().toString();
     }
     
@@ -97,15 +98,29 @@ public class Fido2AuthenticatorIntegrationTest {
      * Test credential creation with "packed" attestation.
      */
     @Test
+    @SuppressWarnings("unchecked")
     public void testCredentialCreateWithPackedAttestation() throws Exception {
+        System.err.println("Start testCredentialCreateWithPackedAttestation");
         String jsonOptions = createCredentialCreationOptionsJson();
         String response = authenticator.credentialCreate(jsonOptions, "packed", authenticator.getKeyPair(), caKeyPair, caCert);
-        
+        System.err .println(response);
         assertNotNull(response);
         assertTrue(response.contains("attestationObject"));
         assertTrue(response.contains("clientDataJSON"));
         // Packed attestation should include a signature
-        assertTrue(response.contains("sig"));
+        Map<String, Object> rsp = (Map<String, Object>) ((Map<String, Object>) 
+                                                            JsonUtils.decode(response, HashMap.class)).get("response");
+        assertNotNull(rsp);
+        assertTrue(rsp.containsKey("attestationObject"));
+        Map<String, Object> attObj = (Map<String, Object>) Cbor.decode(Base64.getUrlDecoder().decode(
+                                                        ((String) rsp.get("attestationObject")).getBytes()));
+        System.err.println("attObj: " + attObj);
+        assertNotNull(attObj);
+        assertTrue(attObj.containsKey("attStmt"));
+        Map<String, Object> attStmt = (Map<String, Object>) attObj.get("attStmt");
+        assertNotNull(attStmt);
+        assertTrue(attStmt.containsKey("sig"));
+        System.err.println("End testCredentialCreateWithPackedAttestation");
     }
     
     /**
@@ -158,23 +173,22 @@ public class Fido2AuthenticatorIntegrationTest {
     public void testCredentialCreateWithExtensions() throws Exception {
         // Create options with extensions
         String jsonOptions = Json.createObjectBuilder()
-                .add("publicKey", Json.createObjectBuilder()
-                    .add("rp", Json.createObjectBuilder()
-                        .add("id", "example.com")
-                        .add("name", "Example RP"))
-                    .add("user", Json.createObjectBuilder()
-                        .add("id", Base64.getEncoder().encodeToString("user123".getBytes()))
-                        .add("name", "testuser@example.com")
-                        .add("displayName", "Test User"))
-                    .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
-                    .add("pubKeyCredParams", Json.createArrayBuilder()
-                        .add(Json.createObjectBuilder()
-                            .add("type", "public-key")
-                            .add("alg", -7))) // ES256
-                    .add("timeout", 60000)
-                    .add("attestation", "direct")
-                    .add("extensions", Json.createObjectBuilder()
-                        .add("txAuthSimple", "Please verify this transaction")))
+                .add("rp", Json.createObjectBuilder()
+                    .add("id", "example.com")
+                    .add("name", "Example RP"))
+                .add("user", Json.createObjectBuilder()
+                    .add("id", Base64.getEncoder().encodeToString("user123".getBytes()))
+                    .add("name", "testuser@example.com")
+                    .add("displayName", "Test User"))
+                .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
+                .add("pubKeyCredParams", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("type", "public-key")
+                        .add("alg", -7))) // ES256
+                .add("timeout", 60000)
+                .add("attestation", "direct")
+                .add("extensions", Json.createObjectBuilder()
+                    .add("txAuthSimple", "Please verify this transaction"))
                 .build().toString();
         
         String response = authenticator.credentialCreate(jsonOptions, "none");
@@ -191,20 +205,19 @@ public class Fido2AuthenticatorIntegrationTest {
     public void testCredentialRequestWithExtensions() throws Exception {
         // Create assertion options with extensions
         String jsonOptions = Json.createObjectBuilder()
-                .add("publicKey", Json.createObjectBuilder()
-                    .add("rpId", "example.com")
-                    .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
-                    .add("timeout", 60000)
-                    .add("allowCredentials", Json.createArrayBuilder()
-                        .add(Json.createObjectBuilder()
-                            .add("type", "public-key")
-                            .add("id", Base64.getEncoder().encodeToString("credentialId123".getBytes()))))
-                    .add("extensions", Json.createObjectBuilder()
-                        .add("txAuthSimple", "Please verify this transaction")))
+                .add("rpId", "example.com")
+                .add("challenge", Base64.getEncoder().encodeToString("challenge123".getBytes()))
+                .add("timeout", 60000)
+                .add("allowCredentials", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("type", "public-key")
+                        .add("id", Base64.getEncoder().encodeToString("credentialId123".getBytes()))))
+                .add("extensions", Json.createObjectBuilder()
+                    .add("txAuthSimple", "Please verify this transaction"))
                 .build().toString();
         
         String response = authenticator.credentialRequest(jsonOptions);
-        
+        System.err.println(response);
         assertNotNull(response);
         assertTrue(response.contains("authenticatorData"));
         assertTrue(response.contains("signature"));

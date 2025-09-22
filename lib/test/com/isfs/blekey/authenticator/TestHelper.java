@@ -52,21 +52,20 @@ public class TestHelper {
      */
     public static String createCredentialCreationOptionsJson() {
         return Json.createObjectBuilder()
-                .add("publicKey", Json.createObjectBuilder()
-                    .add("rp", Json.createObjectBuilder()
-                        .add("id", "example.com")
-                        .add("name", "Example RP"))
-                    .add("user", Json.createObjectBuilder()
-                        .add("id", "dXNlcjEyMw==") // Base64 encoded "user123"
-                        .add("name", "testuser@example.com")
-                        .add("displayName", "Test User"))
-                    .add("challenge", "Y2hhbGxlbmdlMTIz") // Base64 encoded "challenge123"
-                    .add("pubKeyCredParams", Json.createArrayBuilder()
-                        .add(Json.createObjectBuilder()
-                            .add("type", "public-key")
-                            .add("alg", -7))) // ES256
-                    .add("timeout", 60000)
-                    .add("attestation", "direct"))
+                .add("rp", Json.createObjectBuilder()
+                    .add("id", "example.com")
+                    .add("name", "Example RP"))
+                .add("user", Json.createObjectBuilder()
+                    .add("id", "dXNlcjEyMw==") // Base64 encoded "user123"
+                    .add("name", "testuser@example.com")
+                    .add("displayName", "Test User"))
+                .add("challenge", "Y2hhbGxlbmdlMTIz") // Base64 encoded "challenge123"
+                .add("pubKeyCredParams", Json.createArrayBuilder()
+                    .add(Json.createObjectBuilder()
+                        .add("type", "public-key")
+                        .add("alg", -7))) // ES256
+                .add("timeout", 60000)
+                .add("attestation", "direct")
                 .build().toString();
     }
     

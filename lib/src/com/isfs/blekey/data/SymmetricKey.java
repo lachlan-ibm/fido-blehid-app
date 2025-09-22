@@ -35,7 +35,7 @@ public class SymmetricKey {
     private static final byte VERSION = (byte) 0x81;  // Using 0x81 to distinguish from standard Fernet's 0x80
     
     // Constants for token structure
-    private static final int GCM_TAG_SIZE = 16;  // GCM authentication tag size in bytes
+    //private static final int GCM_TAG_SIZE = 16;  // GCM authentication tag size in bytes
     private static final int GCM_NONCE_SIZE = 12;  // Recommended nonce size for GCM
     private static final int TS_SIZE = 8;  // Timestamp size in bytes
     
@@ -196,7 +196,7 @@ public class SymmetricKey {
         long timestamp = ByteBuffer.wrap(timestampBytes).getLong();
         long currentTime = Instant.now().getEpochSecond();
         
-        if (currentTime - timestamp > ttl) {
+        if ((currentTime - timestamp) >= ttl) {
             long age = currentTime - timestamp;
             throw new SecurityException("Token expired: token is " + age + 
                 " seconds old, but TTL is " + ttl);
@@ -225,7 +225,9 @@ public class SymmetricKey {
         try {
             // Parse the token into its components
             TokenComponents components = parseToken(data);
-            
+            if(components.version != VERSION) {
+                throw new IllegalArgumentException("Invalid token: version header was incorrect");
+            }
             // Verify timestamp if TTL is provided
             verifyTimestamp(components.timestampBytes, ttl);
             

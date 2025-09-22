@@ -64,6 +64,8 @@ public class SymmetricKeyTest {
             // Expected
             assertTrue(e.getMessage().contains("Token expired"));
         }
+        //Should pass if this test takes > 1s
+        assertNotNull(symmetricKey.decrypt(token, 1L));
     }
     
     @Test

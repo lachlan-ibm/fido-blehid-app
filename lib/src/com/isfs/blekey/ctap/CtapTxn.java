@@ -31,6 +31,9 @@ public class CtapTxn {
      */
     private Passkey passkey;
 
+    /**
+     * THe half of the pin hash collected from the user.
+     */
     private byte[] pinHash;
 
     /**
@@ -126,6 +129,24 @@ public class CtapTxn {
      */
     public void setPasskey(Passkey passkey) {
         this.passkey = passkey;
+    }
+
+    /**
+     * Set the lower 16 bytes of the pin hash for the given passkey.
+     * 
+     * @param ph
+     */
+    public void setPinHash(byte[] ph) {
+        this.pinHash = ph;
+    }
+
+    /**
+     * Get the lower 16 bytes of the pin hash for the given passkey.
+     * 
+     * @return
+     */
+    public byte[] getPinHash() {
+        return pinHash;
     }
 }
 

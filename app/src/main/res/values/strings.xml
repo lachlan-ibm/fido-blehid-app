@@ -2,12 +2,19 @@
  Copyright IBM 2025
 -->
 <resources>
-    <string name="app_name">Eye Ble Key</string>
+    <string name="app_name">I Bee Key</string>
     <string name="requires_bl_enabled">This app requires bluetooth enabled.</string>
     <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. The app will exit.</string>
     <string name="not_supported">Not supported</string>
     <string name="ok">OK</string>
     <string name="ble_hid">BLE HID</string>
     <string name="ble_beekey">BleKey</string>
-    
+    <string name="passkey">Passkey</string>
+    <string name="manage">Manage</string>
+    <string name="update">Update</string>
+    <string name="delete">Delete</string>
+    <string name="resident_credentials">Resident Credentials</string>" 
+    <string name="server_start">Start BLE Server</string>
+    <string name="server_stop">Stop BLE Server</string>
+    <string name="connected_devices">Connected Devices</string>
 </resources>

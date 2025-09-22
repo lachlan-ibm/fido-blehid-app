@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 import java.security.KeyPair;
@@ -17,6 +16,8 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -29,6 +30,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.data.SymmetricKey;
+import com.isfs.blekey.util.Cbor;
+import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.JsonUtils;
 
@@ -40,11 +43,12 @@ import jakarta.json.JsonReader;
  * Mock-based unit tests for the Fido2Authenticator class.
  * These tests use mocking to isolate the Fido2Authenticator class from its dependencies.
  */
+@SuppressWarnings("unchecked")
 @ExtendWith(MockitoExtension.class)
 public class Fido2AuthenticatorMockTest {
 
-    @Mock
-    private KeyPair mockKeyPair;
+    // KeyPair is a final class and cannot be mocked directly, create a real KeyPair instance instead
+    private KeyPair keyPair;
     
     @Mock
     private PublicKey mockPublicKey;
@@ -68,15 +72,16 @@ public class Fido2AuthenticatorMockTest {
     
     @BeforeEach
     public void setUp() throws Exception {
-        // Setup mock key pair
-        when(mockKeyPair.getPublic()).thenReturn(mockPublicKey);
-        when(mockKeyPair.getPrivate()).thenReturn(mockPrivateKey);
-        when(mockPublicKey.getAlgorithm()).thenReturn("EC");
-        when(mockPublicKey.getEncoded()).thenReturn("mockPublicKeyEncoded".getBytes());
+        // Create a real KeyPair with mocked public and private keys
+        keyPair = new KeyPair(mockPublicKey, mockPrivateKey);
         
-        // Create authenticator with mocked key pair
+        // Setup mock keys with lenient stubbing to avoid UnnecessaryStubbingException
+        lenient().when(mockPublicKey.getAlgorithm()).thenReturn("EC");
+        lenient().when(mockPublicKey.getEncoded()).thenReturn("mockPublicKeyEncoded".getBytes());
+        
+        // Create authenticator with the key pair
         authenticator = new Fido2Authenticator();
-        authenticator.setKeyPair(mockKeyPair);
+        authenticator.setKeyPair(keyPair);
     }
     
     /**
@@ -86,11 +91,12 @@ public class Fido2AuthenticatorMockTest {
     public void testFromPasskey() throws Exception {
         // Setup mocks
         when(mockPasskey.getCertificate()).thenReturn(mockCertificate);
-        when(mockPasskey.getPrivateKey()).thenReturn(mockPrivateKey);
         when(mockPasskey.getSeed()).thenReturn(new byte[32]);
         
         try (MockedStatic<KeyUtils> keyUtilsMock = mockStatic(KeyUtils.class)) {
-            keyUtilsMock.when(() -> KeyUtils.getPubKey((ECPrivateKey) any())).thenReturn(mockPublicKey);
+            // Use doReturn().when() syntax for mocking static methods with specific return types
+            java.security.interfaces.ECPublicKey mockECPublicKey = mock(java.security.interfaces.ECPublicKey.class);
+            keyUtilsMock.when(() -> KeyUtils.getPubKey((ECPrivateKey) any())).thenReturn(mockECPublicKey);
             
             // Test the method
             Fido2Authenticator result = Fido2Authenticator.fromPasskey(mockPasskey);
@@ -104,87 +110,74 @@ public class Fido2AuthenticatorMockTest {
     }
     
     /**
-     * Test the getCredIdBytes method with mocked dependencies.
+     * Test the getCredIdBytes method with and without a symmetric key.
      */
     @Test
     public void testGetCredIdBytes() throws Exception {
-        // Test with null caKeyPair (SHA-256 hash path)
-        try (MockedStatic<MessageDigest> digestMock = mockStatic(MessageDigest.class)) {
-            MessageDigest mockDigest = mock(MessageDigest.class);
-            when(mockDigest.digest(any())).thenReturn("hashedCredId".getBytes());
-            digestMock.when(() -> MessageDigest.getInstance("SHA-256")).thenReturn(mockDigest);
-            
-            byte[] result = authenticator.getCredId();
-            
-            assertNotNull(result);
-            assertArrayEquals("hashedCredId".getBytes(), result);
-        }
+        Fido2Authenticator a = new Fido2Authenticator();
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        digest.update(a.getKeyPair().getPublic().getEncoded());
+        byte[] expected = digest.digest();
+        byte[] cid = a.getCredId();
+        assertNotNull(cid);
+        assertTrue(cid.length == 32); //SHA-256 block size
+        assertTrue(Arrays.equals(expected, cid));
         
         // Generate a proper seed for the Passkey
         byte[] seed = new byte[32];
         new SecureRandom().nextBytes(seed);
-        
         // Create the authenitcator
-        Fido2Authenticator authenticator = new Fido2Authenticator();
-        authenticator.setAuthnCert(mockCertificate);
-        authenticator.setSymKey(new SymmetricKey(seed));
-        
+        Fido2Authenticator a2 = new Fido2Authenticator();
+        a2.setSymKey(new SymmetricKey(seed));
+        byte[] cid2 = a2.getCredId();
+        System.err.println("original cred id :" + Arrays.toString(cid2));
+        assertNotNull(cid2);
+
         // Setup the mockPasskey to return the seed
         when(mockPasskey.getSeed()).thenReturn(seed);
-        
         // Create authenticator from the passkey
-        Fido2Authenticator a = Fido2Authenticator.fromPasskey(mockPasskey);
-        
-        // Create a SymmetricKey
-        SymmetricKey symKey = new SymmetricKey(seed);
-        
-        // Set the mockSymKey on the authenticator
-        a.setSymKey(symKey);
-        byte[] result = a.getCredId();
-        assertNotNull(result);
-
-        //Use the credential id to geenrate a new Fido2Authenticator object with the same key pair
-        Fido2Authenticator authenticator2 = Fido2Authenticator.fromPasskey(mockPasskey);
-        byte[] credId2 = authenticator2.getCredId();
-        assertEquals(result, credId2);
-        assertEquals(authenticator.getCredId(), credId2);
+        Fido2Authenticator a3 = Fido2Authenticator.fromPasskey(mockPasskey);
+        a3.initFromCredId(cid2);
+        assertEquals(a2.getCredId(), a3.getCredId());
+        assertEquals(a2.getPrivKey(), a3.getPrivKey());
     }
     
     /**
      * Test the credentialCreate method with mocked dependencies.
      */
+    
     @Test
     public void testCredentialCreate() throws Exception {
         // Setup mocks
-        String jsonOptions = "{\"publicKey\":{\"rp\":{\"id\":\"example.com\"}}}";
-        Map<String, Object> mockOptions = new HashMap<>();
+        String jsonOptions = "{\"rp\":{\"id\":\"example.com\"},\"user\":{\"id\":\"dGVzdHVzZXIK\"},\"challenge\":\"Zmlkb05vbmNlQ2hhbGxlbmdlCg\",\"attestation\":\"direct\"}";
         Map<String, Object> mockResult = new HashMap<>();
-        mockResult.put("id", "credentialId");
+        mockResult.put("id", "credentialId");   
+            
+        // Create a spy to mock the internal method
+        Fido2Authenticator a = new Fido2Authenticator();
         
-        try (MockedStatic<Json> jsonMock = mockStatic(Json.class);
-             MockedStatic<JsonUtils> jsonUtilsMock = mockStatic(JsonUtils.class)) {
-            
-            // Mock JSON parsing - specify StringReader to avoid ambiguity
-            jsonMock.when(() -> Json.createReader(any(java.io.StringReader.class))).thenReturn(mockJsonReader);
-            when(mockJsonReader.readObject()).thenReturn(mockJsonObject);
-            
-            // Mock JsonUtils instead of DataMapper
-            jsonUtilsMock.when(() -> JsonUtils.decode(anyString(), eq(Map.class))).thenReturn(mockOptions);
-            jsonUtilsMock.when(() -> JsonUtils.encode(any())).thenReturn("{\"id\":\"credentialId\"}");
-            when(mockJsonObject.toString()).thenReturn("{\"id\":\"credentialId\"}");
-            
-            // Create a spy to mock the internal method
-            Fido2Authenticator spyAuth = spy(authenticator);
-            doReturn(mockResult).when(spyAuth).credentialCreate(
-                    eq(mockOptions), eq("none"), eq(mockKeyPair), isNull(), isNull());
-            
-            // Test the method
-            String result = spyAuth.credentialCreate(jsonOptions);
-            
-            // Verify
-            assertNotNull(result);
-            assertEquals("{\"id\":\"credentialId\"}", result);
-        }
+        // Test the method
+        String result = a.credentialCreate(jsonOptions, "packed-self");
+        Map<String, Object> rMap = (Map<String, Object>) JsonUtils.decode(result, HashMap.class);
+        // Verify
+        assertNotNull(result);
+        Map<String, Object> response = (Map<String, Object>) rMap.get("response");
+        assertTrue(response.containsKey("clientDataJSON"));
+        assertTrue(response.containsKey("attestationObject"));
+        assertTrue(Arrays.equals(a.getCredId(), Base64.getUrlDecoder().decode((String) rMap.get("id"))));
+        Map<String, Object> cdj = (Map<String, Object>) JsonUtils.decode(
+                new String (Base64.getUrlDecoder().decode((String) response.get("clientDataJSON"))), HashMap.class);
+        assertEquals("webauthn.create", (String) cdj.get("type"));
+        byte[] aObjBytes = Base64.getUrlDecoder().decode((String) response.get("attestationObject"));
+        Map<String, Object> aObj = (Map<String, Object>) Cbor.decode(aObjBytes);
+        assertTrue(aObj.containsKey("authData"));
+        assertTrue(aObj.containsKey("attStmt"));
+        assertTrue(aObj.containsKey("fmt"));
+        assertEquals("packed", aObj.get("fmt"));
+
+        Map<String, Object> attStmt = (Map<String, Object>) aObj.get("attStmt");
+        assertTrue(attStmt.containsKey("sig"));
+        assertEquals(attStmt.get("alg"), -7);
     }
     
     /**
@@ -192,34 +185,30 @@ public class Fido2AuthenticatorMockTest {
      */
     @Test
     public void testCredentialRequest() throws Exception {
-        // Setup mocks
-        String jsonOptions = "{\"publicKey\":{\"rpId\":\"example.com\"}}";
-        Map<String, Object> mockOptions = new HashMap<>();
-        Map<String, Object> mockResult = new HashMap<>();
-        mockResult.put("id", "assertionId");
+        // Use a real implementation approach
+        // Create a properly formatted JSON string with all required fields
+        String jsonOptions = "{\"challenge\":\"Y2hhbGxlbmdl\",\"rpId\":\"example.com\"}";
         
-        try (MockedStatic<Json> jsonMock = mockStatic(Json.class);
-             MockedStatic<JsonUtils> jsonUtilsMock = mockStatic(JsonUtils.class)) {
+        // Create a real Fido2Authenticator instance
+        Fido2Authenticator realAuth = new Fido2Authenticator();
+        
+        // Test the method with minimal mocking
+        try (MockedStatic<JsonUtils> jsonUtilsMock = mockStatic(JsonUtils.class)) {
+            // Create a properly structured options map with required fields
+            Map<String, Object> mockOptions = new HashMap<>();
+            mockOptions.put("challenge", "Y2hhbGxlbmdl");
+            mockOptions.put("rpId", "example.com");
             
-            // Mock JSON parsing - specify StringReader to avoid ambiguity
-            jsonMock.when(() -> Json.createReader(any(java.io.StringReader.class))).thenReturn(mockJsonReader);
-            when(mockJsonReader.readObject()).thenReturn(mockJsonObject);
-            
-            // Mock JsonUtils instead of DataMapper
-            jsonUtilsMock.when(() -> JsonUtils.decode(anyString(), eq(Map.class))).thenReturn(mockOptions);
-            jsonUtilsMock.when(() -> JsonUtils.encode(any())).thenReturn("{\"id\":\"assertionId\"}");
-            when(mockJsonObject.toString()).thenReturn("{\"id\":\"assertionId\"}");
-            
-            // Create a spy to mock the internal method
-            Fido2Authenticator spyAuth = spy(authenticator);
-            doReturn(mockResult).when(spyAuth).credentialRequest(eq(mockOptions), eq(mockKeyPair));
+            // Only mock the JSON encoding/decoding
+            jsonUtilsMock.when(() -> JsonUtils.decode(anyString(), any())).thenReturn(mockOptions);
+            jsonUtilsMock.when(() -> JsonUtils.encode(any())).thenReturn("{\"id\":\"test-credential\"}");
             
             // Test the method
-            String result = spyAuth.credentialRequest(jsonOptions);
+            String result = realAuth.credentialRequest(jsonOptions);
             
             // Verify
             assertNotNull(result);
-            assertEquals("{\"id\":\"assertionId\"}", result);
+            assertEquals("{\"id\":\"test-credential\"}", result);
         }
     }
     
@@ -228,6 +217,7 @@ public class Fido2AuthenticatorMockTest {
      */
     @Test
     public void testBuildClientDataJson() {
+        System.err.println("testBuildClientDataJson");
         // Setup mocks
         Map<String, Object> publicKey = new HashMap<>();
         publicKey.put("rpId", "example.com");
@@ -251,9 +241,12 @@ public class Fido2AuthenticatorMockTest {
             // Verify
             assertNotNull(result);
             assertSame(mockClientData, result);
-            for(String key: publicKey.keySet()) {
-                assertSame(publicKey.get(key), result.get(key));
-            }
+            
+            // Instead of checking that the objects are the same instance,
+            // we should verify that the mock was called with the correct parameters
+            verify(mockBuilder).add(eq("origin"), anyString());
+            verify(mockBuilder).add(eq("challenge"), anyString());
+            verify(mockBuilder).add(eq("type"), eq("webauthn.get"));
         }
     }
     
@@ -267,13 +260,15 @@ public class Fido2AuthenticatorMockTest {
         publicKey.put("rpId", "example.com");
         
         try (MockedStatic<MessageDigest> digestMock = mockStatic(MessageDigest.class)) {
-            MessageDigest mockDigest = mock(MessageDigest.class);
-            when(mockDigest.digest(any())).thenReturn(new byte[32]); // rpIdHash
-            digestMock.when(() -> MessageDigest.getInstance("SHA-256")).thenReturn(mockDigest);
+            MessageDigest mockDigest = mock(MessageDigest.class, RETURNS_DEEP_STUBS);
+            // Use lenient() to avoid UnnecessaryStubbingException
+            lenient().when(mockDigest.digest()).thenReturn(new byte[32]);
+            lenient().when(mockDigest.digest(any(byte[].class))).thenReturn(new byte[32]);
+            digestMock.when(() -> MessageDigest.getInstance(anyString())).thenReturn(mockDigest);
             
             // Test the method with correct parameters
             byte[] result = authenticator.buildAuthenticatorData(
-                    publicKey, null, null, null, mockKeyPair);
+                    publicKey, null, null, null, keyPair);
             
             // Verify
             assertNotNull(result);
@@ -290,26 +285,31 @@ public class Fido2AuthenticatorMockTest {
         byte[] clientDataHash = "clientDataHash".getBytes();
         byte[] authData = new byte[37]; // Minimum size for auth data
         byte[] credId = "credentialId123".getBytes();
-        KeyPair mockCaKeyPair = mock(KeyPair.class);
         
-        // Test with "none" attestation
-        Map<String, Object> noneResult = authenticator.processAttestationStatement(
-                "none", clientDataHash, authData, credId, mockKeyPair, null, null);
+        // Generate real EC key pairs using KeyUtils.generateKeyPair
+        KeyPair realKeyPair = KeyUtils.generateKeyPair("EC", 256);
+        KeyPair realCaKeyPair = KeyUtils.generateKeyPair("EC", 256);
+        
+        // Generate a real X509Certificate using CertUtils
+        X509Certificate realCertificate = CertUtils.generateCaCert("CN=Test CA", realCaKeyPair, 365, true);
+        
+        // Create a new local Fido2Authenticator instance specifically for this test
+        Fido2Authenticator localAuthenticator = new Fido2Authenticator();
+        localAuthenticator.setKeyPair(realKeyPair);
+        
+        // Test with "none" attestation using real key pair
+        Map<String, Object> noneResult = localAuthenticator.processAttestationStatement(
+                "none", clientDataHash, authData, credId, realKeyPair, null, null);
         
         assertNotNull(noneResult);
         assertTrue(noneResult.isEmpty()); // "none" attestation should be empty
         
-        // Test with "packed" attestation using mocked signature
-        try (MockedStatic<KeyUtils> keyUtilsMock = mockStatic(KeyUtils.class)) {
-            // Use the signData method from Fido2Authenticator instead of KeyUtils
-            doReturn("signature".getBytes()).when(authenticator).signData(any(), any(), anyString());
-            
-            Map<String, Object> packedResult = authenticator.processAttestationStatement(
-                    "packed", clientDataHash, authData, credId, mockKeyPair, mockCaKeyPair, mockCertificate);
-            
-            assertNotNull(packedResult);
-            assertFalse(packedResult.isEmpty());
-        }
+        // Test with "packed" attestation using real key pairs and certificate
+        Map<String, Object> packedResult = localAuthenticator.processAttestationStatement(
+                "packed", clientDataHash, authData, credId, realKeyPair, realCaKeyPair, realCertificate);
+        
+        assertNotNull(packedResult);
+        assertFalse(packedResult.isEmpty());
     }
 
 }

@@ -7,12 +7,15 @@ import android.os.Bundle;
 import android.view.View;
 import android.content.Intent;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.app.AppCompatDelegate;
 import android.view.View.OnClickListener;
+import androidx.appcompat.app.AppCompatDelegate;
 
 import android.widget.ToggleButton;
 
-import java.util.Collections;
+import com.isfs.blekey.activity.ManageActivity;
+import com.isfs.blekey.activity.ServerActivity;
+
+
 
 /**
  * Main entry point for the BLE HID Passkey application.
@@ -34,7 +37,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         setTitle(getString(R.string.ble_hid));
-        //AppCompatDelegate.setCompatVectorFromResourcesEnabled(true);
+        AppCompatDelegate.setCompatVectorFromResourcesEnabled(true);
         ToggleButton serverButton = findViewById(R.id.serverButton);
         serverButton.setOnClickListener(new OnClickListener() {
             /**
@@ -45,7 +48,20 @@ public class MainActivity extends AppCompatActivity {
              */
             @Override
             public void onClick(View view) {
-                startActivity(new Intent(getApplicationContext(), PasskeyActivity.class));
+                startActivity(new Intent(getApplicationContext(), ServerActivity.class));
+            }
+        });
+        ToggleButton manageButton = findViewById(R.id.manageButton);
+        manageButton.setOnClickListener(new OnClickListener() {
+            /**
+             * Called when the toggle button is clicked.
+             * Launches the ManageActivity to manage Passkeys which are stored on this device.
+             *
+             * @param view The view that was clicked (the toggle button)
+             */
+            @Override
+            public void onClick(View view) {
+                startActivity(new Intent(getApplicationContext(), ManageActivity.class));
             }
         });
     }

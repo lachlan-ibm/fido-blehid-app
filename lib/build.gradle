@@ -28,9 +28,6 @@ sourceSets {
         java {
             srcDirs = ['test']
         }
-        resources {
-            srcDirs = ['test/resources']
-        }
     }
 }
 
@@ -55,15 +52,17 @@ dependencies {
     // JUnit 5 (Jupiter)
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+    testImplementation 'org.junit.platform:junit-platform-launcher:1.10.2' // Added for compatibility with Mockito 5.x
     
     // JUnit 4 (for backward compatibility with existing tests)
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'org.junit.vintage:junit-vintage-engine:5.10.2' // Allows JUnit 4 tests to run with JUnit 5
-    
-    // Mockito
-    testImplementation 'org.mockito:mockito-core:4.11.0'
-    testImplementation 'org.mockito:mockito-junit-jupiter:4.11.0'
-    testImplementation 'org.mockito:mockito-inline:4.11.0' // For mocking static methods
+    // Allows JUnit 4 tests to run with JUnit 5
+    testImplementation 'org.junit.vintage:junit-vintage-engine:5.10.2'
+    testImplementation 'org.mockito:mockito-core:5.19.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.19.0'
+    // Explicitly specify ByteBuddy version for Java 21 compatibility
+    testImplementation 'net.bytebuddy:byte-buddy:1.14.11'
+    testImplementation 'net.bytebuddy:byte-buddy-agent:1.14.11'
 }
 
 // Configure test task to use JUnit Platform

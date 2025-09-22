@@ -6,3 +6,4 @@ gradle*
 .gradle
 gradlew*
 .vscode
+local.properties

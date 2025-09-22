@@ -21,6 +21,7 @@ package com.isfs.blekey.util;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -66,6 +67,8 @@ public class Cbor {
   public static void encodeTo(OutputStream stream, Object value) throws IOException {
     if (value == null) {
       dumpSimple(stream, null);
+    } else if (value instanceof BigInteger) {
+      dumpBigInteger(stream, (BigInteger) value);
     } else if (value instanceof Number) {
       dumpInt(stream, ((Number) value).intValue(), 0);
     } else if (value instanceof Boolean) {
@@ -78,9 +81,98 @@ public class Cbor {
       dumpBytes(stream, (byte[]) value);
     } else if (value instanceof String) {
       dumpText(stream, (String) value);
+    } else if (value.getClass().isArray()) {
+      dumpArray(stream, value);
     } else {
       throw new IllegalArgumentException(
           String.format(Locale.ROOT, "Unsupported object type: %s", value.getClass()));
+    }
+  }
+
+  /**
+   * Encodes a BigInteger into canonical CBOR.
+   *
+   * @param stream the output stream to write to
+   * @param value the BigInteger to encode
+   * @throws IOException A communication error in the transport layer
+   */
+  private static void dumpBigInteger(OutputStream stream, BigInteger value) throws IOException {
+    if (value.signum() < 0) {
+      // Negative BigInteger
+      byte majorType = 1;
+      value = value.negate().subtract(BigInteger.ONE);
+      byte[] bytes = value.toByteArray();
+      
+      // Remove leading zero if present (BigInteger.toByteArray may add a leading zero)
+      if (bytes.length > 1 && bytes[0] == 0) {
+        byte[] trimmed = new byte[bytes.length - 1];
+        System.arraycopy(bytes, 1, trimmed, 0, trimmed.length);
+        bytes = trimmed;
+      }
+      
+      writeByteArrayWithMajorType(stream, bytes, majorType);
+    } else {
+      // Positive BigInteger
+      byte majorType = 0;
+      byte[] bytes = value.toByteArray();
+      
+      // Remove leading zero if present (BigInteger.toByteArray may add a leading zero)
+      if (bytes.length > 1 && bytes[0] == 0) {
+        byte[] trimmed = new byte[bytes.length - 1];
+        System.arraycopy(bytes, 1, trimmed, 0, trimmed.length);
+        bytes = trimmed;
+      }
+      
+      writeByteArrayWithMajorType(stream, bytes, majorType);
+    }
+  }
+  
+  /**
+   * Helper method to write a byte array with a specific major type.
+   *
+   * @param stream the output stream to write to
+   * @param bytes the byte array to write
+   * @param majorType the major type to use
+   * @throws IOException A communication error in the transport layer
+   */
+  private static void writeByteArrayWithMajorType(OutputStream stream, byte[] bytes, byte majorType) throws IOException {
+    byte head = (byte) (majorType << 5);
+    
+    if (bytes.length <= 0) {
+      stream.write((byte) (head));
+      return;
+    }
+    
+    if (bytes.length == 1 && (bytes[0] & 0xFF) <= 23) {
+      // Can fit in the additional info byte
+      stream.write((byte) (head | (bytes[0] & 0xFF)));
+    } else if (bytes.length == 1) {
+      // One byte, but value > 23
+      stream.write((byte) (head | 24));
+      stream.write(bytes[0]);
+    } else if (bytes.length == 2) {
+      // Two bytes
+      stream.write((byte) (head | 25));
+      stream.write(bytes);
+    } else if (bytes.length <= 4) {
+      // Up to four bytes
+      stream.write((byte) (head | 26));
+      // Pad to 4 bytes if needed
+      if (bytes.length < 4) {
+        byte[] padded = new byte[4];
+        System.arraycopy(bytes, 0, padded, 4 - bytes.length, bytes.length);
+        stream.write(padded);
+      } else {
+        stream.write(bytes);
+      }
+    } else {
+      // More than 4 bytes - use tag 2 for bignum
+      if (majorType == 0) {
+        stream.write((byte) 0xC2); // Tag 2 for positive bignum
+      } else {
+        stream.write((byte) 0xC3); // Tag 3 for negative bignum
+      }
+      dumpBytes(stream, bytes);
     }
   }
 
@@ -121,6 +213,24 @@ public class Cbor {
   public static Object decodeFrom(ByteBuffer buf) {
     int head = 0xff & buf.get();
     byte additionalInfo = (byte) (head & 0b11111);
+    
+    // Check for tags (major type 6)
+    if ((head >> 5) == 6) {
+      int tagNumber = loadInt(additionalInfo, buf);
+      if (tagNumber == 2) {
+        // Tag 2: positive bignum
+        byte[] bytes = (byte[]) loadBytes((byte) (buf.get() & 0b11111), buf);
+        return new BigInteger(1, bytes);
+      } else if (tagNumber == 3) {
+        // Tag 3: negative bignum
+        byte[] bytes = (byte[]) loadBytes((byte) (buf.get() & 0b11111), buf);
+        return new BigInteger(-1, bytes).subtract(BigInteger.ONE);
+      } else {
+        // Ignore other tags and process the tagged item
+        return decodeFrom(buf);
+      }
+    }
+    
     switch (head >> 5) {
       case 0:
         return loadInt(additionalInfo, buf);
@@ -218,6 +328,68 @@ public class Cbor {
     stream.write(data);
   }
 
+  /**
+   * Encodes any array type as a CBOR array.
+   *
+   * @param stream the output stream to write to
+   * @param array the array to encode
+   * @throws IOException A communication error in the transport layer.
+   */
+  private static void dumpArray(OutputStream stream, Object array) throws IOException {
+    int length = getArrayLength(array);
+    dumpInt(stream, length, 4); // Major type 4 for arrays
+    
+    for (int i = 0; i < length; i++) {
+      Object item = getArrayItem(array, i);
+      stream.write(encode(item));
+    }
+  }
+  
+  /**
+   * Gets the length of any array type.
+   *
+   * @param array the array object
+   * @return the length of the array
+   */
+  private static int getArrayLength(Object array) {
+    Class<?> componentType = array.getClass().getComponentType();
+    
+    if (componentType == byte.class) return ((byte[]) array).length;
+    if (componentType == int.class) return ((int[]) array).length;
+    if (componentType == long.class) return ((long[]) array).length;
+    if (componentType == float.class) return ((float[]) array).length;
+    if (componentType == double.class) return ((double[]) array).length;
+    if (componentType == boolean.class) return ((boolean[]) array).length;
+    if (componentType == char.class) return ((char[]) array).length;
+    if (componentType == short.class) return ((short[]) array).length;
+    
+    // Must be an object array
+    return ((Object[]) array).length;
+  }
+  
+  /**
+   * Gets an item from any array type at the specified index.
+   *
+   * @param array the array object
+   * @param index the index of the item to get
+   * @return the item at the specified index
+   */
+  private static Object getArrayItem(Object array, int index) {
+    Class<?> componentType = array.getClass().getComponentType();
+    
+    if (componentType == byte.class) return ((byte[]) array)[index];
+    if (componentType == int.class) return ((int[]) array)[index];
+    if (componentType == long.class) return ((long[]) array)[index];
+    if (componentType == float.class) return ((float[]) array)[index];
+    if (componentType == double.class) return ((double[]) array)[index];
+    if (componentType == boolean.class) return ((boolean[]) array)[index];
+    if (componentType == char.class) return ((char[]) array)[index];
+    if (componentType == short.class) return ((short[]) array)[index];
+    
+    // Must be an object array
+    return ((Object[]) array)[index];
+  }
+
   private static int loadInt(byte additionalInfo, ByteBuffer buf) {
     if (additionalInfo < 24) {
       return 0xff & additionalInfo;
@@ -228,9 +400,27 @@ public class Cbor {
     } else if (additionalInfo == 26) {
       int value = buf.getInt();
       if (value < 0) {
-        throw new IllegalArgumentException("Unsupported integer size");
+        // This is a large positive integer that doesn't fit in a signed int
+        // Convert to BigInteger and return its int value (may lose precision)
+        byte[] bytes = new byte[4];
+        buf.position(buf.position() - 4);  // Go back to read the bytes again
+        buf.get(bytes);
+        BigInteger bigInt = new BigInteger(1, bytes);  // 1 means positive
+        return bigInt.intValue();  // This will lose precision but maintain compatibility
       }
       return value;
+    } else if (additionalInfo == 27) {
+      // Handle 8-byte integers (long)
+      long value = buf.getLong();
+      if (value < 0 || value > Integer.MAX_VALUE) {
+        // Convert to BigInteger and return its int value (may lose precision)
+        byte[] bytes = new byte[8];
+        buf.position(buf.position() - 8);  // Go back to read the bytes again
+        buf.get(bytes);
+        BigInteger bigInt = new BigInteger(1, bytes);  // 1 means positive
+        return bigInt.intValue();  // This will lose precision but maintain compatibility
+      }
+      return (int) value;
     }
     throw new IllegalArgumentException("Unable to load integer");
   }

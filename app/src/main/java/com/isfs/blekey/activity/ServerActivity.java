@@ -1,35 +1,28 @@
 /*
  * Copyright IBM 2025
  */
-package com.isfs.blekey;
+package com.isfs.blekey.activity;
 
 import com.isfs.blekey.hidsvc.HIDService;
-import com.isfs.blekey.util.BleUtils;
+import com.isfs.blekey.R;
 
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.content.DialogInterface.OnDismissListener;
 import android.os.Bundle;
-import android.os.Handler;
 import android.content.Intent;
-import android.bluetooth.BluetoothManager;
-import android.content.Context;
-import android.util.Log;
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AlertDialog.Builder;
 import android.widget.Toast;
 
-import com.isfs.blekey.R;
-
 /**
  * Activity responsible for managing the BLE HID passkey service.
  * This activity checks for Bluetooth availability and compatibility,
- * then initializes and manages the HIDService for passkey functionality.
+ * then initializes and manages the HIDService GATT server for 
+ * BLE passkey functionality.
  */
-public class PasskeyActivity extends AppCompatActivity {
+public class ServerActivity extends AppCompatActivity {
 
     /**
      * The HID service instance that provides passkey functionality over BLE.
@@ -84,7 +77,7 @@ public class PasskeyActivity extends AppCompatActivity {
      * setting the device name, and starting BLE advertising.
      */
     public void setupPasskeyPeripheralProvider() {
-        //TODO start HIDService
+        // Initialize the HIDService if not already initialized
         if(passkeyService == null) {
             passkeyService = new HIDService(this);
             passkeyService.setDeviceName(getString(R.string.ble_beekey));
@@ -151,3 +144,5 @@ public class PasskeyActivity extends AppCompatActivity {
         }
     }
 }
+
+// Made with Bob

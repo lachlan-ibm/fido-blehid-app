@@ -9,8 +9,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Noitification permissions -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -26,6 +28,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <!-- Register PasskeyActivity -->
+        <activity
+            android:name="com.isfs.blekey.activity.PasskeyActivity"
+            android:exported="false" />
+            
+        <!-- Register ManageActivity -->
+        <activity
+            android:name="com.isfs.blekey.activity.ManageActivity"
+            android:exported="false" />
+            
+        <!-- Register ResidentCredentialsActivity -->
+        <activity
+            android:name="com.isfs.blekey.activity.ResidentCredentialsActivity"
+            android:exported="false" />
 
         <service
             android:name=".ForegroundNotificationService"
