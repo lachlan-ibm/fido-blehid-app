@@ -8,12 +8,8 @@ import java.util.UUID;
 public class BleUtils {
     
     public static UUID getCharateristicUuid(int serviceId) {
-        return UUID.fromString( 
-            String.format("0000-%04X-0000-1000-8000-00805F9B34FB", serviceId & 0xffff) );
-    }
-
-    public static int getShortFromUuid(UUID uuid) {
-        return (int)(uuid.getMostSignificantBits() >> 32 & 0xffff);
+        return UUID.fromString(
+            String.format("0000%04X-0000-1000-8000-00805F9B34FB", serviceId & 0xffff) );
     }
 
     public static boolean isShortUuid(UUID uuid) {

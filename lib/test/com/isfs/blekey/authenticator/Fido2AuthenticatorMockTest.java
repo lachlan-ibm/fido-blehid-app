@@ -13,9 +13,7 @@ import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.security.interfaces.ECPrivateKey;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
@@ -85,31 +83,6 @@ public class Fido2AuthenticatorMockTest {
     }
     
     /**
-     * Test the fromPasskey static factory method with mocked dependencies.
-     */
-    @Test
-    public void testFromPasskey() throws Exception {
-        // Setup mocks
-        when(mockPasskey.getCertificate()).thenReturn(mockCertificate);
-        when(mockPasskey.getSeed()).thenReturn(new byte[32]);
-        
-        try (MockedStatic<KeyUtils> keyUtilsMock = mockStatic(KeyUtils.class)) {
-            // Use doReturn().when() syntax for mocking static methods with specific return types
-            java.security.interfaces.ECPublicKey mockECPublicKey = mock(java.security.interfaces.ECPublicKey.class);
-            keyUtilsMock.when(() -> KeyUtils.getPubKey((ECPrivateKey) any())).thenReturn(mockECPublicKey);
-            
-            // Test the method
-            Fido2Authenticator result = Fido2Authenticator.fromPasskey(mockPasskey);
-            
-            // Verify
-            assertNotNull(result);
-            assertEquals(mockCertificate, result.getAuthnCert());
-            // This assertion is commented out because the fromPasskey method doesn't set a caKeyPair field
-            // assertNotNull(result.getCaKeyPair());
-        }
-    }
-    
-    /**
      * Test the getCredIdBytes method with and without a symmetric key.
      */
     @Test
@@ -124,19 +97,17 @@ public class Fido2AuthenticatorMockTest {
         assertTrue(Arrays.equals(expected, cid));
         
         // Generate a proper seed for the Passkey
-        byte[] seed = new byte[32];
-        new SecureRandom().nextBytes(seed);
+        String seed = SymmetricKey.generateKey();
         // Create the authenitcator
         Fido2Authenticator a2 = new Fido2Authenticator();
-        a2.setSymKey(new SymmetricKey(seed));
+        a2.setSymKeys(seed);
         byte[] cid2 = a2.getCredId();
         System.err.println("original cred id :" + Arrays.toString(cid2));
         assertNotNull(cid2);
 
-        // Setup the mockPasskey to return the seed
-        when(mockPasskey.getSeed()).thenReturn(seed);
         // Create authenticator from the passkey
-        Fido2Authenticator a3 = Fido2Authenticator.fromPasskey(mockPasskey);
+        Fido2Authenticator a3 = new Fido2Authenticator();
+        a3.setSymKeys(seed);
         a3.initFromCredId(cid2);
         assertEquals(a2.getCredId(), a3.getCredId());
         assertEquals(a2.getPrivKey(), a3.getPrivKey());

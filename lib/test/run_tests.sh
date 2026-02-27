@@ -52,6 +52,15 @@ if [ "$1" == "util" ]; then
   exit $?
 fi
 
+if [ "$1" == "coverage" ]; then
+  echo "Running tests with JaCoCo code coverage..."
+  ./gradlew :lib:testWithCoverage
+  echo ""
+  echo "Coverage report generated at: lib/build/reports/jacoco/test/html/index.html"
+  exit $?
+fi
+
+# Run specific test class if provided
 if [ ! -z "$1" ]; then
   echo "Running specific tests..."
   ./gradlew :lib:test --tests "$1"
@@ -59,7 +68,7 @@ if [ ! -z "$1" ]; then
 fi
 
 # If we get here, the argument was not recognized
-echo "Usage: $0 [all|unit|integration|mock|ctap|crypto|util]"
+echo "Usage: $0 [all|unit|integration|mock|ctap|crypto|util|coverage]"
 echo "  all                 - Run all tests (default)"
 echo "  unit                - Run only unit tests"
 echo "  integration         - Run only integration tests"
@@ -67,6 +76,7 @@ echo "  mock                - Run only mock tests"
 echo "  ctap                - Run only CTAP2 HID request tests"
 echo "  crypto              - Run only the AES symmetric key tests"
 echo "  util                - Run only the utility class tests"
+echo "  coverage            - Run all tests with JaCoCo code coverage"
 echo "  <test.class.path>   - Run only the specific given tests"
 exit 1
 

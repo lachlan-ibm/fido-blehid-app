@@ -39,6 +39,7 @@ import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -474,7 +475,7 @@ public class CertUtils implements java.io.Serializable {
         }
 
         try {
-            ECPublicKey cert = (ECPublicKey) KeyUtils.readPublic(pemFile, "EC");
+            ECPublicKey cert = (ECPublicKey) FileUtils.readPublicPEM(new File(pemFile));
             System.out.println("EC Public Key:");
             ECPoint point = cert.getW();
             String x = point.getAffineX().toString(16);
@@ -487,7 +488,7 @@ public class CertUtils implements java.io.Serializable {
         }
 
         try {
-            PrivateKey pk = KeyUtils.readPrivate(pemFile, "RSA");
+            PrivateKey pk = FileUtils.readPrivatePEM(new File(pemFile));
             System.out.println("RSA Private Key:");
             System.out.println(pk.getAlgorithm() + " " + pk.getFormat());
             System.out.println(Base64.getEncoder().encodeToString(pk.getEncoded()));
@@ -498,7 +499,7 @@ public class CertUtils implements java.io.Serializable {
         }
 
         try {
-            PrivateKey pk = KeyUtils.readPrivate(pemFile, "EC");
+            PrivateKey pk = FileUtils.readPrivatePEM(new File(pemFile));
             System.out.println("EC Private Key:");
             System.out.println(pk.getAlgorithm() + " " + pk.getFormat());
             System.out.println(Base64.getEncoder().encodeToString(pk.getEncoded()));

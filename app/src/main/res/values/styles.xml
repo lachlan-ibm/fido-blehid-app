@@ -23,4 +23,25 @@
         <item name="colorError">@color/magenta_40</item>
         <item name="colorOnError">@color/ibm_white</item>
     </style>
+    
+    <!-- Theme with no action bar -->
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <!-- Primary brand color -->
+        <item name="colorPrimary">@color/ibm_blue</item>
+        <item name="colorPrimaryVariant">@color/cyan_30</item>
+        <item name="colorOnPrimary">@color/ibm_white</item>
+        <!-- Secondary brand color -->
+        <item name="colorSecondary">@color/purple_40</item>
+        <item name="colorSecondaryVariant">@color/magenta_40</item>
+        <item name="colorOnSecondary">@color/ibm_white</item>
+        <!-- Background color -->
+        <item name="android:colorBackground">@color/ibm_white</item>
+        <item name="colorOnBackground">@color/ibm_black</item>
+        <!-- Surface color -->
+        <item name="colorSurface">@color/cool_gray_10</item>
+        <item name="colorOnSurface">@color/ibm_black</item>
+        <!-- Error color -->
+        <item name="colorError">@color/magenta_40</item>
+        <item name="colorOnError">@color/ibm_white</item>
+    </style>
 </resources>

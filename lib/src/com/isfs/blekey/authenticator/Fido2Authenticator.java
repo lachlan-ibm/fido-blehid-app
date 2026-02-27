@@ -1,16 +1,7 @@
 /*
  * Copyright IBM 2025
  */
-/**
- * IBM Confidential
- * OCO Source Materials
- * 5725-V89 5725-V90
- *
- * Copyright IBM Corp. 2019
- *
- * The source code for this program is not published or otherwise divested of its trade secrets,
- * irrespective of what has been deposited with the U.S. Copyright Office.
- */
+
 package com.isfs.blekey.authenticator;
 
 import java.io.ByteArrayOutputStream;
@@ -21,6 +12,7 @@ import java.security.InvalidKeyException;
 import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
@@ -48,7 +40,6 @@ import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.util.JsonUtils;
-import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.data.SymmetricKey;
 
 @SuppressWarnings("unchecked")
@@ -62,6 +53,7 @@ public class Fido2Authenticator implements java.io.Serializable {
     protected KeyPair keyPair;
     protected X509Certificate authnCert;
     protected SymmetricKey aesKey;
+    protected String fKey;
 
     private long counter = 0;
 
@@ -95,24 +87,9 @@ public class Fido2Authenticator implements java.io.Serializable {
         this.keyPair = KeyUtils.getKeyPair(alg);
     }
 
-    public Fido2Authenticator(String alg, int keySize) throws NoSuchAlgorithmException {
+    public Fido2Authenticator(String alg, int keySize) 
+            throws NoSuchAlgorithmException, NoSuchProviderException {
         this.keyPair = KeyUtils.generateKeyPair(alg, keySize);
-    }
-
-
-    /**
-     * Creates a Fido2Authenticator from an existing Passkey.
-     *
-     * @param pkey The passkey to use
-     * @return A new Fido2Authenticator initialized with the passkey's data
-     * @throws Exception if an error occurs during initialization
-     */
-    public static Fido2Authenticator fromPasskey(Passkey pkey) throws Exception {
-        Fido2Authenticator a = new Fido2Authenticator();
-        SymmetricKey aesKey = new SymmetricKey(pkey.getSeed());
-        a.setSymKey(aesKey);
-        a.setAuthnCert(pkey.getCertificate());
-        return a;
     }
 
     public void setCredId(byte[] credentialId) {
@@ -123,9 +100,8 @@ public class Fido2Authenticator implements java.io.Serializable {
      * Generate the credential id for this authenticator. The original implementation
      * of this was simply the SHA256 of the authenticator public key.
      *
-     * If the Fido2Authenticator has a AES Symmetric key, and a "CA" private key is
-     * provided, then the credential id is the encrypted serialization of the authenticator's
-     * private key.
+     * If the Fido2Authenticator has a AES Symmetric key then the credential id is
+     * the encrypted serialization of the authenticator's private key.
      *
      * @return The credential ID as a byte array, either from an existing ID, an encrypted private key,
      *         or a SHA-256 hash of the public key
@@ -136,18 +112,11 @@ public class Fido2Authenticator implements java.io.Serializable {
         }
         if(aesKey != null) {
             try {
-                System.err.println("Using symmetric key to create cred id");
-                // Get the encrypted token as a base64-url string
-                byte[] cbor = Cbor.encode(KeyUtils.getECPrivateKeyParameters(this.keyPair.getPrivate()));
-                String cred = aesKey.encrypt(cbor);
-                System.err.println(cred);
-                byte[] recovered = aesKey.decrypt(cred);
-                System.err.println("cbor: " + cbor.length + " recovered: " + recovered.length);
-                System.err.println(Arrays.toString(cbor));
-                System.err.println(Arrays.toString(recovered));
+                byte[] encoded = this.keyPair.getPrivate().getEncoded();
+                String cred = aesKey.encrypt(encoded); // b64url
+                //System.err.println(Arrays.toString(cbor));
                 this.credId = cred.getBytes();
-                System.err.println("cred ID len: " + credId.length);
-                System.err.println("cred Id Bytes: " + Arrays.toString(credId));
+                //System.err.println("cred Id Bytes: " + Arrays.toString(credId));
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -167,19 +136,19 @@ public class Fido2Authenticator implements java.io.Serializable {
         this.credId = credId;
         String credIdStr = new String(credId);
         // Decrypt the token
-        byte[] cborBytes = aesKey.decrypt(credIdStr, null);
-        Map<String, Object> keyParams = (Map<String, Object>) Cbor.decode(cborBytes); 
+        byte[] asn1Bytes = aesKey.decrypt(credIdStr, null);
         // Generate the key pair from the parameters
-        ECPrivateKey key = (ECPrivateKey) KeyUtils.fromECPrivateKeyParameters(keyParams);
+        ECPrivateKey key = (ECPrivateKey) KeyUtils.getPrivate(asn1Bytes, "EC");
         this.keyPair = new KeyPair(KeyUtils.getPubKey(key), key);
     }
 
-    public void setSymKey(SymmetricKey key) {
-        this.aesKey = key;
+    public void setSymKeys(String seed) {
+        this.aesKey = new SymmetricKey(seed);
+        this.fKey = seed;
     }
 
-    protected SymmetricKey getSymKey() {
-        return this.aesKey;
+    protected String getSymKeySeed() {
+        return this.fKey;
     }
     
     public void setAuthnCert(X509Certificate cert) {
@@ -457,6 +426,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         byte[] credIdBytes = getCredId();
 
         String rpId = null;
+        System.err.println(publicKey);
         if (performAttestation) {
             rpId = (String) ((Map<String, Object>) publicKey.get("rp")).get("id");
         } else {

@@ -3,9 +3,10 @@
 -->
 <resources>
     <string name="app_name">I Bee Key</string>
-    <string name="requires_bl_enabled">This app requires bluetooth enabled.</string>
-    <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. The app will exit.</string>
+    <string name="requires_bl_enabled">This app requires bluetooth to be enabled.</string>
+    <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. I Bee Key will exit.</string>
     <string name="not_supported">Not supported</string>
+    <string name="ble_not_permitted">Bluetooth access is not permitted on this device.</string>
     <string name="ok">OK</string>
     <string name="ble_hid">BLE HID</string>
     <string name="ble_beekey">BleKey</string>
@@ -13,8 +14,64 @@
     <string name="manage">Manage</string>
     <string name="update">Update</string>
     <string name="delete">Delete</string>
+    <string name="back">Back</string>
     <string name="resident_credentials">Resident Credentials</string>" 
     <string name="server_start">Start BLE Server</string>
     <string name="server_stop">Stop BLE Server</string>
     <string name="connected_devices">Connected Devices</string>
+    <string name="available_passkeys">Available Passkeys</string>
+    <string name="ble_server_status">BLE Server Status</string>
+    <string name="ble_server_status_text">Server is advertising...</string>
+
+    <string name="no_devices_connected">No devices connected</string>
+
+
+    <string name="connect_to_devices">Connect to devices</string>
+    <string name="passkey_connectivity_controls">Passkey Connectivity Controls</string>
+    <string name="passkey_data_mgmt">Passkey Data Management</string>
+    <string name="manage_passkeys">Manage Passkeys</string>
+    <string name="unlock_passkey">Unlock Passkey</string>
+    <string name="prompt_for_password">Enter Secret to Unlock</string>
+    <string name="select_a_credential">Select a credential to manage</string>
+    <string name="delete_selected_credential">Delete selected credential</string>
+    <string name="no_resident_credentials_found">No resident credentials found on this device</string>
+
+    
+    <!-- CreatePasskeyActivity strings -->
+    <string name="create_new_passkey">Create New Passkey</string>
+    <string name="passkey_name_description">Enter a name for your passkey. This must only contain letters and numbers.</string>
+    <string name="passkey_name">Passkey Name:</string>
+    <string name="enter_passkey_name">Enter passkey name (alphanumeric only)</string>
+    <string name="password">Password:</string>
+    <string name="enter_password">Enter password (minimum 8 characters)</string>
+    <string name="confirm_password">Confirm Password:</string>
+    <string name="confirm_password_hint">Confirm password</string>
+    <string name="create_passkey">Create Passkey</string>
+    <string name="passkey_exists_error">A passkey with this name already exists.</string>
+    
+    <!-- Validation messages -->
+    <string name="prompt_passkey_name">Passkey name is required</string>
+    <string name="prompt_passkey_help">Passkey name must contain only letters and numbers</string>
+    <string name="require_password">Password is required</string>
+    <string name="password_length_policy">Password must be at least 8 characters</string>
+    <string name="password_verify_policy">Passwords do not match</string>
+    <string name="create_passkey_success">Passkey created successfully</string>
+    <string name="create_passkey_fail">Failed to create passkey</string>
+    
+    <!-- Delete passkey messages -->
+    <string name="no_passkey_selected">No passkey selected</string>
+    <string name="passkey_deleted_success">Passkey \'%1$s\' deleted successfully</string>
+    <string name="passkey_delete_failed">Failed to delete passkey data</string>
+    <string name="passkey_file_not_found">Passkey data not found</string>
+    <string name="passkey_delete_error">Error deleting passkey: %1$s</string>
+    <string name="credential_unlocked">Credential unlocked</string>
+    <string name="incorrect_password">Incorrect password. Please try again.</string>
+    
+    <!-- Passkey requirement messages -->
+    <string name="no_passkeys">No Passkeys Found</string>
+    <string name="no_passkeys_on_device">No passkeys found on this device.</string>
+    <string name="create_passkey_first">You need to create a passkey before you can connect to devices.</string>
+    <string name="cancel">Cancel</string>
+    <string name="manage_credentials">Manage Credentials</string>
+    <string name="selected_passkey_indicator">Selected passkey indicator</string>
 </resources>

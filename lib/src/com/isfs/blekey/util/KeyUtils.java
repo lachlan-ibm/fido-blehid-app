@@ -1,6 +1,5 @@
 /*
- * Copyright IBM 2025
- */
+ *Copyright IBM 2025, 2026
 /*IBM Confidential
 * OCO Source Materials
 * 5725-V89 5725-V90
@@ -13,13 +12,15 @@
 package com.isfs.blekey.util;
 
 import java.io.ByteArrayInputStream;
-import java.io.FileInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.AlgorithmParameters;
+import java.security.GeneralSecurityException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
@@ -29,9 +30,14 @@ import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Security;
+import java.security.Provider;
+import java.security.Signature;
+import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
@@ -42,42 +48,67 @@ import java.security.spec.ECFieldFp;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
-import java.security.spec.ECPrivateKeySpec;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.EllipticCurve;
 import java.security.spec.InvalidKeySpecException;
-import java.security.spec.InvalidParameterSpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
-import org.bouncycastle.openssl.PEMParser;
-import org.bouncycastle.openssl.PEMEncryptedKeyPair;
-import org.bouncycastle.openssl.PEMKeyPair;
-import org.bouncycastle.openssl.PEMDecryptorProvider;
-import org.bouncycastle.openssl.jcajce.JcePEMDecryptorProviderBuilder;
-import org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo;
-import org.bouncycastle.operator.InputDecryptorProvider;
-import org.bouncycastle.operator.OperatorCreationException;
-import org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8DecryptorProviderBuilder;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
-import org.bouncycastle.pkcs.PKCSException;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.util.SubjectPublicKeyInfoFactory;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class KeyUtils {
+
+    private static final Logger logger = LoggerFactory.getLogger(KeyUtils.class);
+    
+    private static final String BOUNCY_CASTLE_PROVIDER_NAME = "BC";
+    
+    // Add the BouncyCastle provider once when the class is loaded
+    static {
+        final Provider provider = Security.getProvider(BOUNCY_CASTLE_PROVIDER_NAME);
+        // Android registers its own BC provider. As it might be outdated and might not include
+        // all needed ciphers, we substitute it with a known BC bundled in the app.
+        // Android's BC has its package rewritten to "com.android.org.bouncycastle" and because
+        // of that it's possible to have another BC implementation loaded in VM.
+        if (provider == null) {
+            Security.insertProviderAt(new BouncyCastleProvider(), 1);
+        } else if (!provider.getClass().equals(BouncyCastleProvider.class)) {
+            Security.removeProvider(BOUNCY_CASTLE_PROVIDER_NAME);
+            Security.insertProviderAt(new BouncyCastleProvider(), 1);
+        }
+    }
+    
+    // Ensure BouncyCastle provider is registered and at position 1 for priority
+    public static void ensureBouncyCastleProvider() {
+        final Provider provider = Security.getProvider(BOUNCY_CASTLE_PROVIDER_NAME);
+        // Android registers its own BC provider. As it might be outdated and might not include
+        // all needed ciphers, we substitute it with a known BC bundled in the app.
+        // Android's BC has its package rewritten to "com.android.org.bouncycastle" and because
+        // of that it's possible to have another BC implementation loaded in VM.
+        if (provider == null) {
+            Security.insertProviderAt(new BouncyCastleProvider(), 1);
+        } else if (!provider.getClass().equals(BouncyCastleProvider.class)) {
+            Security.removeProvider(BOUNCY_CASTLE_PROVIDER_NAME);
+            Security.insertProviderAt(new BouncyCastleProvider(), 1);
+        }
+    }
     
     // COSE Key Common Parameters
     private static final int COSE_KEY_KTY = 1;  // Key Type
@@ -97,7 +128,7 @@ public class KeyUtils {
     private static final String ERROR_UNSUPPORTED_EC_ALGORITHM = "Unsupported EC algorithm: ";
 
     // Algorithm Constants
-    private static final String EC_ALGORITHM = "EC";
+    private static final String EC_ALGORITHM = "ECDSA";
     private static final String RSA_ALGORITHM = "RSA";
     private static final String ED25519_ALGORITHM = "Ed25519";
     private static final String EDDSA_ALGORITHM = "EdDSA";
@@ -135,6 +166,8 @@ public class KeyUtils {
     private KeyUtils() { }
     
     public static KeyPair getKeyPair(String alg) {
+        // Ensure BouncyCastle is available
+        ensureBouncyCastleProvider();
         try {
             if (RSA_ALGORITHM.equals(alg)) {
                 return getRSAKeyPair();
@@ -146,7 +179,7 @@ public class KeyUtils {
                 return getE25519KeyPair();
             }
         } catch (Exception e) {
-            //logging.error("Error generating key pair: " + e.getMessage());
+            logger.error("Error generating key pair: " + e.getMessage(), e);
         }
         return null;
     }
@@ -169,7 +202,7 @@ public class KeyUtils {
     * Supports EC P256, RSA, and Ed25519 keys.
     * 
     * The algorithm is used to allow for switching between EC and ECDH COSE keys. This
-    * is requried fro mthe platfomr key exchange as part of the pin auth algorithm.
+    * is requried from the platform key exchange as part of the pin auth algorithm.
     *
     * @param pubkey The public key to convert
     * @param algorithm Optional algorithm to use for the key (can be null for default)
@@ -186,11 +219,13 @@ public class KeyUtils {
            return createCoseEcKey((ECPublicKey) pubkey, algorithm);
        } else if (pubkey instanceof RSAPublicKey) {
            return createCoseRsaKey((RSAPublicKey) pubkey);
-       } else if ("Ed25519".equals(pubkey.getAlgorithm()) ||
+       } else if ("EdDSA".equals(pubkey.getAlgorithm()) ||
                   pubkey.getClass().getName().contains("Ed25519")) {
            return createCoseEd25519Key(pubkey);
        }
-       
+       logger.error("NO COSE KEY FOR " + pubkey);
+       logger.error(pubkey.getAlgorithm());
+       logger.error(pubkey.getClass().getCanonicalName());
        throw new UnsupportedOperationException(
            "Unsupported key type: " + pubkey.getClass().getName());
    }
@@ -552,6 +587,8 @@ public class KeyUtils {
      * @throws Exception if the key cannot be created
      */
     private static PublicKey createEd25519Key(byte[] publicKeyBytes) throws Exception {
+        // Ensure BouncyCastle is available for Ed25519 operations
+        ensureBouncyCastleProvider();
         try {
             // Create an Ed25519 public key parameters object from the raw bytes
             Ed25519PublicKeyParameters pubKeyParams = new Ed25519PublicKeyParameters(publicKeyBytes, 0);
@@ -610,32 +647,6 @@ public class KeyUtils {
         }
     }
 
-    public static PublicKey readPublic(String fileName, String alg)
-            throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
-        byte[] rawKey = FileUtils.readPEMFile(fileName);
-        X509EncodedKeySpec spec = new X509EncodedKeySpec(rawKey);
-        KeyFactory kf = KeyFactory.getInstance(alg);
-        return kf.generatePublic(spec);
-    }
-
-    /**
-     * Reads a private key from a PKCS8 file
-     *
-     * @param fileName Path to the PKCS8 file
-     * @param alg Algorithm name (e.g., "EC", "RSA")
-     * @return The private key
-     * @throws IOException If the file cannot be read
-     * @throws NoSuchAlgorithmException If the algorithm is not available
-     * @throws InvalidKeySpecException If the key specification is invalid
-     */
-    public static PrivateKey readPrivate(String fileName, String alg)
-            throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
-        byte[] rawKey = FileUtils.readPEMFile(fileName);
-        KeyFactory kf = KeyFactory.getInstance(alg);
-        PrivateKey pk = (PrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(rawKey));
-        return pk;
-    }
-
     /**
      * Reads a private key from raw bytes
      *
@@ -645,135 +656,17 @@ public class KeyUtils {
      * @throws NoSuchAlgorithmException If the algorithm is not available
      * @throws InvalidKeySpecException If the key specification is invalid
      */
-    public static PrivateKey readPrivate(byte[] raw, String alg)
+    public static PrivateKey getPrivate(byte[] raw, String alg)
             throws NoSuchAlgorithmException, InvalidKeySpecException {
         KeyFactory kf = KeyFactory.getInstance(alg);
-        PrivateKey pk = (PrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(raw));
-        return pk;
-    }
-    
-    /**
-     * Reads a password-protected private key from a PKCS8 or PEM file.
-     *
-     * @param fileName Path to the encrypted key file
-     * @param passwordChars Password for decryption
-     * @return The private key
-     * @throws IOException If the file cannot be read
-     * @throws PKCSException If decryption fails (wrong password)
-     * @throws OperatorCreationException If the decryptor cannot be created
-     * @throws IllegalArgumentException If parameters are invalid
-     * @throws NoSuchAlgorithmException If the algorithm is not available
-     * @throws InvalidKeySpecException If the key specification is invalid
-     */
-    public static PrivateKey readPrivate(String fileName, char[] passwordChars)
-            throws IOException, PKCSException, OperatorCreationException,
-                   NoSuchAlgorithmException, InvalidKeySpecException {
-        
-        // Validate parameters
-        if (fileName == null || fileName.isEmpty()) {
-            throw new IllegalArgumentException("File name cannot be null or empty");
-        }
-        if (passwordChars == null || passwordChars.length == 0) {
-            return readPrivate(fileName, "EC"); //Assume EC key, no password
-        }
-        
-        InputStream inputStream = null;
-        try {
-            inputStream = new FileInputStream(fileName);
-            Object pemObject = parsePemObject(inputStream);
-            PrivateKey key = decryptPrivateKey(pemObject, passwordChars);
-            clearPassword(passwordChars); // Security: clear password from memory
-            return key;
-        } finally {
-            if (inputStream != null) {
-                try {
-                    inputStream.close();
-                } catch (IOException e) {
-                    // Ignore close errors
-                }
-            }
-            clearPassword(passwordChars); // Ensure password is cleared even if exception occurs
-        }
-    }
-
-    /**
-     * Parses a PEM object from an input stream.
-     *
-     * @param inputStream The input stream to read from
-     * @return The parsed PEM object
-     * @throws IOException If the PEM object cannot be read
-     * @throws IllegalArgumentException If no PEM object is found
-     */
-    private static Object parsePemObject(InputStream inputStream) throws IOException {
-        try (PEMParser pemParser = new PEMParser(new InputStreamReader(inputStream))) {
-            Object pemObject = pemParser.readObject();
-            if (pemObject == null) {
-                throw new IllegalArgumentException("No PEM object found in the input");
-            }
-            return pemObject;
-        }
+        return kf.generatePrivate(new PKCS8EncodedKeySpec(raw));
     }
 
 
-    // Singleton instance of BouncyCastleProvider for better performance
-    private static BouncyCastleProvider bouncyCastleProvider;
-
-    /**
-     * Gets the Bouncy Castle provider instance, creating it if necessary.
-     *
-     * @return The Bouncy Castle provider
-     */
-    private static synchronized BouncyCastleProvider getBouncyCastleProvider() {
-        if (bouncyCastleProvider == null) {
-            bouncyCastleProvider = new BouncyCastleProvider();
-        }
-        return bouncyCastleProvider;
-    }
-
-    /**
-     * Decrypts a private key from a PEM object using the provided password.
-     *
-     * @param pemObject The PEM object to decrypt
-     * @param passwordChars The password as a character array
-     * @return The decrypted private key
-     * @throws PKCSException If decryption fails (wrong password)
-     * @throws OperatorCreationException If the decryptor cannot be created
-     * @throws IOException If an I/O error occurs
-     * @throws IllegalArgumentException If the key format is not supported
-     */
-    private static PrivateKey decryptPrivateKey(Object pemObject, char[] passwordChars)
-            throws PKCSException, OperatorCreationException, IOException {
-        
-        if (pemObject instanceof PKCS8EncryptedPrivateKeyInfo) {
-            PKCS8EncryptedPrivateKeyInfo encryptedInfo = (PKCS8EncryptedPrivateKeyInfo) pemObject;
-            JceOpenSSLPKCS8DecryptorProviderBuilder jce = new JceOpenSSLPKCS8DecryptorProviderBuilder();
-            jce.setProvider(getBouncyCastleProvider());
-            InputDecryptorProvider decryptorProvider = jce.build(passwordChars);
-            JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider(getBouncyCastleProvider());
-            return converter.getPrivateKey(encryptedInfo.decryptPrivateKeyInfo(decryptorProvider));
-        } else if (pemObject instanceof PEMEncryptedKeyPair) {
-            PEMEncryptedKeyPair encryptedKeyPair = (PEMEncryptedKeyPair) pemObject;
-            PEMDecryptorProvider decryptorProvider = new JcePEMDecryptorProviderBuilder().build(passwordChars);
-            PEMKeyPair keyPair = encryptedKeyPair.decryptKeyPair(decryptorProvider);
-            JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider(getBouncyCastleProvider());
-            return converter.getPrivateKey(keyPair.getPrivateKeyInfo());
-        } else {
-            throw new IllegalArgumentException("Unsupported PEM object type: " +
-                (pemObject != null ? pemObject.getClass().getName() : "null"));
-        }
-    }
-
-    /**
-     * Clears a password from memory for security.
-     *
-     * @param passwordChars The password character array to clear
-     */
-    private static void clearPassword(char[] passwordChars) {
-        if (passwordChars != null) {
-            for (int i = 0; i < passwordChars.length; i++) {
-                passwordChars[i] = 0;
-            }
-        }
+    public static PublicKey getPublic(byte[] raw, String alg) 
+            throws InvalidKeySpecException, NoSuchAlgorithmException {
+        KeyFactory kf = KeyFactory.getInstance(alg);
+        return kf.generatePublic(new X509EncodedKeySpec(raw));
     }
 
     private static class FieldP {
@@ -860,7 +753,7 @@ public class KeyUtils {
     }
 
     public static PrivateKey generatePrivate(String alg, int keySize)
-            throws NoSuchAlgorithmException {
+            throws NoSuchAlgorithmException, NoSuchProviderException {
         return generateKeyPair(alg, keySize).getPrivate();
     }
     
@@ -876,17 +769,24 @@ public class KeyUtils {
     
     
     private static KeyPair getE25519KeyPair() throws Exception {
-        return generateKeyPair(ED25519_ALGORITHM, 512);
+        // Ed25519 has a fixed key size, so don't pass a size parameter
+        // Ensure BouncyCastle is available for Ed25519
+        ensureBouncyCastleProvider();
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance(ED25519_ALGORITHM);
+        return kpg.generateKeyPair();
     }
 
     public static KeyPair generateKeyPair(String alg, int keySize)
-            throws NoSuchAlgorithmException {
-        KeyPairGenerator kpg = KeyPairGenerator.getInstance(alg);
+            throws NoSuchAlgorithmException, NoSuchProviderException {
+        // Ensure BouncyCastle is available for specialized curves
+        ensureBouncyCastleProvider();
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance(alg, BOUNCY_CASTLE_PROVIDER_NAME);
         kpg.initialize(keySize);
         return kpg.genKeyPair();
     }
 
-    public static KeyPair getCAKeyPair(String alg) throws NoSuchAlgorithmException, InvalidKeySpecException, IOException {
+    public static KeyPair getCAKeyPair(String alg) 
+            throws NoSuchAlgorithmException, InvalidKeySpecException, IOException, NoSuchProviderException {
         PrivateKey privateKey = null;
         PublicKey publicKey = null;
         if (EC_ALGORITHM.equals(alg)) {
@@ -901,6 +801,60 @@ public class KeyUtils {
             throw new NoSuchAlgorithmException(String.format("Invalid alg:  %s", alg));
         }
         return new KeyPair(publicKey, privateKey);      
+    }
+
+    /**
+     * Creates and initializes an AES-GCM cipher for encryption or decryption.
+     *
+     * @param sharedSecret The shared secret key (32 bytes for AES-256)
+     * @param iv The initialization vector (16 bytes)
+     * @param mode Cipher mode (Cipher.ENCRYPT_MODE or Cipher.DECRYPT_MODE)
+     * @return Initialized cipher instance
+     * @throws NoSuchAlgorithmException if AES/GCM is not available
+     * @throws NoSuchPaddingException if padding scheme is not available
+     * @throws InvalidKeyException if the key is invalid
+     * @throws InvalidAlgorithmParameterException if GCM parameters are invalid
+     */
+    private static Cipher getAESCipher(byte[] sharedSecret, byte[] iv, int mode)
+            throws NoSuchAlgorithmException, NoSuchPaddingException,
+                   InvalidKeyException, InvalidAlgorithmParameterException {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        SecretKeySpec keySpec = new SecretKeySpec(sharedSecret, "AES");
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(128, iv); // 128-bit auth tag
+        cipher.init(mode, keySpec, gcmSpec);
+        return cipher;
+    }
+
+    /**
+     * Converts a PEM-encoded public key to a PublicKey object.
+     *
+     * @param pemBytes The PEM-encoded public key bytes
+     * @return The PublicKey object
+     * @throws Exception if conversion fails
+     */
+    private static PublicKey pemToPublicKey(byte[] pemBytes) throws Exception {
+        String pemString = new String(pemBytes, java.nio.charset.StandardCharsets.UTF_8);
+        // Remove PEM headers and decode base64
+        String base64Key = pemString
+            .replace("-----BEGIN PUBLIC KEY-----", "")
+            .replace("-----END PUBLIC KEY-----", "")
+            .replaceAll("\\s", "");
+        byte[] derBytes = java.util.Base64.getDecoder().decode(base64Key);
+        
+        KeyFactory keyFactory = KeyFactory.getInstance("EC");
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(derBytes);
+        return keyFactory.generatePublic(keySpec);
+    }
+
+    public static byte[] getPublicKeyBytes(ECPublicKey publicKey) throws IOException {
+        // Convert to PEM format
+        ByteArrayOutputStream pemOut = new ByteArrayOutputStream();
+        try (java.io.OutputStreamWriter writer = new java.io.OutputStreamWriter(pemOut);
+                org.bouncycastle.openssl.jcajce.JcaPEMWriter pemWriter =
+                    new org.bouncycastle.openssl.jcajce.JcaPEMWriter(writer)) {
+            pemWriter.writeObject(publicKey);
+        }
+        return pemOut.toByteArray();
     }
 
     /**
@@ -919,268 +873,248 @@ public class KeyUtils {
      */
     public static byte[] ecdhEncrypt(byte[] plaintext, PublicKey recipient) {
         try {
+            ensureBouncyCastleProvider();
+            
             // 1. Generate ephemeral EC P-256 key pair
             KeyPair ephemeralKeyPair = generateKeyPair("EC", 256);
 
-            // 2. Perform ECDH key agreement using existing decapsulate method
-            byte[] aesKey = decapsulate(recipient, ephemeralKeyPair.getPrivate());
-            if (aesKey == null || aesKey.length != 32) {
+            // 2. Perform ECDH key agreement
+            byte[] sharedSecret = decapsulate(recipient, ephemeralKeyPair.getPrivate());
+            if (sharedSecret == null || sharedSecret.length != 32) {
                 throw new RuntimeException("Failed to derive shared secret");
             }
             
-            // 4. Encrypt plaintext using AES-GCM
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
-            
-            // Generate random IV (12 bytes for GCM)
-            byte[] iv = new byte[12];
+            // 3. Generate random IV (16 bytes to match Python)
+            byte[] iv = new byte[16];
             SecureRandom random = new SecureRandom();
             random.nextBytes(iv);
             
-            GCMParameterSpec gcmSpec = new GCMParameterSpec(128, iv); // 128-bit auth tag
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec);
+            // 4. Encrypt plaintext using AES-256-GCM
+            Cipher cipher = getAESCipher(sharedSecret, iv, Cipher.ENCRYPT_MODE);
             byte[] ciphertext = cipher.doFinal(plaintext);
+
+            byte[] ephemeralPubKeyBytes = getPublicKeyBytes((ECPublicKey) ephemeralKeyPair.getPublic());
             
-            // 5. Encode public key
-            byte[] ephemeralPubKeyBytes = ephemeralKeyPair.getPublic().getEncoded();
+            // 6. Extract tag from ciphertext (last 16 bytes)
+            byte[] actualCiphertext = Arrays.copyOfRange(ciphertext, 0, ciphertext.length - 16);
+            byte[] tag = Arrays.copyOfRange(ciphertext, ciphertext.length - 16, ciphertext.length);
             
-            // 6. Combine all components: [public key length (2 bytes)][ public key][IV][ciphertext]
-            ByteBuffer combined = ByteBuffer.allocate(2 + ephemeralPubKeyBytes.length + iv.length + ciphertext.length);
-            combined.putShort((short) ephemeralPubKeyBytes.length);
+            // 7. Combine: [pub key len (4 bytes big endian)][pub key][IV][tag][ciphertext]
+            ByteBuffer combined = ByteBuffer.allocate(
+                    4 + ephemeralPubKeyBytes.length + iv.length + tag.length + actualCiphertext.length);
+            combined.putInt(ephemeralPubKeyBytes.length); // Big endian by default
             combined.put(ephemeralPubKeyBytes);
             combined.put(iv);
-            combined.put(ciphertext);
+            combined.put(tag);
+            combined.put(actualCiphertext);
             
             return combined.array();
             
-        } catch (NoSuchAlgorithmException | InvalidAlgorithmParameterException | InvalidKeyException |
-                 NoSuchPaddingException | IllegalBlockSizeException | BadPaddingException e) {
+        } catch (Exception e) {
             throw new RuntimeException("ECDH encryption failed", e);
         }
+    }
+
+    private static void verifyDecryptInputs(byte[] ciphertext, PrivateKey key) {
+        // For P-256: 4 (length) + 178 (PEM key) + 16 (IV) + 16 (tag) + 1 (min ciphertext) = 215
+        // Minimum is 1 byte plaintext (e.g., empty CBOR list)
+        final int MIN_CIPHERTEXT_SIZE = 215;
+        if (ciphertext == null || ciphertext.length < MIN_CIPHERTEXT_SIZE) {
+            throw new IllegalArgumentException(
+                "Ciphertext too short: expected at least " + MIN_CIPHERTEXT_SIZE +
+                " bytes, got " + (ciphertext == null ? "null" : ciphertext.length));
+        }
+        if (key == null) {
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+    }
+
+    private static byte[] extractAndDecrypt(ByteBuffer buffer, PublicKey sender, 
+            PrivateKey recipient) throws GeneralSecurityException {
+        // Extract IV (16 bytes)
+        byte[] iv = new byte[16];
+        buffer.get(iv);
+        
+        // Extract authentication tag (16 bytes)
+        byte[] tag = new byte[16];
+        buffer.get(tag);
+        
+        // Extract ciphertext (remaining bytes)
+        byte[] encryptedData = new byte[buffer.remaining()];
+        buffer.get(encryptedData);
+        
+        // 2. Perform ECDH key agreement using existing decapsulate method
+        byte[] sharedSecret = decapsulate(sender, recipient);
+        if (sharedSecret == null) {
+            throw new RuntimeException("Failed to derive shared secret");
+        }
+        
+        // 3. Combine ciphertext and tag for GCM (tag must be at the end)
+        byte[] ciphertextWithTag = new byte[encryptedData.length + tag.length];
+        System.arraycopy(encryptedData, 0, ciphertextWithTag, 0, encryptedData.length);
+        System.arraycopy(tag, 0, ciphertextWithTag, encryptedData.length, tag.length);
+        
+        // 4. Decrypt ciphertext using AES-GCM
+        Cipher cipher = getAESCipher(sharedSecret, iv, Cipher.DECRYPT_MODE);
+        return cipher.doFinal(ciphertextWithTag);
     }
 
     /**
      * Decrypts ciphertext using ECDH with the recipient's private key.
      *
      * This method:
-     * 1. Extracts the ephemeral public key from the ciphertext
+     * 1. Extracts the ephemeral public key from the ciphertext (PEM format)
      * 2. Performs ECDH key agreement with the recipient's private key
      * 3. Uses the derived shared secret to decrypt the ciphertext with AES-GCM
      * 4. Returns the plaintext
      *
-     * @param ciphertext The encrypted data in format: [public key bytes][IV][ciphertext][auth tag]
+     * Format: [4 bytes length (big endian)][PEM public key][16 bytes IV][16 bytes tag][ciphertext]
+     *
+     * @param ciphertext The encrypted data
      * @param recipient The recipient's private key
      * @return The decrypted plaintext
      * @throws RuntimeException if decryption fails
      */
     public static byte[] ecdhDecrypt(byte[] ciphertext, PrivateKey recipient) {
+        verifyDecryptInputs(ciphertext, recipient);
+        
         try {
             // 1. Extract components from ciphertext
             ByteBuffer buffer = ByteBuffer.wrap(ciphertext);
             
-            // Extract ephemeral public key
-            short pubKeyLength = buffer.getShort();
-            byte[] ephemeralPubKeyBytes = new byte[pubKeyLength];
-            buffer.get(ephemeralPubKeyBytes);
-            
-            // Convert bytes to public key
-            KeyFactory keyFactory = KeyFactory.getInstance("EC");
-            X509EncodedKeySpec keySpec = new X509EncodedKeySpec(ephemeralPubKeyBytes);
-            PublicKey ephemeralPubKey = keyFactory.generatePublic(keySpec);
-            
-            // Extract IV (12 bytes for GCM)
-            byte[] iv = new byte[12];
-            buffer.get(iv);
-            
-            // Extract encrypted data (remaining bytes)
-            byte[] encryptedData = new byte[buffer.remaining()];
-            buffer.get(encryptedData);
-            
-            // 2. Perform ECDH key agreement using existing decapsulate method
-            byte[] aesKey = decapsulate(ephemeralPubKey, recipient);
-            if (aesKey == null) {
-                throw new RuntimeException("Failed to derive shared secret");
+            // Extract ephemeral public key length (4 bytes, big endian)
+            int pubKeyLength = buffer.getInt();
+            // P-256 public key in PEM format is exactly 178 bytes
+            final int EXPECTED_P256_PEM_SIZE = 178;
+            if (pubKeyLength != EXPECTED_P256_PEM_SIZE) {
+                throw new IllegalArgumentException(
+                    "Invalid P-256 public key length: expected " + EXPECTED_P256_PEM_SIZE +
+                    ", got " + pubKeyLength);
             }
             
-            // 4. Decrypt ciphertext using AES-GCM
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            SecretKeySpec keySpec2 = new SecretKeySpec(aesKey, "AES");
-            GCMParameterSpec gcmSpec = new GCMParameterSpec(128, iv); // 128-bit auth tag
+            // Validate remaining buffer size
+            if (buffer.remaining() < pubKeyLength + 32) { // 32 = 16 (IV) + 16 (tag)
+                throw new IllegalArgumentException(
+                    "Ciphertext too short for declared public key length");
+            }
             
-            cipher.init(Cipher.DECRYPT_MODE, keySpec2, gcmSpec);
-            return cipher.doFinal(encryptedData);
+            byte[] ephemeralPubKeyPem = new byte[pubKeyLength];
+            buffer.get(ephemeralPubKeyPem);
             
-        } catch (NoSuchAlgorithmException | InvalidKeyException | InvalidKeySpecException |
-                 NoSuchPaddingException | InvalidAlgorithmParameterException |
-                 IllegalBlockSizeException | BadPaddingException e) {
+            // Convert PEM to public key
+            PublicKey ephemeralPubKey = pemToPublicKey(ephemeralPubKeyPem);
+            
+            return extractAndDecrypt(buffer, ephemeralPubKey, recipient);
+            
+        } catch (Exception e) {
             throw new RuntimeException("ECDH decryption failed", e);
         }
     }
 
-    /**
-     * Creates a simplified map representation of an elliptic curve private key.
-     * The map contains only the essential parameters needed to reconstruct the key:
-     * - 'c': The curve name as used by Java cryptography libraries
-     * - 'pv': The private scalar value
-     *
-     * @param privateKey The EC private key to convert
-     * @return A map containing the key parameters
-     * @throws IllegalArgumentException if the key is not an EC private key
-     */
-    public static Map<String, Object> getECPrivateKeyParameters(PrivateKey privateKey) {
-        if (!(privateKey instanceof ECPrivateKey)) {
-            throw new IllegalArgumentException("Key must be an EC private key");
-        }
-        
-        ECPrivateKey ecPrivateKey = (ECPrivateKey) privateKey;
-        Map<String, Object> keyParams = new HashMap<>();
-        
-        // Extract the scalar value
-        keyParams.put("pv", ecPrivateKey.getS());
-        
-        // Determine the curve name from the parameters
-        ECParameterSpec params = ecPrivateKey.getParams();
-        String curveName = getCurveName(params);
-        keyParams.put("c", curveName);
-        
-        return keyParams;
+    public static ECPublicKey publicFromPrivate(final ECPrivateKey privateKey) throws Exception {
+        ECParameterSpec params = privateKey.getParams();
+        org.bouncycastle.jce.spec.ECParameterSpec bcSpec = org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util
+            .convertSpec(params);
+        org.bouncycastle.math.ec.ECPoint q = bcSpec.getG().multiply(privateKey.getS());
+        org.bouncycastle.math.ec.ECPoint bcW = bcSpec.getCurve().decodePoint(q.getEncoded(false));
+        ECPoint w = new ECPoint(
+            bcW.getAffineXCoord().toBigInteger(),
+            bcW.getAffineYCoord().toBigInteger());
+        ECPublicKeySpec keySpec = new ECPublicKeySpec(w, tryFindNamedCurveSpec(params));
+        return (ECPublicKey) KeyFactory
+            .getInstance("EC", org.bouncycastle.jce.provider.BouncyCastleProvider.PROVIDER_NAME)
+            .generatePublic(keySpec);
     }
 
-    /**
-     * Recreates an EC private key from simplified parameters.
-     * This method takes a map containing the curve name and private scalar value,
-     * and reconstructs a fully functional EC private key.
-     *
-     * @param keyParamMap A map containing 'c' (curve name) and 'pv' (private value/scalar)
-     * @return The reconstructed EC private key
-     * @throws IllegalArgumentException if the parameters are invalid or missing
-     * @throws RuntimeException if key creation fails
-     */
-    public static PrivateKey fromECPrivateKeyParameters(Map<String, Object> keyParamMap) throws 
-            IllegalArgumentException, ClassCastException {
-        try {
-            // Validate required parameters
-            if (keyParamMap == null) {
-                throw new IllegalArgumentException("Key parameter map cannot be null");
+    @SuppressWarnings("unchecked")
+    public static ECParameterSpec tryFindNamedCurveSpec(ECParameterSpec params) {
+        org.bouncycastle.jce.spec.ECParameterSpec bcSpec
+            = org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util.convertSpec(params);
+        for (Object name : Collections.list(org.bouncycastle.jce.ECNamedCurveTable.getNames())) {
+            org.bouncycastle.jce.spec.ECNamedCurveParameterSpec bcNamedSpec
+                = org.bouncycastle.jce.ECNamedCurveTable.getParameterSpec((String) name);
+            if (bcNamedSpec.getN().equals(bcSpec.getN())
+                && bcNamedSpec.getH().equals(bcSpec.getH())
+                && bcNamedSpec.getCurve().equals(bcSpec.getCurve())
+                && bcNamedSpec.getG().equals(bcSpec.getG())) {
+                return new org.bouncycastle.jce.spec.ECNamedCurveSpec(
+                    bcNamedSpec.getName(),
+                    bcNamedSpec.getCurve(),
+                    bcNamedSpec.getG(),
+                    bcNamedSpec.getN(),
+                    bcNamedSpec.getH(),
+                    bcNamedSpec.getSeed());
             }
-            
-            // Extract curve name and private value
-            String curveName = (String) keyParamMap.get("c");
-            BigInteger privateValue = (BigInteger) keyParamMap.get("pv");
-            
-            if (curveName == null || privateValue == null) {
-                throw new IllegalArgumentException("Missing required parameters: curve name or private value");
-            }
-            
-            // Get EC parameters based on curve name using AlgorithmParameters
-            AlgorithmParameters parameters = AlgorithmParameters.getInstance(EC_ALGORITHM);
-            parameters.init(new ECGenParameterSpec(curveName));
-            ECParameterSpec ecParams = parameters.getParameterSpec(ECParameterSpec.class);
-            
-            // Create the EC private key specification
-            ECPrivateKeySpec privateKeySpec = new ECPrivateKeySpec(privateValue, ecParams);
-            
-            // Generate the private key
-            KeyFactory keyFactory = KeyFactory.getInstance(EC_ALGORITHM);
-            return keyFactory.generatePrivate(privateKeySpec);
-        } catch (NoSuchAlgorithmException | InvalidParameterSpecException | InvalidKeySpecException e) {
-            throw new RuntimeException("Failed to create EC private key from parameters", e);
-        } catch (ClassCastException e) {
-            throw new IllegalArgumentException("Invalid parameter type in key map", e);
         }
-    }
-
-    /**
-     * Determines the standard curve name from EC parameters.
-     *
-     * @param params The EC parameter specification
-     * @return The standard curve name (e.g., "secp256r1" for P-256)
-     */
-    public static String getCurveName(ECParameterSpec params) {
-        // Compare with known curves
-        if (isP256Curve(params)) {
-            return "secp256r1"; // Also known as P-256 or prime256v1
-        } else if (isP384Curve(params)) {
-            return "secp384r1"; // P-384
-        } else if (isP521Curve(params)) {
-            return "secp521r1"; // P-521
-        }
-        
-        // Default fallback - examine field size
-        int fieldSize = ((ECFieldFp)params.getCurve().getField()).getP().bitLength();
-        return "unknown-" + fieldSize;
-    }
-    
-    /**
-     * Checks if the parameters match the P-256 curve.
-     */
-    private static boolean isP256Curve(ECParameterSpec params) {
-        BigInteger p256Prime = new BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16);
-        ECField field = params.getCurve().getField();
-        
-        if (field instanceof ECFieldFp) {
-            BigInteger prime = ((ECFieldFp) field).getP();
-            return prime.equals(p256Prime) && params.getOrder().bitLength() == 256;
-        }
-        return false;
-    }
-    
-    /**
-     * Checks if the parameters match the P-384 curve.
-     */
-    private static boolean isP384Curve(ECParameterSpec params) {
-        BigInteger p384Prime = new BigInteger("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFFFF0000000000000000FFFFFFFF", 16);
-        ECField field = params.getCurve().getField();
-        
-        if (field instanceof ECFieldFp) {
-            BigInteger prime = ((ECFieldFp) field).getP();
-            return prime.equals(p384Prime) && params.getOrder().bitLength() == 384;
-        }
-        return false;
-    }
-    
-    /**
-     * Checks if the parameters match the P-521 curve.
-     */
-    private static boolean isP521Curve(ECParameterSpec params) {
-        BigInteger p521Prime = new BigInteger("1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16);
-        ECField field = params.getCurve().getField();
-        
-        if (field instanceof ECFieldFp) {
-            BigInteger prime = ((ECFieldFp) field).getP();
-            return prime.equals(p521Prime) && params.getOrder().bitLength() == 521;
-        }
-        return false;
+        return params;
     }
 
     /* PKCS12 */
-    public static KeyStore readPKCS12(byte[] pkcs12Bytes, char[] password) throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+    /**
+     * Read a PKCS12 keystore from bytes.
+     *
+     * @param pkcs12Bytes The PKCS12 data as a byte array
+     * @param pinHash The 32-byte SHA256 hash to use as the password (will be converted to char[])
+     * @return The loaded KeyStore
+     * @throws Exception if there's an error loading the PKCS12 keystore
+     */
+    public static KeyStore readPKCS12(byte[] pkcs12Bytes, byte[] pinHash) throws Exception {
+        // Ensure BouncyCastle is available for PKCS12 operations
+        ensureBouncyCastleProvider();
+        
+        // Convert pinHash to char[] using ISO-8859-1 for 1:1 byte-to-char mapping
+        char[] nonce = new String(pinHash, StandardCharsets.ISO_8859_1).toCharArray();
+        
+        KeyStore keyStore = KeyStore.getInstance("PKCS12", BOUNCY_CASTLE_PROVIDER_NAME);
         
         try (InputStream is = new ByteArrayInputStream(pkcs12Bytes)) {
-            keyStore.load(is, password);
+            keyStore.load(is, nonce);
         }
 
         return keyStore;
     }
 
-    // Extract private key
-    public static PrivateKey getPrivateKeyFromPKCS12(KeyStore keyStore, String alias, char[] password) throws Exception {
-        return (PrivateKey) keyStore.getKey(alias, password);
+    /**
+     * Extract private key from a PKCS12 KeyStore.
+     *
+     * @param keyStore The KeyStore to extract from
+     * @param alias The alias of the key entry
+     * @param pinHash The 32-byte SHA256 hash to use as the password (will be converted to char[])
+     * @return The private key
+     * @throws Exception if there's an error extracting the key
+     */
+    public static PrivateKey getPrivateKeyFromPKCS12(KeyStore keyStore, String alias, byte[] pinHash) throws Exception {
+        char[] nonce = new String(pinHash, StandardCharsets.ISO_8859_1).toCharArray();
+        return (PrivateKey) keyStore.getKey(alias, nonce);
     }
 
-    // Extract certificate
+    /**
+     * Extract certificate from a PKCS12 KeyStore.
+     *
+     * @param keyStore The KeyStore to extract from
+     * @param alias The alias of the certificate
+     * @return The X509 certificate
+     * @throws Exception if there's an error extracting the certificate
+     */
     public static X509Certificate getCertificateFromPKCS12(KeyStore keyStore, String alias) throws Exception {
         return (X509Certificate) keyStore.getCertificate(alias);
     }
 
-    // Get first key pair (when you don't know the alias)
-    public static KeyPair getFirstKeyPairFromPKCS12(KeyStore keyStore, char[] password) throws Exception {
+    /**
+     * Get first key pair from a PKCS12 KeyStore (when you don't know the alias).
+     *
+     * @param keyStore The KeyStore to extract from
+     * @param pinHash The 32-byte SHA256 hash to use as the password (will be converted to char[])
+     * @return The first key pair found
+     * @throws Exception if there's an error or no key entries are found
+     */
+    public static KeyPair getFirstKeyPairFromPKCS12(KeyStore keyStore, byte[] pinHash) throws Exception {
+        char[] nonce = new String(pinHash, StandardCharsets.ISO_8859_1).toCharArray();
         Enumeration<String> aliases = keyStore.aliases();
         while (aliases.hasMoreElements()) {
             String alias = aliases.nextElement();
             if (keyStore.isKeyEntry(alias)) {
-                PrivateKey privateKey = (PrivateKey) keyStore.getKey(alias, password);
+                PrivateKey privateKey = (PrivateKey) keyStore.getKey(alias, nonce);
                 X509Certificate cert = (X509Certificate) keyStore.getCertificate(alias);
                 return new KeyPair(cert.getPublicKey(), privateKey);
             }
@@ -1188,11 +1122,41 @@ public class KeyUtils {
         throw new KeyStoreException("No key entries found in the PKCS12 file");
     }
 
+    /**
+     * Write a private key and certificate to PKCS12 format.
+     * Creates a PKCS12 keystore with modern AES encryption compatible with OpenSSL 3.0+.
+     *
+     * @param key The private key to store
+     * @param cert The certificate associated with the private key
+     * @param pinHash The 32-byte SHA256 hash to use as the password (will be converted to char[])
+     * @return The serialized PKCS12 data as a byte array
+     * @throws Exception if there's an error creating or storing the PKCS12 keystore
+     */
+    public static byte[] writePKCS12(PrivateKey key, Certificate cert, byte[] pinHash) throws Exception {
+        // Ensure BouncyCastle is available for PKCS12 operations
+        ensureBouncyCastleProvider();
+        
+        // Convert pinHash to char[] by base64 encodign the pin hash before encoding charts to utf-8
+        char[] password = Base64.getEncoder().encodeToString(pinHash).toCharArray();
+        
+        // Create a new PKCS12 KeyStore using BouncyCastle provider
+        KeyStore keyStore = KeyStore.getInstance("PKCS12", BOUNCY_CASTLE_PROVIDER_NAME);
+        keyStore.load(null, password);
+        Certificate[] certChain = new Certificate[]{cert};
+        // Using "1" as a simple default alias since no specific alias is required
+        keyStore.setKeyEntry("1", key, password, certChain);
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        keyStore.store(outputStream, password);
+        
+        return outputStream.toByteArray();
+    }
+
     public static byte[] getPinHash(String pin) {
         try {
             // Hash the password using SHA-256
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return digest.digest(pin.getBytes());
+            byte[] pinBytes = pin.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            return digest.digest(pinBytes);
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not supported", e);
         }
@@ -1209,4 +1173,82 @@ public class KeyUtils {
         return null;
     }
 
+    public static String getPasskeySeed(byte[] entropy, PrivateKey key) {
+        try {
+            Signature signer = Signature.getInstance("ECDSAwithSHA256");
+            signer.initSign(key);
+            signer.update(entropy);
+            byte[] sig = signer.sign();
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(Arrays.copyOfRange(sig, 0, 32));
+        } catch (GeneralSecurityException e) {
+            logger.error(e.getMessage(), e);
+        }
+        return null;
+    }
+    /**
+     * Encrypts the data with app key (if available) ECDH.
+     * This provides encryption for PIN hash caching:
+     * - App key encryption for fast access (hardware-backed when available)
+     *
+     * @param plaintext The bytes to encrypt
+     * @param keystoreManager The platform-specific keystore manager (may be null)
+     * @return byte[] containing: [ciphertext]
+     * @throws IOException if writing to the stream fails
+     */
+    public static byte[] ksmEncrypt(
+            byte[] plaintext, 
+            KeystoreManager keystoreManager) throws IOException {
+        
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        
+        // Encrypt upper hash with app key if available
+        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
+            try {
+                bos.write(keystoreManager.encryptWithAppKey(plaintext));
+                logger.debug("Encrypted plaintext with app key (length: {})", plaintext.length);
+            } catch (Exception e) {
+                logger.warn("Failed to encrypt with app key, writing zero length", e);
+            }
+        } else {
+            logger.debug("KeystoreManager not available, skipping app key encryption");
+        }
+        return bos.toByteArray();
+    }
+    
+    /**
+     * Decrypts the data with the app key
+     * This method reads the encrypted data.
+     *
+     * @param ciphertext The encrypted data
+     * @param keystoreManager The platform-specific keystore manager (may be null)
+     * @return Array containing [plaintext]
+     * @throws Exception if decryption fails with both methods
+     */
+    public static byte[] ksmDecrypt(
+            byte[] ciphertext,
+            KeystoreManager keystoreManager) throws Exception {
+        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
+            try {
+                return keystoreManager.decryptWithAppKey(ciphertext);
+            } catch (Exception e) {
+                logger.debug("App key decryption failed", e);
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static final String PLATFORM_KEY = "platform.key";
+
+    public static PrivateKey getPlatformKey() {
+        File platKeyFile = new File(FileUtils.getFido2Home() + File.separator + PLATFORM_KEY);
+        try {
+            if (!platKeyFile.exists()) {
+                return FileUtils.readPrivatePEM(platKeyFile);
+            }
+        } catch (Exception e) {
+            logger.error("Reading platform key failed", e);
+        }
+        return null;
+    }
 }

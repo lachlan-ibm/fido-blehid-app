@@ -431,6 +431,8 @@ public class Cbor {
 
   private static Object loadSimple(byte additionalInfo, ByteBuffer buf) {
     switch (additionalInfo) {
+      case 0:  // Handle simple value 0 (unassigned in IANA registry but valid)
+        return 0;  // Return 0 as a simple value
       case 20:
         return false;
       case 21:

@@ -2,6 +2,7 @@
  * Copyright IBM 2025
  */
 apply plugin: 'java-library'
+apply plugin: 'jacoco'  // Add JaCoCo plugin
 
 // Apply the copyright hook
 apply from: '../copyright-hook.gradle'
@@ -34,7 +35,8 @@ sourceSets {
 dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.0'
     implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.18.1'
-    implementation 'org.slf4j:slf4j-api:1.7.30'
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'org.slf4j:slf4j-simple:2.0.9'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.79'
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.79'
     implementation 'com.macasaet.fernet:fernet-java8:1.4.2'
@@ -70,7 +72,46 @@ test {
     useJUnitPlatform()
     testLogging {
         events "passed", "skipped", "failed"
+        showStandardStreams = true  // Show stdout and stderr
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+        exceptionFormat = 'full'
     }
+    // Force test output synchronization
+    systemProperty "org.slf4j.simpleLogger.logFile", "System.err"
+    
+    // Set default log level to debug for all classes
+    systemProperty "org.slf4j.simpleLogger.defaultLogLevel", "debug"
+    
+    // Set log level for specific packages if needed
+    systemProperty "org.slf4j.simpleLogger.log.com.isfs.blekey", "debug"
+}
+
+// JaCoCo configuration
+jacoco {
+    toolVersion = "0.8.11" 
+}
+
+// Configure JaCoCo test report
+jacocoTestReport {
+    dependsOn test
+    
+    reports {
+        xml.required = true  // Generate XML report for CI tools
+        csv.required = false
+        html.required = true  // Generate HTML report for human readability
+    }
+
+    sourceDirectories.setFrom(files(sourceSets.main.java.srcDirs))
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs))
+    executionData.setFrom(files("${buildDir}/jacoco/test.exec"))
+}
+
+// Create a task to run tests with coverage
+task testWithCoverage(dependsOn: [test, jacocoTestReport]) {
+    group = 'Verification'
+    description = 'Runs tests and generates coverage reports'
 }
 
 // JavaDoc configuration

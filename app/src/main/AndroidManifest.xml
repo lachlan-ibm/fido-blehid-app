@@ -5,45 +5,63 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Bluetooth permissions -->
-    <uses-permission android:name="android.permission.BLUETOOTH" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <!-- uses-permission android:name="android.permission.BLUETOOTH" -->
+    <!-- uses-permission android:name="android.permission.BLUETOOTH_ADMIN" -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"-->
+    <!-- uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" -->
     <!-- Noitification permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/test_icon"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_launcher"
+        android:roundIcon="@mipmap/test_icon_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
-        <activity android:name="com.isfs.blekey.MainActivity" android:exported="true">
+        <activity
+            android:name="com.isfs.blekey.MainActivity"
+            android:exported="true"
+            android:theme="@style/AppTheme.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Server Activity-->
+        <activity
+            android:name="com.isfs.blekey.activity.ServerActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
         
         <!-- Register PasskeyActivity -->
         <activity
             android:name="com.isfs.blekey.activity.PasskeyActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
             
         <!-- Register ManageActivity -->
         <activity
             android:name="com.isfs.blekey.activity.ManageActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
             
         <!-- Register ResidentCredentialsActivity -->
         <activity
             android:name="com.isfs.blekey.activity.ResidentCredentialsActivity"
-            android:exported="false" />
-
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
+            
+        <!-- Register CreatePasskeyActivity -->
+        <activity
+            android:name="com.isfs.blekey.activity.CreatePasskeyActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <!-- Notidy when a device connects to the app --> 
         <service
             android:name=".ForegroundNotificationService"
             android:exported="false"

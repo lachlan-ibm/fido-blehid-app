@@ -286,7 +286,7 @@ if __name__ == "__main__":
         String token = FernetKey.encrypt(testKey, data);
         System.err.println("Token: " + token);
         // Corrupt the token by changing a character
-        String corruptedToken = token.substring(0, token.length() - 1) + "X";
+        String corruptedToken = token.substring(0, token.length() - 3) + "ZYX";
         System.err.println("Corrupted token: " + corruptedToken);
         // This should throw a SecurityException
         FernetKey.decrypt(testKey, corruptedToken);

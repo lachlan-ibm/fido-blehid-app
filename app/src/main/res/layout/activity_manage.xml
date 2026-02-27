@@ -3,125 +3,147 @@
  Copyright IBM 2025
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp">
+    android:orientation="vertical">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Available Passkeys"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="16dp" />
+    <!-- Include the custom toolbar -->
+    <include
+        android:id="@+id/toolbar_layout"
+        layout="@layout/toolbar_with_back" />
 
-    <!-- Passkeys list section -->
     <LinearLayout
-        android:id="@+id/passkeysListSection"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:orientation="vertical">
-
-        <ListView
-            android:id="@+id/passkeysListView"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-
-        <TextView
-            android:id="@+id/noPasskeysText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="No passkeys found on this device"
-            android:gravity="center"
-            android:visibility="gone"
-            android:layout_marginTop="16dp" />
-    </LinearLayout>
-
-    <!-- Password protection section (initially hidden) -->
-    <LinearLayout
-        android:id="@+id/passwordSection"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:orientation="vertical"
-        android:layout_marginTop="16dp"
-        android:visibility="gone">
-        
-        <TextView
-            android:id="@+id/credentialTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Unlock Passkey"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
+        android:padding="16dp">
 
         <TextView
-            android:id="@+id/credentialInfo"
+            android:id="@+id/mainTitleText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:text="@string/available_passkeys"
+            android:textSize="18sp"
+            android:textStyle="bold"
             android:layout_marginBottom="16dp" />
-            
-        <TextView
+
+        <!-- Passkeys list section -->
+        <LinearLayout
+            android:id="@+id/passkeysListSection"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <ListView
+                android:id="@+id/passkeysListView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/noPasskeysText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/no_passkeys_on_device"
+                android:gravity="center"
+                android:visibility="gone"
+                android:layout_marginTop="16dp" />
+        </LinearLayout>
+
+        <!-- Password protection section (initially hidden) -->
+        <LinearLayout
+            android:id="@+id/passwordSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Enter Password to Unlock"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
+            android:orientation="vertical"
+            android:layout_marginTop="16dp"
+            android:visibility="gone">
             
-        <EditText
-            android:id="@+id/passwordInput"
+            <TextView
+                android:id="@+id/credentialTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/unlock_passkey"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:id="@+id/credentialInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp" />
+                
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/prompt_for_password"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
+                
+            <EditText
+                android:id="@+id/passwordInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"
+                android:hint="Password"
+                android:layout_marginBottom="8dp" />
+                
+            <Button
+                android:id="@+id/unlockButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Unlock" />
+                
+            <TextView
+                android:id="@+id/passwordError"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#FF0000"
+                android:visibility="gone"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+
+        <!-- Credential options section (initially visible) -->
+        <LinearLayout
+            android:id="@+id/credentialOptionsSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:inputType="textPassword"
-            android:hint="Password"
-            android:layout_marginBottom="8dp" />
-            
-        <Button
-            android:id="@+id/unlockButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Unlock" />
-            
-        <TextView
-            android:id="@+id/passwordError"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textColor="#FF0000"
-            android:visibility="gone"
-            android:layout_marginTop="8dp" />
+            android:orientation="vertical"
+            android:visibility="visible">
+
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
+
+                <Button
+                    android:id="@+id/deleteButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/delete"
+                    android:layout_marginEnd="4dp" />
+
+                <Button
+                    android:id="@+id/manageButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/manage"
+                    android:layout_marginStart="4dp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/createCredential"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/create_passkey" />
+        </LinearLayout>
     </LinearLayout>
-
-    <!-- Credential options section (initially hidden) -->
-    <LinearLayout
-        android:id="@+id/credentialOptionsSection"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:visibility="gone">
-        
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Credential Options"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
-
-        <Button
-            android:id="@+id/updateButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Update Credential"
-            android:layout_marginBottom="8dp" />
-
-        <Button
-            android:id="@+id/deleteButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Delete Credential" />
-    </LinearLayout>
-
 </LinearLayout>
 
 <!-- Made with Bob -->

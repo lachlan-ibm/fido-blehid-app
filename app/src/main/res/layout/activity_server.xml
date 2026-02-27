@@ -3,10 +3,24 @@
  Copyright IBM 2025
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:background="@android:color/white">
+
+    <!-- Include the custom toolbar -->
+    <include
+        layout="@layout/toolbar_with_back"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:background="@android:color/white">
 
     <!-- Server Status Section -->
     <LinearLayout
@@ -21,7 +35,7 @@
             android:id="@+id/serverStatusTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="BLE HID Server Status"
+            android:text="@string/ble_server_status"
             android:textSize="18sp"
             android:textStyle="bold"
             android:layout_marginBottom="8dp" />
@@ -30,14 +44,14 @@
             android:id="@+id/serverStatusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Server is advertising..."
+            android:text="@string/ble_server_status_text"
             android:textColor="#4CAF50" />
 
         <TextView
             android:id="@+id/deviceNameText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Device Name: IBleKey HID Passkey"
+            android:text="Device Name: IBleKey"
             android:layout_marginTop="4dp" />
     </LinearLayout>
 
@@ -46,7 +60,7 @@
         android:id="@+id/connectedDevicesTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Connected Devices"
+        android:text="@string/connected_devices"
         android:textSize="16sp"
         android:textStyle="bold"
         android:layout_marginBottom="8dp" />
@@ -55,7 +69,7 @@
         android:id="@+id/noDevicesText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="No devices connected"
+        android:text="@string/no_devices_connected"
         android:textAlignment="center"
         android:visibility="visible"
         android:layout_marginBottom="16dp" />
@@ -123,6 +137,7 @@
             android:layout_height="wrap_content"
             android:text="Cancel"
             android:layout_marginTop="8dp" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Activity Log Section -->

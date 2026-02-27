@@ -1,15 +1,7 @@
 /*
  * Copyright IBM 2025
  */
-/*IBM Confidential
-* OCO Source Materials
-* 5725-V89 5725-V90
-*
-* Copyright IBM Corp. 2025
-*
-* The source code for this program is not published or otherwise divested of its trade secrets,
-* irrespective of what has been deposited with the U.S. Copyright Office.
-*/
+
 
 package com.isfs.blekey.hidsvc;
 
@@ -27,7 +19,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.content.Context;
 import android.os.Handler;
 import android.os.ParcelUuid;
@@ -52,22 +43,23 @@ import android.bluetooth.le.AdvertiseSettings;
 import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.pm.PackageManager;
 import android.util.Log;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.isfs.blekey.R;
+import com.isfs.blekey.activity.ServerActivity;
 import com.isfs.blekey.util.BleUtils;
 
 
 public class HIDService {
 
-    private static final String TAG = HIDService.class.getSimpleName();
+    private static final String TAG = HIDService.class.getCanonicalName();
 
     private String manufacturer = "lowkey";
-    private String deviceName = "IBeePasskey";
+    private String deviceName = "IBleKey";
     private String serialNumber = "13371337";
 
     private final Context applicationContext;
@@ -116,10 +108,13 @@ public class HIDService {
     private static final byte[] EMPTY_BYTES = {};
     private static final byte[] RESPONSE_HID_INFORMATION = {0x11, 0x01, 0x00, 0x03};
 
-    public HIDService(final Context context) throws UnsupportedOperationException {
+    public HIDService(final Context context, boolean bToothConnect, boolean bToothAdvertise) throws UnsupportedOperationException {
         applicationContext = context.getApplicationContext();
-        if(!askForPermissions(applicationContext)) {
-            throw new UnsupportedOperationException("Not allowed to access bluetooth device.");
+        if(!bToothConnect || !bToothAdvertise) {
+            Log.e(TAG, "Bluetooth is not available/permitted...back to main");
+            ServerActivity sa = (ServerActivity) context;
+            Toast.makeText(sa, sa.getString(R.string.ble_perip_not_supported), Toast.LENGTH_SHORT).show();
+            sa.finish();
         }
         handler = new Handler(applicationContext.getMainLooper());
 
@@ -172,7 +167,7 @@ public class HIDService {
                             final Set<BluetoothDevice> devices = getDevices();
                             for (final BluetoothDevice device : devices) {
                                 try {
-                                    if (gattServer != null && checkBleConPem()) {
+                                    if (gattServer != null && isPermitBToothConnect()) {
                                         gattServer.notifyCharacteristicChanged(device, inputReportCharacteristic, false, polled);
                                     }
                                 } catch (final Throwable t) {
@@ -190,7 +185,7 @@ public class HIDService {
     }
 
     // Check for BLUETOOTH_CONNECT permission
-    private boolean checkBleConPem() {
+    private boolean isPermitBToothConnect() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(applicationContext, android.Manifest.permission.BLUETOOTH_CONNECT)
                     == PackageManager.PERMISSION_GRANTED) {
@@ -202,32 +197,21 @@ public class HIDService {
         }
         return true;
     }
-
-    private boolean askForPermissions(Context context) {
-        AppCompatActivity activity = (AppCompatActivity) context;
-        boolean allGranted = true;
-        String[] permissions = new String[] {
-            "android.permission.POST_NOTIFICATIONS",
-            "android.permission.ACCESS_COARSE_LOCATION",
-            "android.permission.ACCESS_FINE_LOCATION",
-            "android.permission.BLUETOOTH",
-            "android.permission.BLUETOOTH_ADVERTISE",
-            "android.permission.BLUETOOTH_CONNECT",
-            "android.permission.BLUETOOTH_ADMIN",
-            "android.permission.BLUETOOTH_SCAN"
-        };
-        for (String permission: permissions) {
-            if (ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(activity, new String[]{permission}, 1);
+    
+    // Check for BLUETOOTH_ADVERTISE permission
+    private boolean isPermitBToothAdvert() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(applicationContext, android.Manifest.permission.BLUETOOTH_ADVERTISE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                return true;
+            } else {
+                Log.e(TAG, "BLUETOOTH_ADVERTISE permission not granted");
             }
+            return false;
         }
-        for (String permission: permissions) {
-            if (ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED) {
-                allGranted = false;
-            }
-        }
-        return allGranted;
+        return true;
     }
+
 
     /**
      * Add GATT service to gattServer
@@ -240,7 +224,7 @@ public class HIDService {
         boolean serviceAdded = false;
         while (!serviceAdded) {
             try {
-                if(checkBleConPem()) {
+                if(isPermitBToothConnect()) {
                     serviceAdded = gattServer.addService(service);
                 }
             } catch (final Exception e) {
@@ -300,9 +284,7 @@ public class HIDService {
         return service;
     }
 
-    private BluetoothGattService setUpHidService() {
-        final BluetoothGattService service = new BluetoothGattService(SERVICE_BLE_HID, BluetoothGattService.SERVICE_TYPE_PRIMARY);
-
+    private void _addBaseServices(BluetoothGattService service) {
         // HID Information
         {
             final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(
@@ -344,57 +326,69 @@ public class HIDService {
 
             while (!service.addCharacteristic(characteristic));
         }
+    }
 
+    private void _addInputDescriptor(BluetoothGattService service) {
         // Input Report
-        {
-            inputReportCharacteristic = new BluetoothGattCharacteristic(
-                    CHARACTERISTIC_REPORT,
-                    BluetoothGattCharacteristic.PROPERTY_NOTIFY | BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE,
-                    BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED | BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED);
+        inputReportCharacteristic = new BluetoothGattCharacteristic(
+                CHARACTERISTIC_REPORT,
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY | BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE,
+                BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED | BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED);
 
-            final BluetoothGattDescriptor clientCharacteristicConfigurationDescriptor = new BluetoothGattDescriptor(
-                    DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION,
-                    BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED); //  | BluetoothGattDescriptor.PERMISSION_WRITE
-            // Note: As per Android issue #280288203, we should not set values directly on descriptors
-            // Instead, we'll provide the value when responding to descriptor read requests
-            inputReportCharacteristic.addDescriptor(clientCharacteristicConfigurationDescriptor);
+        final BluetoothGattDescriptor clientCharacteristicConfigurationDescriptor = new BluetoothGattDescriptor(
+                DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION,
+                BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED); //  | BluetoothGattDescriptor.PERMISSION_WRITE
+        // Note: As per Android issue #280288203, we should not set values directly on descriptors
+        // Instead, we'll provide the value when responding to descriptor read requests
+        inputReportCharacteristic.addDescriptor(clientCharacteristicConfigurationDescriptor);
 
-            final BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
-                    DESCRIPTOR_REPORT_REFERENCE,
-                    BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED);
-            inputReportCharacteristic.addDescriptor(descriptor);
+        final BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
+                DESCRIPTOR_REPORT_REFERENCE,
+                BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED);
+        inputReportCharacteristic.addDescriptor(descriptor);
 
-            while (!service.addCharacteristic(inputReportCharacteristic));
-        }
+        while (!service.addCharacteristic(inputReportCharacteristic));
+    }
 
+    private void _addOutputDescriptor(BluetoothGattService service) {
         // Output Report
-        {
-            outputReportCharacteristic = new BluetoothGattCharacteristic(
-                    CHARACTERISTIC_REPORT,
-                    BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
-                    BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED | BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED);
-            outputReportCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+        outputReportCharacteristic = new BluetoothGattCharacteristic(
+                CHARACTERISTIC_REPORT,
+                BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+                BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED | BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED);
+        outputReportCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
 
-            final BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
-                    DESCRIPTOR_REPORT_REFERENCE,
-                    BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED);
-            outputReportCharacteristic.addDescriptor(descriptor);
-            while (!service.addCharacteristic(outputReportCharacteristic));
-        }
+        final BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
+                DESCRIPTOR_REPORT_REFERENCE,
+                BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED);
+        outputReportCharacteristic.addDescriptor(descriptor);
+        while (!service.addCharacteristic(outputReportCharacteristic));
+    }
 
+    private void _addFeatureDescriptor(BluetoothGattService service) {
         // Feature Report
-        {
-            final BluetoothGattCharacteristic featureCharacteristic = new BluetoothGattCharacteristic(
-                    CHARACTERISTIC_REPORT,
-                    BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE,
-                    BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED | BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED);
+        final BluetoothGattCharacteristic featureCharacteristic = new BluetoothGattCharacteristic(
+                CHARACTERISTIC_REPORT,
+                BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE,
+                BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED | BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED);
 
-            final BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
-                    DESCRIPTOR_REPORT_REFERENCE,
-                    BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED);
-            featureCharacteristic.addDescriptor(descriptor);
-            while (!service.addCharacteristic(featureCharacteristic));
-        }
+        final BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
+                DESCRIPTOR_REPORT_REFERENCE,
+                BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED | BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED);
+        featureCharacteristic.addDescriptor(descriptor);
+        while (!service.addCharacteristic(featureCharacteristic));
+    }
+
+    private BluetoothGattService setUpHidService() {
+        final BluetoothGattService service = new BluetoothGattService(SERVICE_BLE_HID, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+
+        _addBaseServices(service);
+
+        _addInputDescriptor(service);
+
+        _addOutputDescriptor(service);
+
+        _addFeatureDescriptor(service);
 
         return service;
     }
@@ -426,27 +420,38 @@ public class HIDService {
                         .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                         .build();
 
-                // set up advertising data
+                // Minimize advertising data as much as possible - BLE has a strict 31-byte limit
                 final AdvertiseData advertiseData = new Builder()
                         .setIncludeTxPowerLevel(false)
-                        .setIncludeDeviceName(true)
-                        .addServiceUuid(ParcelUuid.fromString(SERVICE_DEVICE_INFORMATION.toString()))
+                        .setIncludeDeviceName(false) // Remove device name to reduce packet size
+                        // Only include the primary HID service UUID
                         .addServiceUuid(ParcelUuid.fromString(SERVICE_BLE_HID.toString()))
-                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BATTERY.toString()))
                         .build();
 
-                // set up scan result
+                // Put device name and other services in scan response
                 final AdvertiseData scanResult = new Builder()
+                        .setIncludeDeviceName(true) // Include device name in scan response instead
+                        // Include other service UUIDs in scan response
                         .addServiceUuid(ParcelUuid.fromString(SERVICE_DEVICE_INFORMATION.toString()))
-                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BLE_HID.toString()))
                         .addServiceUuid(ParcelUuid.fromString(SERVICE_BATTERY.toString()))
                         .build();
 
                 Log.d(TAG, "advertiseData: " + advertiseData + ", scanResult: " + scanResult);
-                if(checkBleConPem()) {
-                    bluetoothLeAdvertiser.startAdvertising(advertiseSettings, advertiseData, scanResult, advertiseCallback);
+                
+                // Check both BLUETOOTH_CONNECT and BLUETOOTH_ADVERTISE permissions
+                if(isPermitBToothConnect() && isPermitBToothAdvert()) {
+                    try {
+                        bluetoothLeAdvertiser.startAdvertising(advertiseSettings, advertiseData, scanResult, advertiseCallback);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Exception during startAdvertising: " + e.getMessage(), e);
+                    }
                 } else {
-                    Log.d(TAG, "Do not have BLUETOOTH_CONNECT permission.");
+                    if (!isPermitBToothConnect()) {
+                        Log.e(TAG, "Do not have BLUETOOTH_CONNECT permission.");
+                    }
+                    if (!isPermitBToothAdvert()) {
+                        Log.e(TAG, "Do not have BLUETOOTH_ADVERTISE permission.");
+                    }
                 }
             }
         });
@@ -460,7 +465,7 @@ public class HIDService {
         handler.post(new Runnable() {
             @Override
             public void run() {
-                if(checkBleConPem()) {
+                if(isPermitBToothConnect()) {
                     try {
                         bluetoothLeAdvertiser.stopAdvertising(advertiseCallback);
                     } catch (final IllegalStateException ignored) {
@@ -486,12 +491,37 @@ public class HIDService {
     }
 
     /**
-     * Callback for BLE connection<br />
-     * nothing to do.
+     * Callback for BLE advertising to provide detailed error information
      */
-    private final AdvertiseCallback advertiseCallback = new NullAdvertiseCallback();
-    private static class NullAdvertiseCallback extends AdvertiseCallback {
-    }
+    private final AdvertiseCallback advertiseCallback = new AdvertiseCallback() {
+        @Override
+        public void onStartSuccess(AdvertiseSettings settingsInEffect) {
+            Log.d(TAG, "Advertising started successfully");
+        }
+
+        @Override
+        public void onStartFailure(int errorCode) {
+            String errorMessage = "Unknown error";
+            switch (errorCode) {
+                case ADVERTISE_FAILED_ALREADY_STARTED:
+                    errorMessage = "Already started";
+                    break;
+                case ADVERTISE_FAILED_DATA_TOO_LARGE:
+                    errorMessage = "Data too large";
+                    break;
+                case ADVERTISE_FAILED_FEATURE_UNSUPPORTED:
+                    errorMessage = "Feature unsupported";
+                    break;
+                case ADVERTISE_FAILED_INTERNAL_ERROR:
+                    errorMessage = "Internal error";
+                    break;
+                case ADVERTISE_FAILED_TOO_MANY_ADVERTISERS:
+                    errorMessage = "Too many advertisers";
+                    break;
+            }
+            Log.e(TAG, "Failed to start advertising: " + errorMessage + " (code " + errorCode + ")");
+        }
+    };
 
     /**
      * Obtains connected Bluetooth devices
@@ -901,24 +931,5 @@ public class HIDService {
         return bluetoothAdapter.isEnabled();
     }
 
-    /**
-     * Request code for bluetooth enabling
-     */
-    public static final int REQUEST_CODE_BLUETOOTH_ENABLE = 0xb1e;
 
-    /**
-     * Enables bluetooth function.<br />
-     * the Activity may implement the `onActivityResult` method with the request code `REQUEST_CODE_BLUETOOTH_ENABLE`.
-     *
-     * @param activity the activity
-     */
-    @SuppressLint("MissingPermission")
-    public static void enableBluetooth(@NonNull final Activity activity) {
-        try {
-            activity.startActivityForResult(
-                    new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), REQUEST_CODE_BLUETOOTH_ENABLE);
-        } catch (SecurityException e) {
-            Log.d(TAG, "did not get permission to use bluetooth.");
-        }
-    }
 }

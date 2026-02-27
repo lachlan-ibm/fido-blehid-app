@@ -1,35 +1,32 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.data;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.lang.reflect.Field;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.FileSystems;
 import java.security.KeyPair;
+import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.SecureRandom;
+import java.security.Security;
 import java.security.cert.X509Certificate;
+import java.security.interfaces.ECPrivateKey;
+import java.security.interfaces.ECPublicKey;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
-import java.util.Set;
 import java.security.NoSuchAlgorithmException;
 
-import javax.crypto.Cipher;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
-
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +34,7 @@ import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.Cbor;
+import com.isfs.blekey.util.KeystoreManager;
 
 /**
  * Represents a FIDO2 passkey with secure storage capabilities.
@@ -45,33 +43,45 @@ import com.isfs.blekey.util.Cbor;
  *
  * 1. PIN Hash Splitting:
  *    - The 32-byte PIN hash is split into two 16-byte parts: upperHash and lowerHash
- *    - Only the lowerHash is required to start the decryption process
- *    - The upperHash is stored securely in the encrypted header
+ *    - Only the lowerHash (first 16 bytes) is required from the user for decryption
+ *    - The upperHash (last 16 bytes) is cached in the encrypted header for PIN auth protocol
  *
- * 2. File Structure:
- *    - Header length (4 bytes): Size of the encrypted header
- *    - Encrypted header: Contains upperHash, IV, and authentication tag for the data section
- *    - Encrypted data: Contains the CBOR-encoded passkey information
+ * 2. File Structure (in order):
+ *    - Header (230 bytes): Encrypted upperHash using ECDH with platform public key or KSM
+ *    - Length prefix (4 bytes, little-endian): Length of PKCS12 data
+ *    - PKCS12 data (variable): Contains passkey private key and X.509 certificate, encrypted with full PIN hash
+ *    - Resident credentials (variable): CBOR-encoded array of credentials, ECDH encrypted with passkey public key
+ *      Each credential contains: {"cred.id": bytes, "user.id": bytes, "rp.id": bytes}
  *
- * 3. Encryption Layers:
- *    - Layer 1: The header is encrypted using ECDH with a root public key
- *      * The header contains: upperHash, IV for data encryption, and authentication tag
- *    - Layer 2: The passkey data is encrypted using AES-GCM with the full PIN hash
- *      * The data contains: private key, X509 certificate, seed, and resident credentials
+ * 3. Encryption Process (writeKey):
+ *    - Split PIN hash into upperHash and lowerHash
+ *    - Encrypt upperHash with KSM (if available) or ECDH with platform public key -> header
+ *    - Serialize passkey (private key + certificate) to PKCS12 using full PIN hash
+ *    - ECDH encrypt resident credentials using passkey's public key
+ *    - Write: [header][length][PKCS12 data][encrypted resident credentials]
  *
- * 4. Decryption Process:
- *    - The lowerHash is provided by the user (from PIN entry)
- *    - The header is decrypted using the root private key
- *    - The upperHash is extracted from the header and verified
- *    - The full PIN hash is reconstructed by combining upperHash and lowerHash
- *    - The passkey data is decrypted using the full PIN hash
+ * 4. Decryption Process (readKey):
+ *    - User provides lowerHash (16 bytes) or full PIN hash (32 bytes)
+ *    - Read header and decrypt with KSM or platform private key -> upperHash
+ *    - Read length prefix (little-endian) to determine PKCS12 data size
+ *    - Reconstruct full PIN hash: [lowerHash][upperHash] (if only lowerHash provided)
+ *    - Decrypt PKCS12 data using full PIN hash -> passkey private key and certificate
+ *    - ECDH decrypt resident credentials using passkey's private key
+ *    - Decode CBOR to get list of resident credentials
  *
- * 5. Root Key Pair:
- *    - A persistent EC key pair used for ECDH encryption/decryption of the header
- *    - Loaded from a PKCS8 file in FIDO2_HOME directory, default is $FIDO2_HOME/platform.key
+ * 5. Platform Key Pair:
+ *    - A persistent EC key pair used for ECDH encryption/decryption of the cached upperHash
+ *    - Loaded from PKCS8 file in FIDO2_HOME directory (default: $FIDO2_HOME/platform.key)
+ *    - Generated automatically if not found
+ *    - Can be password-protected (optional)
  *
- * This approach provides strong security through multiple encryption layers and
- * PIN verification, while only requiring the user to provide half of the PIN hash.
+ * 6. Keystore Manager (KSM):
+ *    - Platform-specific secure storage (e.g., Android Keystore, iOS Keychain)
+ *    - Used as primary encryption method for upperHash if available
+ *    - Falls back to ECDH with platform key pair if KSM unavailable
+ *
+ * This approach provides layered encryption and PIN verification while only requiring
+ * the user to provide half of the PIN hash (lowerHash) for authentication.
  */
 public class Passkey {
 
@@ -89,12 +99,12 @@ public class Passkey {
      * List of resident credentials associated with this passkey.
      * Each credential is a map from relying party ID to credential data.
      */
-    private Map<byte[], Map<String, Object>> resCreds;
-    
+    private List<Map<String, byte[]>> resCreds;
+
     /**
-     * Seed value used for key derivation.
+     * The file name of this passkey (without path).
      */
-    private byte[] seed;
+    private String fileName;
 
     /**
      * Logger for debugging and error reporting.
@@ -102,27 +112,24 @@ public class Passkey {
     private static final Logger logger = LoggerFactory.getLogger(Passkey.class);
     
     /**
-     * Constants for cryptographic parameters
+     * Constants for ecdh encrypt pin hash operations
      */
-    private static final int IV_SIZE = 16;
-    private static final int TAG_SIZE = 16;
-    private static final int GCM_TAG_BIT_LENGTH = 128;
-    private static final int AES_KEY_SIZE = 32; // 256 bits
-    private static final int MIN_FILE_SIZE = IV_SIZE + TAG_SIZE;
-    private static final String AES_ALGORITHM = "AES";
-    private static final String CIPHER_TRANSFORMATION = "AES/GCM/NoPadding";
+    private static final int HEADER_SIZE = 230;
     
     /**
      * Default names for file objects
      */
     private static final String PLATFORM_KEY = "platform.key";
     private static final String DEFAULT_PASSKEY = "default.passkey";
-
+    
     /**
-     * Constants for PIN hash splitting
+     * Constants for key generation
      */
-    private static final int PIN_HASH_SIZE = 32; // 256 bits
-    private static final int HALF_HASH = PIN_HASH_SIZE / 2; // Client exchange limit
+    private static final String KEY_ALGORITHM = "ECDSA";
+    private static final int KEY_SIZE = 256;
+
+    private static final int PIN_HASH_SIZE = 32;
+    private static final int HALF_HASH = PIN_HASH_SIZE / 2;
     
     /**
      * Root key for ECDH encryption/decryption
@@ -130,6 +137,32 @@ public class Passkey {
      */
     private static PublicKey rootPublicKey;
     private static PrivateKey rootPrivateKey;
+    
+    /**
+     * Platform-specific keystore manager for app key encryption
+     * This should be set during application initialization
+     */
+    private static KeystoreManager keystoreManager;
+    
+    /**
+     * Sets the platform-specific keystore manager.
+     * This should be called during application initialization before any passkey operations.
+     *
+     * @param manager The KeystoreManager implementation for the current platform
+     */
+    public static void setKeystoreManager(KeystoreManager manager) {
+        keystoreManager = manager;
+        logger.info("KeystoreManager set: {}", manager != null ? manager.getClass().getSimpleName() : "null");
+    }
+    
+    /**
+     * Gets the current keystore manager.
+     *
+     * @return The current KeystoreManager instance, or null if not set
+     */
+    public static KeystoreManager getKeystoreManager() {
+        return keystoreManager;
+    }
     
     /**
      * Initialize the root key pair from a PKCS8 file containing an EC private key
@@ -142,8 +175,7 @@ public class Passkey {
     public static boolean initRootKeyPair(String pkcs8File, String password) {
         try {
             // Read the private key from the PKCS8 file with optional password
-            PrivateKey privateKey = KeyUtils.readPrivate(pkcs8File, (password == null) ?
-                                                                            new char[] {} : password.toCharArray());
+            PrivateKey privateKey = FileUtils.readPrivatePEM(new File(pkcs8File), password);
             
             // Verify it's an EC private key
             if (!(privateKey instanceof java.security.interfaces.ECPrivateKey)) {
@@ -167,34 +199,95 @@ public class Passkey {
     }
     
     /**
-     * Ensures a root key pair is available for ECDH encryption/decryption
+     * Ensures a root key pair is available for ECDH encryption/decryption.
      * Tries to read from the specified PKCS8 file first, falls back to default location,
-     * and finally throws an exception if no key can be loaded
+     * and finally throws an exception if no key can be loaded.
      *
      * @param keyPath Path to the PKCS8 file, or null to use the default location
      * @param password Password for the encrypted PKCS8 file, or null if the file is not encrypted
      */
-    private static void ensureRootKeyPair(String keyPath, String password) {
+    public static void ensureRootKeyPair(String keyPath, String password) {
+        if (rootPublicKey != null && rootPrivateKey != null) {
+            return; // Key pair already initialized
+        }
+        
+        // Resolve the key file path
+        String resolvedKeyPath = resolveKeyFilePath(keyPath);
+        File keyFile = new File(resolvedKeyPath);
+        
+        // Try to load existing key or generate a new one
+        if (keyFile.exists()) {
+            loadExistingKey(resolvedKeyPath, password);
+        } else {
+            generateAndSaveNewKey(resolvedKeyPath);
+        }
+        
+        // Verify key was loaded or generated
         if (rootPublicKey == null || rootPrivateKey == null) {
-            boolean keyLoaded = false;
-            if(keyPath == null) {         
-                // If custom path wasn't provided, try the default location
-                keyPath = System.getProperty("FIDO2_HOME") + 
-                                            FileSystems.getDefault().getSeparator() + PLATFORM_KEY;   
+            throw new RuntimeException("Failed to read or generate platform key pair");
+        }
+    }
+    
+    /**
+     * Resolves the key file path, using the provided path or the default location.
+     *
+     * @param keyPath Custom key path or null for default
+     * @return The resolved key file path
+     */
+    private static String resolveKeyFilePath(String keyPath) {
+        if (keyPath != null) {
+            return keyPath;
+        }
+        
+        String fido2Home = FileUtils.getFido2Home();
+        if (fido2Home == null || fido2Home.isEmpty()) {
+            throw new RuntimeException("FIDO2_HOME environment variable or system property is not set");
+        }
+        
+        return fido2Home + FileSystems.getDefault().getSeparator() + PLATFORM_KEY;
+    }
+    
+    /**
+     * Loads an existing key from the specified path.
+     *
+     * @param keyPath Path to the key file
+     * @param password Password for the encrypted key file, or null if not encrypted
+     */
+    private static void loadExistingKey(String keyPath, String password) {
+        try {
+            boolean keyLoaded = initRootKeyPair(keyPath, password);
+            if (!keyLoaded) {
+                logger.warn("Failed to initialize root key pair from {}", keyPath);
             }
-            File keyFile = new File(keyPath);
-            if (keyFile.exists()) {
-                try {
-                    // Try to read the private key from the default location
-                    keyLoaded = initRootKeyPair(keyPath, password); // No password for default location
-                } catch (Exception e) {
-                    logger.warn("Failed to read platform key from {}", keyPath, e);
-                }
-            }
+        } catch (Exception e) {
+            logger.warn("Failed to read platform key from {}", keyPath, e);
+        }
+    }
+    
+    /**
+     * Generates a new key pair and saves it to the specified path.
+     *
+     * @param keyPath Path to save the new key
+     */
+    private static void generateAndSaveNewKey(String keyPath) {
+        try {
+            logger.info("Platform key not found, generating a new one at {}", keyPath);
             
-            if (!keyLoaded) { // Runtime exception if key loading failed
-                throw new RuntimeException("Failed to read platform key pair");
-            }
+            // Generate a new EC key pair
+            KeyPair keyPair = KeyUtils.generateKeyPair(KEY_ALGORITHM, KEY_SIZE);
+            File keyFile = new File(keyPath);
+            FileUtils.writePrivatePEM(keyPair.getPrivate(), keyFile);
+            
+            rootPublicKey = keyPair.getPublic();
+            rootPrivateKey = keyPair.getPrivate();
+            
+            logger.info("Generated and saved new platform key at: {}", keyPath);
+        } catch (IOException e) {
+            logger.error("Failed to write platform key to file: {}", keyPath, e);
+            throw new RuntimeException("Failed to write platform key to file: " + keyPath, e);
+        } catch (Exception e) {
+            logger.error("Failed to generate platform key", e);
+            throw new RuntimeException("Failed to generate platform key", e);
         }
     }
 
@@ -206,20 +299,13 @@ public class Passkey {
      * @param seed The seed value for key derivation
      * @param creds The list of resident credentials
      */
-    protected Passkey(PrivateKey key, X509Certificate cert, byte[] seed, Map<byte[], Map<String, Object>> creds) {
+    protected Passkey(PrivateKey key, X509Certificate cert, List<Map<String, byte[]>> creds) {
         this.pk = key;
         this.ca = cert;
         this.resCreds = creds;
-        this.seed = seed;
+        this.fileName = null;
     }
 
-    /**
-     * Creates a Passkey instance from an encrypted file.
-     *
-     * @param pkeyFile The encrypted passkey file
-     * @param pinHash The PIN hash used as the AES key
-     * @return A new Passkey instance, or null if decryption fails
-     */
     /**
      * Creates a Passkey instance from an encrypted file using the two-layer encryption scheme.
      *
@@ -235,6 +321,7 @@ public class Passkey {
      * @param lowerHash The lower half of the PIN hash used as the AES key
      * @return A new Passkey instance, or null if decryption fails
      */
+    @SuppressWarnings("unchecked")
     protected static Passkey readKey(File pkeyFile, byte[] lowerHash) {
         try {
             // Validate inputs
@@ -247,22 +334,39 @@ public class Passkey {
             if (!validateFileData(fileData)) {
                 return null;
             }
+
+            logger.debug("File size: {} bytes", fileData.length);
+            byte[] upperHashObf = Arrays.copyOfRange(fileData, 0, HEADER_SIZE);
+            byte[] cachedPinHash = keystoreManager.isKeystoreAvailable() ?
+                        KeyUtils.ksmDecrypt(upperHashObf, keystoreManager) : KeyUtils.ecdhDecrypt(upperHashObf, rootPrivateKey);
             
-            // Deserialize the file data into header and encrypted data
-            PasskeyFile passkeyFile = PasskeyFile.deserialize(fileData);
+            byte[] passkeyData = Arrays.copyOfRange(fileData, HEADER_SIZE, fileData.length);
             
-            // Decrypt the header using the root private key
-            PasskeyHeader header = decryptHeader(passkeyFile.encryptedHeader);
+            logger.debug("Header size: {}, Passkey data size: {}", HEADER_SIZE, passkeyData.length);
             
+            ByteBuffer buffer = ByteBuffer.wrap(Arrays.copyOfRange(passkeyData, 0, 4));
+            buffer.order(ByteOrder.LITTLE_ENDIAN);
+            int p12Len = buffer.getInt();
+            
+            logger.debug("PKCS12 length from file: {}", p12Len);
+            
+            if (p12Len < 0 || p12Len > passkeyData.length - 4) {
+                logger.error("Invalid PKCS12 length: {} (passkey data size: {})", p12Len, passkeyData.length);
+                return null;
+            }
+            
+            byte[] p12Bytes = Arrays.copyOfRange(passkeyData, 4, p12Len + 4);
+            byte[] encResCreds = Arrays.copyOfRange(passkeyData, p12Len + 4, passkeyData.length);
             // Reconstruct the full PIN hash
-            byte[] pinHash = combinePinHash(header.upperHash, lowerHash);
-            
-            // Decrypt the passkey data
-            byte[] cborBytes = decryptPasskeyData(header.passkeyIV, header.passkeyTag,
-                                                passkeyFile.encryptedData, pinHash);
-            
-            // Deserialize and create Passkey
-            return deserializePasskey(cborBytes);
+            byte[] pinHash = (lowerHash.length == 32) ? lowerHash : getCachedPinHash(cachedPinHash, lowerHash);
+            KeyStore pki = KeyUtils.readPKCS12(p12Bytes, pinHash);
+            PrivateKey key = (PrivateKey) pki.getKey("1", null);
+            X509Certificate cert = (X509Certificate) pki.getCertificate("1");
+            byte[] cborResCreds = KeyUtils.ecdhDecrypt(encResCreds, key);
+            List<Map<String, byte[]>> resCreds = (List<Map<String, byte[]>>) Cbor.decode(cborResCreds);
+            Passkey passkey = new Passkey(key, cert, resCreds);
+            passkey.fileName = pkeyFile.getName();
+            return passkey;
         } catch (Exception e) {
             logger.error("Error decrypting passkey", e);
             return null;
@@ -309,16 +413,16 @@ public class Passkey {
     /**
      * Combines upper and lower hash parts to reconstruct the full PIN hash.
      *
-     * @param upperHash The upper part of the PIN hash (16 bytes)
+     * @param encUpperHash The encrypted upper part of the PIN hash (280 bytes)
      * @param lowerHash The lower part of the PIN hash (16 bytes)
      * @return The full PIN hash (32 bytes)
      */
-    private static byte[] combinePinHash(byte[] upperHash, byte[] lowerHash) {
-        if (upperHash == null || upperHash.length != HALF_HASH ||
+    private static byte[] getCachedPinHash(byte[] upperHash, byte[] lowerHash) {
+        if (upperHash == null || upperHash.length != HEADER_SIZE ||
             lowerHash == null || lowerHash.length != HALF_HASH) {
-            throw new IllegalArgumentException("Upper and lower hash must each be exactly " +
-                                              HALF_HASH + " bytes");
-        }     
+            throw new IllegalArgumentException("Encrypted upper hash must be " + HEADER_SIZE +
+                                              " bytes and lower hash must be " + HALF_HASH + " bytes");
+        }
         byte[] pinHash = new byte[PIN_HASH_SIZE];
         System.arraycopy(lowerHash, 0, pinHash, 0, HALF_HASH);
         System.arraycopy(upperHash, 0, pinHash, HALF_HASH, HALF_HASH);
@@ -330,246 +434,22 @@ public class Passkey {
      * Validates the file data.
      */
     private static boolean validateFileData(byte[] fileData) {
-        if (fileData == null || fileData.length < MIN_FILE_SIZE) {
-            logger.error("Error reading passkey file: insufficient file bytes");
+        if (fileData == null || fileData.length < HEADER_SIZE) {
+            logger.error("Error reading passkey file: insufficient file bytes (expected at least {} bytes, got {})",
+                        HEADER_SIZE, fileData != null ? fileData.length : 0);
             return false;
         }
         return true;
     }
 
-    /**
-     * Container class for cryptographic data used in both encryption and decryption.
-     */
-    private static class CryptoData {
-        final byte[] iv;
-        final byte[] tag;
-        final byte[] encryptedData;
-        
-        // Constructor for read operations (from file)
-        CryptoData(byte[] iv, byte[] tag, byte[] encryptedData) {
-            this.iv = iv;
-            this.tag = tag;
-            this.encryptedData = encryptedData;
-        }
-    }
     
-    /**
-     * Container class for passkey header data.
-     */
-    private static class PasskeyHeader {
-        final byte[] upperHash;
-        final byte[] passkeyIV;
-        final byte[] passkeyTag;
-        
-        PasskeyHeader(byte[] upperHash, byte[] passkeyIV, byte[] passkeyTag) {
-            this.upperHash = upperHash;
-            this.passkeyIV = passkeyIV;
-            this.passkeyTag = passkeyTag;
-        }
-        
-        /**
-         * Serializes the header to a byte array.
-         * Format: [upperHash][passkeyIV][passkeyTag]
-         */
-        byte[] serialize() {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            try {
-                baos.write(upperHash);
-                baos.write(passkeyIV);
-                baos.write(passkeyTag);
-                return baos.toByteArray();
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to serialize passkey header", e);
-            }
-        }
-        
-        /**
-         * Deserializes a byte array into a PasskeyHeader.
-         */
-        static PasskeyHeader deserialize(byte[] headerBytes) {
-            if (headerBytes == null || headerBytes.length != HALF_HASH + IV_SIZE + TAG_SIZE) {
-                throw new IllegalArgumentException("Invalid header size");
-            }
-            
-            byte[] upperHash = new byte[HALF_HASH];
-            byte[] passkeyIV = new byte[IV_SIZE];
-            byte[] passkeyTag = new byte[TAG_SIZE];
-            
-            System.arraycopy(headerBytes, 0, upperHash, 0, HALF_HASH);
-            System.arraycopy(headerBytes, HALF_HASH, passkeyIV, 0, IV_SIZE);
-            System.arraycopy(headerBytes, HALF_HASH + IV_SIZE, passkeyTag, 0, TAG_SIZE);
-            
-            return new PasskeyHeader(upperHash, passkeyIV, passkeyTag);
-        }
-    }
-    
-    /**
-     * Container class for the complete passkey file structure.
-     */
-    private static class PasskeyFile {
-        final byte[] encryptedHeader;
-        final byte[] encryptedData;
-        
-        PasskeyFile(byte[] encryptedHeader, byte[] encryptedData) {
-            this.encryptedHeader = encryptedHeader;
-            this.encryptedData = encryptedData;
-        }
-        
-        /**
-         * Serializes the passkey file to a byte array.
-         * Format: [header length (4 bytes)][encrypted header][encrypted data]
-         */
-        byte[] serialize() {
-            ByteBuffer buffer = ByteBuffer.allocate(4 + encryptedHeader.length + encryptedData.length);
-            buffer.putInt(encryptedHeader.length);
-            buffer.put(encryptedHeader);
-            buffer.put(encryptedData);
-            return buffer.array();
-        }
-        
-        /**
-         * Deserializes a byte array into a PasskeyFile.
-         */
-        static PasskeyFile deserialize(byte[] fileBytes) {
-            if (fileBytes == null || fileBytes.length < 4) {
-                throw new IllegalArgumentException("Invalid file bytes");
-            }
-            
-            ByteBuffer buffer = ByteBuffer.wrap(fileBytes);
-            int headerLength = buffer.getInt();
-            
-            if (fileBytes.length < 4 + headerLength) {
-                throw new IllegalArgumentException("File bytes too short");
-            }
-            
-            byte[] encryptedHeader = new byte[headerLength];
-            buffer.get(encryptedHeader);
-            
-            byte[] encryptedData = new byte[fileBytes.length - 4 - headerLength];
-            buffer.get(encryptedData);
-            
-            return new PasskeyFile(encryptedHeader, encryptedData);
+    // Register BouncyCastle provider statically
+    static {
+        if (Security.getProvider("BC") == null) {
+            Security.addProvider(new BouncyCastleProvider());
         }
     }
 
-    /**
-     * Deserializes CBOR bytes into a Passkey object.
-     */
-    private static Passkey deserializePasskey(byte[] cborBytes) throws Exception {
-        @SuppressWarnings("unchecked")
-        HashMap<String, Object> pkey = (HashMap<String, Object>) Cbor.decode(cborBytes);
-        
-        // Validate that only expected keys are present
-        Set<String> expectedKeys = new HashSet<>(Arrays.asList("pk", "ca", "seed", "res_creds"));
-        for (String key : pkey.keySet()) {
-            if (!expectedKeys.contains(key)) {
-                logger.warn("Unexpected key in passkey CBOR data: " + key);
-            }
-        }
-        
-        // Validate that all required keys are present
-        for (String requiredKey : expectedKeys) {
-            if (!pkey.containsKey(requiredKey)) {
-                logger.error("Missing required key in passkey CBOR data: " + requiredKey);
-                throw new IllegalArgumentException("Missing required key in passkey CBOR data: " + requiredKey);
-            }
-        }
-        @SuppressWarnings("unchecked")
-        PrivateKey pk = KeyUtils.fromECPrivateKeyParameters((Map<String, Object>) pkey.get("pk"));
-        X509Certificate ca = (X509Certificate) CertUtils.readBytes((byte[]) pkey.get("ca"), "SHA256withECDSA");
-        byte[] seed = (byte[]) pkey.get("seed");
-        @SuppressWarnings("unchecked")
-        Map<byte[], Map<String, Object>> resCreds = (Map<byte[], Map<String, Object>>) pkey.get("res_creds");
-        
-        return new Passkey(pk, ca, seed, resCreds);
-    }
-    
-    /**
-     * Encrypts a passkey header using ECDH with the root public key.
-     *
-     * @param header The passkey header to encrypt
-     * @return The encrypted header bytes
-     */
-    private static byte[] encryptHeader(PasskeyHeader header) {
-        // Serialize the header
-        byte[] headerBytes = header.serialize();
-        
-        // Encrypt using ECDH with root public key
-        return KeyUtils.ecdhEncrypt(headerBytes, rootPublicKey);
-    }
-    
-    /**
-     * Decrypts a passkey header using ECDH with the root private key.
-     *
-     * @param encryptedHeader The encrypted header bytes
-     * @return The decrypted passkey header
-     */
-    private static PasskeyHeader decryptHeader(byte[] encryptedHeader) {
-        // Decrypt using ECDH with root private key
-        byte[] headerBytes = KeyUtils.ecdhDecrypt(encryptedHeader, rootPrivateKey);
-        
-        // Deserialize the header
-        return PasskeyHeader.deserialize(headerBytes);
-    }
-    
-    /**
-     * Encrypts passkey data using AES-GCM with the provided PIN hash.
-     *
-     * @param data The data to encrypt
-     * @param pinHash The PIN hash to use as the encryption key
-     * @return A CryptoData object containing the IV, encrypted data, and authentication tag
-     */
-    private static CryptoData encryptPasskeyData(byte[] data, byte[] pinHash) throws Exception {
-        // Generate random IV
-        SecureRandom secureRandom = new SecureRandom();
-        byte[] iv = new byte[IV_SIZE];
-        secureRandom.nextBytes(iv);
-        
-        // Create AES key from PIN hash
-        SecretKeySpec secretKeySpec = new SecretKeySpec(
-            Arrays.copyOf(pinHash, AES_KEY_SIZE), AES_ALGORITHM);
-        
-        // Initialize cipher for encryption
-        Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(GCM_TAG_BIT_LENGTH, iv);
-        cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, gcmParamSpec);
-        
-        // Encrypt the data
-        byte[] encryptedData = cipher.doFinal(data);
-        
-        // Extract the authentication tag
-        byte[] tag = extractGcmTag(cipher);
-        
-        return new CryptoData(iv, tag, encryptedData);
-    }
-    
-    /**
-     * Decrypts passkey data using AES-GCM with the provided PIN hash.
-     *
-     * @param iv The initialization vector
-     * @param tag The authentication tag
-     * @param encryptedData The encrypted data
-     * @param pinHash The PIN hash to use as the decryption key
-     * @return The decrypted data
-     */
-    private static byte[] decryptPasskeyData(byte[] iv, byte[] tag, byte[] encryptedData, byte[] pinHash) throws Exception {
-        // Create AES key from PIN hash
-        SecretKeySpec secretKeySpec = new SecretKeySpec(
-            Arrays.copyOf(pinHash, AES_KEY_SIZE), AES_ALGORITHM);
-        
-        // Initialize cipher for decryption
-        Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(GCM_TAG_BIT_LENGTH, iv);
-        cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, gcmParamSpec);
-        
-        // Combine encrypted data with tag for decryption
-        byte[] ciphertextWithTag = new byte[encryptedData.length + tag.length];
-        System.arraycopy(encryptedData, 0, ciphertextWithTag, 0, encryptedData.length);
-        System.arraycopy(tag, 0, ciphertextWithTag, encryptedData.length, tag.length);
-        
-        // Decrypt and return
-        return cipher.doFinal(ciphertextWithTag);
-    }
 
     /**
      * Writes a passkey to a file, encrypting it with the provided PIN hash using the two-layer encryption scheme.
@@ -599,23 +479,19 @@ public class Passkey {
             byte[] upperHash = hashParts[0];
             
             // Serialize passkey data to CBOR
-            byte[] cborData = serializePasskey(passkey);
+            byte[] passkeyData = serializePasskey(passkey, pinHash);
             
-            // Encrypt the passkey data using the full PIN hash
-            CryptoData encryptedPasskeyData = encryptPasskeyData(cborData, pinHash);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
             
-            // Create the passkey header
-            PasskeyHeader header = new PasskeyHeader(upperHash, encryptedPasskeyData.iv, encryptedPasskeyData.tag);
-            
-            // Encrypt the header using ECDH with the root public key
-            byte[] encryptedHeader = encryptHeader(header);
-            
-            // Create the passkey file structure
-            PasskeyFile passkeyFileData = new PasskeyFile(encryptedHeader, encryptedPasskeyData.encryptedData);
+            // Encrypt upper hash with app key if available, then with ECDH as fallback
+            byte[] pinHashCiphertext = keystoreManager.isKeystoreAvailable() ? 
+                        KeyUtils.ksmEncrypt(upperHash, keystoreManager) : KeyUtils.ecdhEncrypt(upperHash, rootPublicKey);
+            bos.write(pinHashCiphertext);
+            bos.write(passkeyData);
             
             // Write to file
             try (FileOutputStream fos = new FileOutputStream(passkeyFile)) {
-                fos.write(passkeyFileData.serialize());
+                fos.write(bos.toByteArray());
                 fos.flush();
                 return true;
             }
@@ -633,7 +509,7 @@ public class Passkey {
             logger.error("Passkey cannot be null");
             return false;
         }
-        if (pinHash == null || pinHash.length != AES_KEY_SIZE) {
+        if (pinHash == null || pinHash.length != PIN_HASH_SIZE) {
             logger.error("Invalid PIN hash provided");
             return false;
         }
@@ -643,79 +519,61 @@ public class Passkey {
     /**
      * Serializes a Passkey object to CBOR.
      */
-    private static byte[] serializePasskey(Passkey passkey) throws Exception {
+    private static byte[] serializePasskey(Passkey passkey, byte[] pinHash) throws Exception {
         // Validate that all required fields are available
         if (passkey.getPrivateKey() == null) {
             throw new IllegalArgumentException("Private key cannot be null");
         }
+        ECPrivateKey key = (ECPrivateKey) passkey.getPrivateKey();
         
         if (passkey.getCertificate() == null) {
             throw new IllegalArgumentException("Certificate cannot be null");
         }
-        
-        if (passkey.getSeed() == null) {
-            throw new IllegalArgumentException("Seed cannot be null");
-        }
-        
-        // Create a map with exactly the expected keys, in the same order as Python
-        LinkedHashMap<String, Object> passkeyMap = new LinkedHashMap<>();
-        passkeyMap.put("pk", KeyUtils.getECPrivateKeyParameters(passkey.getPrivateKey()));
-        passkeyMap.put("ca", passkey.getCertificate().getEncoded());
-        passkeyMap.put("seed", passkey.getSeed());
-        passkeyMap.put("res_creds", passkey.getResCreds() != null ? passkey.getResCreds() : new HashMap<>());
-        
-        // Ensure no additional keys are added
-        assert passkeyMap.size() == 4 : "Unexpected number of keys in passkey map";
-        
-        return Cbor.encode(passkeyMap);
+        X509Certificate cert = passkey.getCertificate();
+        byte[] p12_bytes = KeyUtils.writePKCS12(key, cert, pinHash);
+
+        ECPublicKey pub = KeyUtils.publicFromPrivate(key);
+        byte[] encResCreds = KeyUtils.ecdhEncrypt(Cbor.encode(passkey.getResCreds()), pub);
+        ByteBuffer buffer = ByteBuffer.allocate(4);
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        buffer.putInt(p12_bytes.length);
+
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        outputStream.write(buffer.array());
+        outputStream.write(p12_bytes);
+        outputStream.write(encResCreds);
+        return outputStream.toByteArray();
     }
-    
-    /**
-     * Extracts the GCM authentication tag from a Cipher after encryption.
-     * Note: This is implementation-specific and may not work on all JDK versions.
-     *
-     * @param cipher The cipher that was used for encryption
-     * @return The 16-byte GCM authentication tag
-     */
-    private static byte[] extractGcmTag(Cipher cipher) throws Exception {
-        // If using BouncyCastle or a provider that exposes the tag
-        try {
-            Field field = cipher.getClass().getDeclaredField("tag");
-            field.setAccessible(true);
-            return (byte[]) field.get(cipher);
-        } catch (Exception e) {
-            // Fall back to standard JDK
-        }
-        
-        // Standard JDK implementation the tag is appended to the ciphertext
-        // This is a workaround to extract it
-        // Create a dummy encryption to get the tag length
-        SecureRandom random = new SecureRandom();
-        byte[] dummyKey = new byte[32];
-        random.nextBytes(dummyKey);
-        byte[] dummyIv = new byte[16];
-        random.nextBytes(dummyIv);
-        
-        Cipher dummyCipher = Cipher.getInstance("AES/GCM/NoPadding");
-        dummyCipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(dummyKey, "AES"), 
-                        new GCMParameterSpec(128, dummyIv));
-        byte[] dummyData = new byte[0];
-        byte[] dummyEncrypted = dummyCipher.doFinal(dummyData);
-        
-        // The tag is the entire output when encrypting empty data
-        byte[] tag = new byte[16]; // Assuming 128-bit tag
-        System.arraycopy(dummyEncrypted, 0, tag, 0, tag.length);
-        
-        return tag;
-    }
+
     
     /**
      * Gets the resident credentials map.
      * 
      * @return The map of resident credentials
      */
-    public Map<byte[], Map<String, Object>> getResCreds() {
+    public List<Map<String, byte[]>> getResCreds() {
         return resCreds;
+    }
+
+    /**
+     * Removes a resident credential from this passkey.
+     *
+     * @param rpId The relying party identifier of the resident credential to remove
+     * @return True if the credential was removed, false otherwise
+     */
+    public boolean removeResidentCredential(byte[] rpId) {
+        boolean removed = false;
+        if (resCreds != null) {
+            // We need to find the matching key since byte[] equality is based on reference
+            for (Map<String, byte[]> cred : resCreds) {
+                if (java.util.Arrays.equals(cred.get("rp.id"), rpId)) {
+                    resCreds.remove(cred);
+                    removed = true;
+                    break;
+                }
+            }
+        }
+        return removed;
     }
 
 
@@ -738,12 +596,12 @@ public class Passkey {
     }
 
     /**
-     * Gets the seed value used for key derivation.
+     * Gets the file name of this passkey.
      *
-     * @return The seed value as a byte array
+     * @return The file name (without path)
      */
-    public byte[] getSeed() {
-        return seed;
+    public String getFileName() {
+        return fileName;
     }
 
     /**
@@ -754,11 +612,11 @@ public class Passkey {
      * @param userHandle The user handle as a byte array
      */
     public void addResCred(byte[] rpId, byte[] credId, byte[] userHandle) {
-        Map<String, Object> cred = Map.of("credId", credId, "userHandle", userHandle);
+        Map<String, byte[]> cred = Map.of("cred.id", credId, "user.id", userHandle, "rp.id", rpId);
         if(resCreds == null) {
-            resCreds = new HashMap<byte[], Map<String, Object>>();
+            resCreds = new ArrayList<Map<String, byte[]>>();
         }
-        resCreds.put(rpId, cred);
+        resCreds.add(cred);
     }
 
     /**
@@ -818,19 +676,12 @@ public class Passkey {
                 return null;
             }
             
-            // Generate a new key pair for the passkey
-            KeyPair keyPair = KeyUtils.generateKeyPair("EC", 256);
-            
-            // Generate a random seed
-            SecureRandom random = new SecureRandom();
-            byte[] seed = new byte[32];
-            random.nextBytes(seed);
-            
-            // Create a self-signed certificate
+            // Generate PKI for the passkey
+            KeyPair keyPair = KeyUtils.generateKeyPair(KEY_ALGORITHM, KEY_SIZE);
             X509Certificate cert = CertUtils.generateCaCert("CN=IBeePasskey", keyPair, 9999, true);
             
             // Create the passkey
-            Passkey passkey = new Passkey(keyPair.getPrivate(), cert, seed, new HashMap<>());
+            Passkey passkey = new Passkey(keyPair.getPrivate(), cert, new ArrayList<>());
             
             // Save the passkey to file
             if (writeKey(passkey, pinHash, passkeyFile)) {
@@ -875,23 +726,22 @@ public class Passkey {
         if(!fileName.endsWith(".passkey")) {
             fileName += ".passkey";
         }
-
+        
         // Create File object
-        return new File(fileName);
+        return new File(FileUtils.getFido2Home() + File.separator + fileName);
     }
 
     private static byte[] collectPinInfo(Scanner scanner) throws NoSuchAlgorithmException {
         // Prompt for PIN
         System.out.print("Enter PIN (at least 8 characters): ");
         String pin = scanner.nextLine().trim();
-        
         // Validate PIN
         if (pin.length() < 8) {
             System.out.println("Error: PIN must be at least 8 characters.");
             return null;
         }
         // Calculate PIN hash using SHA-256
-        return KeyUtils.getLowerPinHash(pin);
+        return KeyUtils.getPinHash(pin);
     }
 
     private static void generateMain(Scanner scanner) {
@@ -951,24 +801,21 @@ public class Passkey {
             return;
         }
         System.out.println("Passkey successfully opened.");
-        Map<byte[], Map<String, Object>> resCreds = passkey.getResCreds();
-        ArrayList<byte[]> credsToRemove = new ArrayList<>();
-        for(byte[] rpId: resCreds.keySet()) {
+        List<Map<String, byte[]>> resCreds = passkey.getResCreds();
+        ArrayList<Map<String, byte[]>> credsToRemove = new ArrayList<>();
+        for(Map<String, byte[]> cred: resCreds) {
             try {
-                String rpStr = new String(rpId, "utf-8");
+                String rpStr = new String(cred.get("rp.id"), "utf-8");
                 System.out.println(String.format("Credential relying party id: %s", rpStr));
                 if(confirmDelete()) {
-                    credsToRemove.add(rpId);
+                    credsToRemove.add(cred);
                 }
             } catch (UnsupportedEncodingException e) {
                 System.out.println("Failed read relying party id for resident credential.");
                 continue;
             }
         }
-        // Remove credentials outside the loop to avoid concurrent modification
-        for(byte[] rpId: credsToRemove) {
-            resCreds.remove(rpId);
-        }
+        resCreds.removeAll(credsToRemove);
     }
 
     /**
@@ -1014,10 +861,15 @@ public class Passkey {
             Scanner scanner = new Scanner(System.in);
             initPlatformKey(scanner);
             if(cmd.equals("generate")) {
+                System.out.println("Generating a passkey file");
                 generateMain(scanner);
             } 
             else if(cmd.equals("manage")) {
+                System.out.println("Managing a passkey file");
                 manageMain(scanner);
+            }
+            else {
+                System.out.println("Usage: generate || manage");
             }
             scanner.close();
         } catch (Exception e) {

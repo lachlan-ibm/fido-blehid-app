@@ -25,8 +25,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.data.SymmetricKey;
-import com.isfs.blekey.util.Cbor;
-import com.isfs.blekey.util.KeyUtils;
 
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
@@ -70,7 +68,7 @@ public class Fido2AuthenticatorTest {
      * Test constructor with algorithm and key size parameters.
      */
     @Test
-    public void testConstructorWithAlgorithmAndKeySize() throws NoSuchAlgorithmException {
+    public void testConstructorWithAlgorithmAndKeySize() throws Exception {
         Fido2Authenticator rsaAuth = new Fido2Authenticator("RSA", 2048);
         assertNotNull(rsaAuth.getKeyPair());
         assertEquals("RSA", rsaAuth.getKeyPair().getPublic().getAlgorithm());
@@ -84,17 +82,16 @@ public class Fido2AuthenticatorTest {
         System.err.println("testFromPasskey");
         // Mock the Passkey behavior
         String symKeySeed = SymmetricKey.generateKey();
-        byte[] seedBytes = Base64.getUrlDecoder().decode(symKeySeed);
         
         // Use doReturn().when() syntax instead of when().thenReturn() to avoid unfinished stubbing
         X509Certificate mockCert = mock(X509Certificate.class);
         doReturn(mockCert).when(mockPasskey).getCertificate();
-        doReturn(seedBytes).when(mockPasskey).getSeed();
         
-        Fido2Authenticator auth = Fido2Authenticator.fromPasskey(mockPasskey);
-        
+        Fido2Authenticator auth = new Fido2Authenticator();
+        auth.setAuthnCert(mockCert);
+        auth.setSymKeys(symKeySeed);
         assertNotNull(auth);
-        assertNotNull(auth.getSymKey());
+        assertNotNull(auth.getSymKeySeed());
         assertNotNull(auth.getAuthnCert());
         
         // Generate cred id
@@ -104,24 +101,23 @@ public class Fido2AuthenticatorTest {
         System.err.println("Credential Id:" + Arrays.toString(credId));
         
         // Re-encode the bytes to a base64 string for decryption
-        Map<String, Object> start = KeyUtils.getECPrivateKeyParameters(auth.getPrivKey());
-        System.err.println("start: " + start);
-        byte[] cbor = Cbor.encode(start);
-        String test = auth.getSymKey().encrypt(cbor);
-        byte[] decrypted = auth.getSymKey().decrypt(test);
-        System.err.println("decoded: " + Cbor.decode(decrypted));
-        assertTrue(Arrays.equals(cbor, decrypted));
+        byte[] encoded = auth.getPrivKey().getEncoded();
+        System.err.println("start: " + encoded);
+        String test = new SymmetricKey(symKeySeed).encrypt(encoded);
+        byte[] decrypted = new SymmetricKey(symKeySeed).decrypt(test);
+        System.err.println("decoded: " + decrypted);
+        assertTrue(Arrays.equals(encoded, decrypted));
         
         // Try to decrypt the raw credential ID bytes instead of the base64-encoded string
         System.err.println("Attempt to recover original key");
         System.err.println(Arrays.toString(credId));
-        byte[] keyBytes = auth.getSymKey().decrypt(new String(credId));
+        byte[] keyBytes = new SymmetricKey(symKeySeed).decrypt(new String(credId));
         System.err.println("Decrypted key bytes: " + Arrays.toString(keyBytes));
         assertNotNull(keyBytes);
 
         // Derive private key should be equal
         Fido2Authenticator a2 = new Fido2Authenticator();
-        a2.setSymKey(auth.getSymKey());
+        a2.setSymKeys(symKeySeed);
         a2.initFromCredId(credId);
         assertEquals(auth.getPrivKey(), a2.getPrivKey());
     }
@@ -133,7 +129,7 @@ public class Fido2AuthenticatorTest {
     public void testGetCredIdBytes() throws Exception {
         System.err.println("testGetCredIdBytes");
         // Set up the authenticator with a symmetric key to ensure proper credential ID generation
-        authenticator.setSymKey(new SymmetricKey(SymmetricKey.generateKey()));
+        authenticator.setSymKeys(SymmetricKey.generateKey());
         
         byte[] credIdBytes = authenticator.getCredId();
         assertNotNull(credIdBytes);

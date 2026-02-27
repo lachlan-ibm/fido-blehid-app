@@ -3,46 +3,74 @@
  Copyright IBM 2025
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:background="@color/cool_gray_10">
 
-    <TextView
-        android:id="@+id/textView"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="BLE HID Passkey Peripheral"
-        android:textSize="18sp"
+    <!-- Include the custom toolbar -->
+    <include
+        layout="@layout/toolbar_with_back"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/cool_gray_30"
         android:layout_marginBottom="16dp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Passkey Device Controls"
+        android:text="@string/passkey_connectivity_controls"
         android:textStyle="bold"
-        android:layout_marginBottom="8dp" />
+        android:textColor="@color/ibm_black"
+        android:textSize="16sp"
+        android:layout_marginBottom="12dp" />
 
-    <ToggleButton
+    <Button
         android:id="@+id/serverButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textOn="Passkeys advertiesed via BLE HID"
-        android:textOff="Start BLE HID Server"
-        android:layout_marginBottom="24dp" />
+        android:text="@string/connect_to_devices"
+        android:backgroundTint="@color/ibm_blue"
+        android:textColor="@color/ibm_white"
+        android:paddingVertical="12dp"
+        android:paddingHorizontal="16dp"
+        android:layout_marginBottom="32dp"
+        android:drawableStart="@drawable/device_pairing"
+        android:drawablePadding="12dp"
+        style="@android:style/Widget.Material.Button" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Passkey Management"
+        android:text="@string/passkey_data_mgmt"
         android:textStyle="bold"
-        android:layout_marginBottom="8dp" />
+        android:textColor="@color/ibm_black"
+        android:textSize="16sp"
+        android:layout_marginBottom="12dp" />
 
-    <ToggleButton
+    <Button
         android:id="@+id/manageButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textOn="Managing Passkey"
-        android:textOff="Manage Passkey Resident Credentials" />
+        android:text="@string/manage_passkeys"
+        android:backgroundTint="@color/cyan_30"
+        android:textColor="@color/ibm_black"
+        android:paddingVertical="12dp"
+        android:paddingHorizontal="16dp"
+        android:drawableStart="@drawable/touch_id"
+        android:drawablePadding="12dp"
+        style="@android:style/Widget.Material.Button" />
 
+    </LinearLayout>
 </LinearLayout>

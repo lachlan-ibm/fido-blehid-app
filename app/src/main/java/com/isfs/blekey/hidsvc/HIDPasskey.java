@@ -1,15 +1,6 @@
 /*
  * Copyright IBM 2025
  */
-/*IBM Confidential
-* OCO Source Materials
-* 5725-V89 5725-V90
-*
-* Copyright IBM Corp. 2025
-*
-* The source code for this program is not published or otherwise divested of its trade secrets,
-* irrespective of what has been deposited with the U.S. Copyright Office.
-*/
 
 package com.isfs.blekey.hidsvc;
 
@@ -36,6 +27,8 @@ public class HIDPasskey {
      */
     private static final Logger logger = LoggerFactory.getLogger(HIDPasskey.class);
 
+    private final static String TAG = HIDPasskey.class.getCanonicalName();
+
     /**
      * Constructs a new HIDPasskey instance with a reference to the parent HID service.
      *
@@ -53,6 +46,7 @@ public class HIDPasskey {
      * @return A byte array containing the HID report descriptor
      */
     protected static byte[] getReportMap() {
+        logger.debug(TAG, "getReportMap");
         return new byte[]{
             (byte) 0x06, (byte) 0xD0, (byte) 0xF1,       // Usage Page (FIDO Alliance)
             (byte) 0x09, 0x01,                   // Usage (U2F HID Authenticator Device)
@@ -81,10 +75,12 @@ public class HIDPasskey {
      * @param report The output report data received from the host
      */
     public void onOutputReport(byte[] report) {
+        logger.debug(TAG, "onOutputReport");
         if(report != null && report.length > 5) { //cid + (cmd || seq) === 5 bytes min
             byte[] cid = Arrays.copyOfRange(report, 0, 4);
             // Parse the CTAPHID command
             byte cmdByte = report[4];
+            logger.debug("CID: {} CMD: {}", Arrays.toString(cid), cmdByte);
             CtapHid cmd = null;
             if((cmdByte & 0x80) > 0) {
                 cmd = new CtapHid(report);
@@ -103,7 +99,7 @@ public class HIDPasskey {
                         this._service.addInputReport(rspFrame);
                     }
                 } catch (Exception e) {
-                    logger.error(HIDPasskey.class.getSimpleName() + "onOutputReport", e);
+                    logger.error(TAG, e);
                 }
             }
         }

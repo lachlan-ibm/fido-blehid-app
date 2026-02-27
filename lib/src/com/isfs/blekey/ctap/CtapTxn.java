@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.ctap;
 
@@ -32,9 +32,14 @@ public class CtapTxn {
     private Passkey passkey;
 
     /**
-     * THe half of the pin hash collected from the user.
+     * The PIN hash (32 bytes) for the passkey.
      */
     private byte[] pinHash;
+
+    /**
+     * The passkey file name used to open the passkey.
+     */
+    private String passkeyFileName;
 
     /**
      * Default constructor for creating an empty CTAP transaction.
@@ -50,6 +55,7 @@ public class CtapTxn {
      * @param cmd The CtapHid command
      * @param pinAuthTkn The PIN authentication token
      * @param passkey The passkey for this transaction
+     * @param pinHash The full PIN hash
      */
     public CtapTxn(byte[] cid, CtapHid cmd, byte[] pinAuthTkn, Passkey passkey, byte[] pinHash) {
         this.cid = cid != null ? cid.clone() : null;
@@ -132,21 +138,39 @@ public class CtapTxn {
     }
 
     /**
-     * Set the lower 16 bytes of the pin hash for the given passkey.
-     * 
-     * @param ph
+     * Sets the PIN hash for this transaction.
+     *
+     * @param ph The PIN hash to set
      */
     public void setPinHash(byte[] ph) {
-        this.pinHash = ph;
+        this.pinHash = ph != null ? ph.clone() : null;
     }
 
     /**
-     * Get the lower 16 bytes of the pin hash for the given passkey.
-     * 
-     * @return
+     * Gets the PIN hash for this transaction.
+     *
+     * @return A copy of the PIN hash
      */
     public byte[] getPinHash() {
-        return pinHash;
+        return pinHash != null ? pinHash.clone() : null;
+    }
+
+    /**
+     * Sets the passkey file name for this transaction.
+     *
+     * @param fileName The passkey file name
+     */
+    public void setPasskeyFileName(String fileName) {
+        this.passkeyFileName = fileName;
+    }
+
+    /**
+     * Gets the passkey file name for this transaction.
+     *
+     * @return The passkey file name
+     */
+    public String getPasskeyFileName() {
+        return passkeyFileName;
     }
 }
 
