@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.isfs.blekey.R;
 import com.isfs.blekey.data.Passkey;
+import com.isfs.blekey.util.AndroidKeystoreManager;
 import com.isfs.blekey.util.KeyUtils;
 
 import java.io.File;
@@ -170,6 +171,9 @@ public class CreatePasskeyActivity extends AppCompatActivity {
             fido2Home = getFilesDir().getAbsolutePath();
             System.setProperty("FIDO2_HOME", fido2Home);
         }
+
+        // Ensure KeystoreManager is initialized (guards against cold-start without MainActivity)
+        Passkey.setKeystoreManager(new AndroidKeystoreManager());
 
         // Generate PIN hash from password
         byte[] pinHash = KeyUtils.getPinHash(password);

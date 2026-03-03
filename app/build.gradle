@@ -54,7 +54,7 @@ android {
 
 
 
-configurations.all {
+configurations.configureEach {
     resolutionStrategy.eachDependency { DependencyResolveDetails details ->
         if (details.requested.group == 'org.jetbrains.kotlin') {
             details.useVersion '1.8.22'

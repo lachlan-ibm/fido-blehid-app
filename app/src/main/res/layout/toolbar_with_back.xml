@@ -33,25 +33,25 @@
             android:paddingStart="8dp"
             android:paddingEnd="16dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Eye "
-                android:textColor="@color/ibm_white"
-                android:textSize="20sp" />
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/eye"
+                android:contentDescription="Eye icon" />
 
             <ImageView
                 android:layout_width="24dp"
                 android:layout_height="24dp"
                 android:src="@drawable/bee"
-                android:contentDescription="Bee icon" />
+                android:contentDescription="Bee icon"
+                android:layout_marginStart="4dp" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text=" Key"
-                android:textColor="@color/ibm_white"
-                android:textSize="20sp" />
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/data_privacy_key"
+                android:contentDescription="Key icon"
+                android:layout_marginStart="4dp" />
         </LinearLayout>
     </LinearLayout>
 </androidx.appcompat.widget.Toolbar>

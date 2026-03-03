@@ -15,13 +15,15 @@ import java.util.HashSet;
 import java.util.Arrays;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.LinkedList;
+import java.util.function.Function;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.os.Handler;
-import android.os.ParcelUuid;
 import android.os.Build;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -36,10 +38,6 @@ import android.bluetooth.BluetoothGattServerCallback;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.bluetooth.BluetoothGattDescriptor;
-import android.bluetooth.le.AdvertiseCallback;
-import android.bluetooth.le.AdvertiseData;
-import android.bluetooth.le.AdvertiseData.Builder;
-import android.bluetooth.le.AdvertiseSettings;
 import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.pm.PackageManager;
 import android.util.Log;
@@ -58,41 +56,65 @@ public class HIDService {
 
     private static final String TAG = HIDService.class.getCanonicalName();
 
+    /**
+     * Listener for device connection/disconnection events.
+     */
+    public interface ConnectionListener {
+        void onDeviceConnected(BluetoothDevice device);
+        void onDeviceDisconnected(BluetoothDevice device);
+        void onDeviceError(BluetoothDevice device);
+    }
+
     private String manufacturer = "lowkey";
     private String deviceName = "IBleKey";
-    private String serialNumber = "13371337";
+    private String serialNumber = "1337C0D3";
 
     private final Context applicationContext;
     private final Handler handler;
-    private final BluetoothLeAdvertiser bluetoothLeAdvertiser;
+    private final HIDBTAdvertiser bleAdvertiser;
     private BluetoothGattCharacteristic inputReportCharacteristic;
     private BluetoothGattCharacteristic outputReportCharacteristic;
     @Nullable
     private BluetoothGattServer gattServer;
-    private final Map<String, BluetoothDevice> bluetoothDevicesMap = new HashMap<>();
-    
+    private final Map<String, BluetoothDevice> bluetoothDevicesMap = new ConcurrentHashMap<>();
+    @Nullable
+    private ConnectionListener connectionListener;
+
+    public void setConnectionListener(@Nullable ConnectionListener listener) {
+        this.connectionListener = listener;
+    }
 
     private HIDPasskey passkey;
 
     /**
      * Device Information Service
      */
-    private static final UUID SERVICE_DEVICE_INFORMATION = BleUtils.getCharateristicUuid(0x180A);
+    private static final UUID SERVICE_DEVICE_INFORMATION = BleUtils.SERVICE_DEVICE_INFORMATION;
     private static final UUID CHARACTERISTIC_MANUFACTURER_NAME = BleUtils.getCharateristicUuid(0x2A29);
     private static final UUID CHARACTERISTIC_MODEL_NUMBER = BleUtils.getCharateristicUuid(0x2A24);
     private static final UUID CHARACTERISTIC_SERIAL_NUMBER = BleUtils.getCharateristicUuid(0x2A25);
+    private static final UUID CHARACTERISTIC_PNP_ID = BleUtils.getCharateristicUuid(0x2A50);
     private static final int DEVICE_INFO_MAX_LENGTH = 20;
+
+    // PnP ID: source=USB IF (0x02), VID=0x1337, PID=0xC0D3, version=0x0001
+    private static final byte[] PNP_ID = {0x02, 0x37, 0x13, (byte)0xD3, (byte)0xC0, 0x01, 0x00};
 
     /**
      * Battery Service
      */
-    private static final UUID SERVICE_BATTERY = BleUtils.getCharateristicUuid(0x180F);
+    private static final UUID SERVICE_BATTERY = BleUtils.SERVICE_BATTERY;
     private static final UUID CHARACTERISTIC_BATTERY_LEVEL = BleUtils.getCharateristicUuid(0x2A19);
+
+    /**
+     * Generic Attribute Service — for Service Changed indications
+     */
+    private static final UUID SERVICE_GENERIC_ATTRIBUTE      = BleUtils.SERVICE_GENERIC_ATTRIBUTE;
+    private static final UUID CHARACTERISTIC_SERVICE_CHANGED = BleUtils.CHARACTERISTIC_SERVICE_CHANGED;
 
     /**
      * HID Service
      */
-    private static final UUID SERVICE_BLE_HID = BleUtils.getCharateristicUuid(0x1812);
+    private static final UUID SERVICE_BLE_HID = BleUtils.SERVICE_BLE_HID;
     private static final UUID CHARACTERISTIC_HID_INFORMATION = BleUtils.getCharateristicUuid(0x2A4A);
     private static final UUID CHARACTERISTIC_REPORT_MAP = BleUtils.getCharateristicUuid(0x2A4B);
     private static final UUID CHARACTERISTIC_HID_CONTROL_POINT = BleUtils.getCharateristicUuid(0x2A4C);
@@ -107,6 +129,13 @@ public class HIDService {
 
     private static final byte[] EMPTY_BYTES = {};
     private static final byte[] RESPONSE_HID_INFORMATION = {0x11, 0x01, 0x00, 0x03};
+    private static final byte[] RESPONSE_PROTOCOL_MODE = {0x01}; // Report Protocol Mode
+
+    // Queue of services waiting to be added sequentially
+    private final LinkedList<BluetoothGattService> pendingServices = new LinkedList<>();
+
+    // Dispatch table: maps each characteristic UUID to a function that returns the response bytes
+    private Map<UUID, Function<Integer, byte[]>> readHandlers;
 
     public HIDService(final Context context, boolean bToothConnect, boolean bToothAdvertise) throws UnsupportedOperationException {
         applicationContext = context.getApplicationContext();
@@ -134,11 +163,12 @@ public class HIDService {
             throw new UnsupportedOperationException("Bluetooth LE Advertising not supported on this device.");
         }
 
-        bluetoothLeAdvertiser = bluetoothAdapter.getBluetoothLeAdvertiser();
+        final BluetoothLeAdvertiser bluetoothLeAdvertiser = bluetoothAdapter.getBluetoothLeAdvertiser();
         Log.d(TAG, "bluetoothLeAdvertiser: " + bluetoothLeAdvertiser);
         if (bluetoothLeAdvertiser == null) {
             throw new UnsupportedOperationException("Bluetooth LE Advertising not supported on this device.");
         }
+        bleAdvertiser = new HIDBTAdvertiser(context, handler, bluetoothLeAdvertiser);
         try {
             gattServer = bluetoothManager.openGattServer(applicationContext, gattServerCallback);
             if (gattServer == null) {
@@ -148,10 +178,13 @@ public class HIDService {
             throw new UnsupportedOperationException(e.getMessage());
         }
 
-        // setup services
-        addService(setUpHidService());
-        addService(setUpDeviceInformationService());
-        addService(setUpBatteryService());
+        // Queue services - each is added only after onServiceAdded callback fires.
+        // Note: Generic Attribute Service (0x1801) is added automatically by Android — do NOT add it manually.
+        pendingServices.add(setUpHidService());
+        pendingServices.add(setUpDeviceInformationService());
+        pendingServices.add(setUpBatteryService());
+        addNextPendingService();
+        // reconnectBondedDevices() is called from onServiceAdded once all services are ready
         
         // send report each 50ms, if data available
         new Timer().scheduleAtFixedRate(new TimerTask() {
@@ -165,13 +198,15 @@ public class HIDService {
                         @SuppressLint("MissingPermission")
                         public void run() {
                             final Set<BluetoothDevice> devices = getDevices();
+                            Log.d(TAG, "notifyCharacteristicChanged devices=" + devices.size() + " data=" + Arrays.toString(polled));
                             for (final BluetoothDevice device : devices) {
                                 try {
                                     if (gattServer != null && isPermitBToothConnect()) {
-                                        gattServer.notifyCharacteristicChanged(device, inputReportCharacteristic, false, polled);
+                                        int result = gattServer.notifyCharacteristicChanged(device, inputReportCharacteristic, false, polled);
+                                        Log.d(TAG, "notifyCharacteristicChanged result=" + result + " device=" + device.getAddress());
                                     }
                                 } catch (final Throwable t) {
-                                    Log.e(TAG, "Exception: " + t.getMessage());
+                                    Log.e(TAG, "notifyCharacteristicChanged exception: " + t.getMessage());
                                 }
                             }
                         }
@@ -182,6 +217,7 @@ public class HIDService {
 
         //create the passkey object
         this.passkey = new HIDPasskey(this);
+        buildReadHandlers();
     }
 
     // Check for BLUETOOTH_CONNECT permission
@@ -198,40 +234,72 @@ public class HIDService {
         return true;
     }
     
-    // Check for BLUETOOTH_ADVERTISE permission
-    private boolean isPermitBToothAdvert() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(applicationContext, android.Manifest.permission.BLUETOOTH_ADVERTISE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                return true;
-            } else {
-                Log.e(TAG, "BLUETOOTH_ADVERTISE permission not granted");
-            }
-            return false;
-        }
-        return true;
-    }
 
 
     /**
-     * Add GATT service to gattServer
-     *
-     * @param service the service
+     * Add the next pending GATT service. Must only be called when no add is in progress.
+     * Subsequent services are triggered from onServiceAdded callback.
      */
     @SuppressLint("MissingPermission")
-    private void addService(final BluetoothGattService service) {
-        assert gattServer != null;
-        boolean serviceAdded = false;
-        while (!serviceAdded) {
-            try {
-                if(isPermitBToothConnect()) {
-                    serviceAdded = gattServer.addService(service);
-                }
-            } catch (final Exception e) {
-                Log.d(TAG, "Adding Service failed", e);
+    private void addNextPendingService() {
+        if (gattServer == null || pendingServices.isEmpty()) {
+            return;
+        }
+        final BluetoothGattService service = pendingServices.poll();
+        try {
+            if (isPermitBToothConnect()) {
+                gattServer.addService(service);
+            }
+        } catch (final Exception e) {
+            Log.e(TAG, "addService failed for " + service.getUuid(), e);
+            addNextPendingService();
+        }
+    }
+
+    /**
+     * Reconnects to all previously bonded devices so the host re-enumerates HOGP
+     * without requiring re-pairing after an app restart or reinstall.
+     * Must only be called after all GATT services have been added.
+     */
+    @SuppressLint("MissingPermission")
+    private void reconnectBondedDevices() {
+        if (!isPermitBToothConnect()) return;
+        final BluetoothManager bluetoothManager =
+                (BluetoothManager) applicationContext.getSystemService(Context.BLUETOOTH_SERVICE);
+        final BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
+        if (bluetoothAdapter == null) return;
+        final Set<BluetoothDevice> bonded = bluetoothAdapter.getBondedDevices();
+        if (bonded == null || bonded.isEmpty()) return;
+        for (final BluetoothDevice device : bonded) {
+            if (device.getType() == BluetoothDevice.DEVICE_TYPE_LE
+                    || device.getType() == BluetoothDevice.DEVICE_TYPE_DUAL) {
+                Log.d(TAG, "Reconnecting to bonded BLE device: " + device.getAddress());
+                handler.post(() -> {
+                    if (gattServer != null) {
+                        gattServer.connect(device, true);
+                    }
+                });
             }
         }
-        Log.d(TAG, "Service: " + service.getUuid() + " added.");
+    }
+
+    /**
+     * Returns all bonded BLE devices known to the Android Bluetooth stack.
+     * Useful for pre-populating UI before any GATT connection callbacks fire.
+     */
+    @SuppressLint("MissingPermission")
+    public Set<BluetoothDevice> getBondedBleDevices(BluetoothAdapter bluetoothAdapter) {
+        final Set<BluetoothDevice> result = new HashSet<>();
+        if (!isPermitBToothConnect()) return result;
+        final Set<BluetoothDevice> bonded = bluetoothAdapter.getBondedDevices();
+        if (bonded == null) return result;
+        for (BluetoothDevice device : bonded) {
+            if (device.getType() == BluetoothDevice.DEVICE_TYPE_LE
+                    || device.getType() == BluetoothDevice.DEVICE_TYPE_DUAL) {
+                result.add(device);
+            }
+        }
+        return result;
     }
 
     /**
@@ -252,6 +320,10 @@ public class HIDService {
         {
             final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(CHARACTERISTIC_SERIAL_NUMBER, BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED);
             while (!service.addCharacteristic(characteristic)) ;
+        }
+        {
+            final BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(CHARACTERISTIC_PNP_ID, BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED);
+            while (!service.addCharacteristic(characteristic));
         }
 
         return service;
@@ -408,120 +480,38 @@ public class HIDService {
      * Starts advertising
      */
     public final void startAdvertising() {
-        handler.post(new Runnable() {
-            @Override
-            @SuppressLint("MissingPermission")
-            public void run() {
-                // set up advertising setting
-                final AdvertiseSettings advertiseSettings = new AdvertiseSettings.Builder()
-                        .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-                        .setConnectable(true)
-                        .setTimeout(0)
-                        .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-                        .build();
-
-                // Minimize advertising data as much as possible - BLE has a strict 31-byte limit
-                final AdvertiseData advertiseData = new Builder()
-                        .setIncludeTxPowerLevel(false)
-                        .setIncludeDeviceName(false) // Remove device name to reduce packet size
-                        // Only include the primary HID service UUID
-                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BLE_HID.toString()))
-                        .build();
-
-                // Put device name and other services in scan response
-                final AdvertiseData scanResult = new Builder()
-                        .setIncludeDeviceName(true) // Include device name in scan response instead
-                        // Include other service UUIDs in scan response
-                        .addServiceUuid(ParcelUuid.fromString(SERVICE_DEVICE_INFORMATION.toString()))
-                        .addServiceUuid(ParcelUuid.fromString(SERVICE_BATTERY.toString()))
-                        .build();
-
-                Log.d(TAG, "advertiseData: " + advertiseData + ", scanResult: " + scanResult);
-                
-                // Check both BLUETOOTH_CONNECT and BLUETOOTH_ADVERTISE permissions
-                if(isPermitBToothConnect() && isPermitBToothAdvert()) {
-                    try {
-                        bluetoothLeAdvertiser.startAdvertising(advertiseSettings, advertiseData, scanResult, advertiseCallback);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Exception during startAdvertising: " + e.getMessage(), e);
-                    }
-                } else {
-                    if (!isPermitBToothConnect()) {
-                        Log.e(TAG, "Do not have BLUETOOTH_CONNECT permission.");
-                    }
-                    if (!isPermitBToothAdvert()) {
-                        Log.e(TAG, "Do not have BLUETOOTH_ADVERTISE permission.");
-                    }
-                }
-            }
-        });
+        bleAdvertiser.start();
     }
 
     /**
      * Stops advertising
      */
-    @SuppressLint("MissingPermission")
     public final void stopAdvertising() {
+        bleAdvertiser.stop();
         handler.post(new Runnable() {
             @Override
+            @SuppressLint("MissingPermission")
             public void run() {
-                if(isPermitBToothConnect()) {
-                    try {
-                        bluetoothLeAdvertiser.stopAdvertising(advertiseCallback);
-                    } catch (final IllegalStateException ignored) {
-                        Log.d(TAG, "BT Adapter is not turned ON");
-                    }
-                    try {
-                        if (gattServer != null) {
-                            final Set<BluetoothDevice> devices = getDevices();
-                            for (final BluetoothDevice device : devices) {
-                                gattServer.cancelConnection(device);
-                            }
-                            gattServer.close();
-                            gattServer = null;
-                        }
-                    } catch (final IllegalStateException ignored) {
-                        Log.d(TAG, "BT Adapter is not turned ON");
-                    }
-                } else {
+                if (!isPermitBToothConnect()) {
                     Log.d(TAG, "Do not have BLUETOOTH_CONNECT permission.");
+                    return;
+                }
+                try {
+                    if (gattServer != null) {
+                        final Set<BluetoothDevice> devices = getDevices();
+                        for (final BluetoothDevice device : devices) {
+                            gattServer.cancelConnection(device);
+                        }
+                        gattServer.close();
+                        gattServer = null;
+                    }
+                } catch (final IllegalStateException ignored) {
+                    Log.d(TAG, "BT Adapter is not turned ON");
                 }
             }
         });
     }
 
-    /**
-     * Callback for BLE advertising to provide detailed error information
-     */
-    private final AdvertiseCallback advertiseCallback = new AdvertiseCallback() {
-        @Override
-        public void onStartSuccess(AdvertiseSettings settingsInEffect) {
-            Log.d(TAG, "Advertising started successfully");
-        }
-
-        @Override
-        public void onStartFailure(int errorCode) {
-            String errorMessage = "Unknown error";
-            switch (errorCode) {
-                case ADVERTISE_FAILED_ALREADY_STARTED:
-                    errorMessage = "Already started";
-                    break;
-                case ADVERTISE_FAILED_DATA_TOO_LARGE:
-                    errorMessage = "Data too large";
-                    break;
-                case ADVERTISE_FAILED_FEATURE_UNSUPPORTED:
-                    errorMessage = "Feature unsupported";
-                    break;
-                case ADVERTISE_FAILED_INTERNAL_ERROR:
-                    errorMessage = "Internal error";
-                    break;
-                case ADVERTISE_FAILED_TOO_MANY_ADVERTISERS:
-                    errorMessage = "Too many advertisers";
-                    break;
-            }
-            Log.e(TAG, "Failed to start advertising: " + errorMessage + " (code " + errorCode + ")");
-        }
-    };
 
     /**
      * Obtains connected Bluetooth devices
@@ -529,11 +519,107 @@ public class HIDService {
      * @return the connected Bluetooth devices
      */
     private Set<BluetoothDevice> getDevices() {
-        final Set<BluetoothDevice> deviceSet = new HashSet<>();
-        synchronized (bluetoothDevicesMap) {
-            deviceSet.addAll(bluetoothDevicesMap.values());
+        return Collections.unmodifiableSet(new HashSet<>(bluetoothDevicesMap.values()));
+    }
+
+    private void postConnectedActions(final BluetoothDevice device) {
+        handler.post(() -> {
+            if (connectionListener != null) {
+                connectionListener.onDeviceConnected(device);
+            }
+        });
+    }
+
+    @SuppressLint("MissingPermission")
+    private void handleBondStateChange(final BluetoothDevice device) {
+        applicationContext.registerReceiver(new BroadcastReceiver() {
+            @Override
+            public void onReceive(final Context context, final Intent intent) {
+                if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+                final int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+                if (state == BluetoothDevice.BOND_BONDED) {
+                    context.unregisterReceiver(this);
+                    bluetoothDevicesMap.put(device.getAddress(), device);
+                    postConnectedActions(device);
+                    Log.d(TAG, "successfully bonded");
+                }
+            }
+        }, new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
+        device.createBond();
+    }
+
+    /**
+     * Builds the characteristic UUID → response-builder dispatch table used by
+     * {@link #onCharacteristicReadRequest}.
+     */
+    private void buildReadHandlers() {
+        readHandlers = new HashMap<>();
+        readHandlers.put(CHARACTERISTIC_HID_INFORMATION,   offset -> RESPONSE_HID_INFORMATION);
+        readHandlers.put(CHARACTERISTIC_REPORT_MAP,        this::getReportMapSlice);
+        readHandlers.put(CHARACTERISTIC_PROTOCOL_MODE,     offset -> RESPONSE_PROTOCOL_MODE);
+        readHandlers.put(CHARACTERISTIC_HID_CONTROL_POINT, offset -> new byte[]{0});
+        readHandlers.put(CHARACTERISTIC_REPORT,            offset -> EMPTY_BYTES);
+        readHandlers.put(CHARACTERISTIC_MANUFACTURER_NAME, offset -> manufacturer.getBytes(StandardCharsets.UTF_8));
+        readHandlers.put(CHARACTERISTIC_SERIAL_NUMBER,     offset -> serialNumber.getBytes(StandardCharsets.UTF_8));
+        readHandlers.put(CHARACTERISTIC_MODEL_NUMBER,      offset -> deviceName.getBytes(StandardCharsets.UTF_8));
+        readHandlers.put(CHARACTERISTIC_PNP_ID,            offset -> PNP_ID);
+        readHandlers.put(CHARACTERISTIC_BATTERY_LEVEL,     offset -> new byte[]{0x64});
+    }
+
+    /**
+     * Returns a slice of the HID report map starting at {@code offset}.
+     * Returns the full array when {@code offset} is 0, a sub-array when the
+     * offset is within bounds, or {@code null} when the offset is past the end.
+     */
+    private byte[] getReportMapSlice(int offset) {
+        final byte[] reportMap = HIDPasskey.getReportMap();
+        if (offset == 0) return reportMap;
+        final int remaining = reportMap.length - offset;
+        if (remaining <= 0) return null;
+        final byte[] slice = new byte[remaining];
+        System.arraycopy(reportMap, offset, slice, 0, remaining);
+        return slice;
+    }
+
+    /**
+     * Sends a Service Changed indication (handles 0x0001–0xFFFF) to {@code device}.
+     * This forces BlueZ (and other HOGP clients) to re-discover GATT services,
+     * which is required when the app restarts and the client has a stale service cache.
+     * Android auto-adds the Generic Attribute service (0x1801) and its Service Changed
+     * characteristic (0x2A05) — we just need to locate and indicate it.
+     */
+    @SuppressLint("MissingPermission")
+    private void sendServiceChangedIndication(final BluetoothDevice device) {
+        if (gattServer == null || !isPermitBToothConnect()) return;
+        final BluetoothGattService genericAttrService = gattServer.getService(SERVICE_GENERIC_ATTRIBUTE);
+        if (genericAttrService == null) {
+            Log.w(TAG, "Generic Attribute service (0x1801) not found — cannot send Service Changed");
+            return;
         }
-        return Collections.unmodifiableSet(deviceSet);
+        final BluetoothGattCharacteristic serviceChanged =
+                genericAttrService.getCharacteristic(CHARACTERISTIC_SERVICE_CHANGED);
+        if (serviceChanged == null) {
+            Log.w(TAG, "Service Changed characteristic (0x2A05) not found");
+            return;
+        }
+        // Value: start handle 0x0001, end handle 0xFFFF (little-endian uint16 pair)
+        final byte[] value = {0x01, 0x00, (byte) 0xFF, (byte) 0xFF};
+        handler.postDelayed(() -> {
+            if (gattServer != null && isPermitBToothConnect()) {
+                final int result = gattServer.notifyCharacteristicChanged(device, serviceChanged, true, value);
+                Log.d(TAG, "Service Changed indication sent to " + device.getAddress() + " result=" + result);
+            }
+        }, 500);
+    }
+
+    /**
+     * Sends a {@link BluetoothGatt#GATT_SUCCESS} response on the GATT server.
+     */
+    @SuppressLint("MissingPermission")
+    private void sendSuccessResponse(BluetoothDevice device, int requestId, int offset, byte[] data) {
+        if (gattServer != null) {
+            gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, data);
+        }
     }
 
     /**
@@ -547,140 +633,62 @@ public class HIDService {
             super.onConnectionStateChange(device, status, newState);
             Log.d(TAG, "onConnectionStateChange status: " + status + ", newState: " + newState);
 
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.e(TAG, "GATT error status=" + status + " for device=" + device.getAddress());
+                handler.post(() -> {
+                    if (connectionListener != null) connectionListener.onDeviceError(device);
+                });
+                bluetoothDevicesMap.remove(device.getAddress());
+                return;
+            }
+
             switch (newState) {
                 case BluetoothProfile.STATE_CONNECTED:
-                    // check bond status
                     Log.d(TAG, "BluetoothProfile.STATE_CONNECTED bondState: " + device.getBondState());
                     if (device.getBondState() == BluetoothDevice.BOND_NONE) {
-                        applicationContext.registerReceiver(new BroadcastReceiver() {
-                            @Override
-                            public void onReceive(final Context context, final Intent intent) {
-                                final String action = intent.getAction();
-                                Log.d(TAG, "onReceive action: " + action);
-
-                                if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
-                                    final int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
-
-                                    if (state == BluetoothDevice.BOND_BONDED) {
-                                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
-                                        // successfully bonded
-                                        context.unregisterReceiver(this);
-
-                                        handler.post(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                if (gattServer != null) {
-                                                    gattServer.connect(device, true);
-                                                }
-                                            }
-                                        });
-                                        Log.d(TAG, "successfully bonded");
-                                    }
-                                }
-                            }
-                        }, new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED));
-
-                        // create bond
-                        /* setPairingConfirmation requires BLUETOOTH_PRIVILEGED permission which I will not be able to get...
-                        try {
-                            device.setPairingConfirmation(true);
-                        } catch (final SecurityException e) {
-                            Log.d(TAG, e.getMessage(), e);
-                        }
-                        */
-                        device.createBond();
+                        handleBondStateChange(device);
+                    } else if (device.getBondState() == BluetoothDevice.BOND_BONDING) {
+                        // Pairing in progress — wait for BOND_BONDED via handleBondStateChange
+                        Log.d(TAG, "Device is bonding, waiting for bond completion: " + device.getAddress());
+                        handleBondStateChange(device);
                     } else if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
-                        handler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (gattServer != null) {
-                                    gattServer.connect(device, true);
-                                }
-                            }
-                        });
-                        synchronized (bluetoothDevicesMap) {
-                            bluetoothDevicesMap.put(device.getAddress(), device);
-                        }
+                        bluetoothDevicesMap.put(device.getAddress(), device);
+                        sendServiceChangedIndication(device);
+                        postConnectedActions(device);
                     }
                     break;
 
                 case BluetoothProfile.STATE_DISCONNECTED:
-                    final String deviceAddress = device.getAddress();
-
-                    // try reconnect immediately
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (gattServer != null) {
-                                // gattServer.cancelConnection(device);
-                                gattServer.connect(device, true);
-                            }
-                        }
+                    bluetoothDevicesMap.remove(device.getAddress());
+                    handler.post(() -> {
+                        if (gattServer != null) gattServer.connect(device, true);
+                        if (connectionListener != null) connectionListener.onDeviceDisconnected(device);
                     });
-                    
-                    synchronized (bluetoothDevicesMap) {
-                        bluetoothDevicesMap.remove(deviceAddress);
-                    }
                     break;
 
                 default:
-                    // do nothing
                     break;
             }
         }
 
         @Override
-        public void onCharacteristicReadRequest(final BluetoothDevice device, 
-                                                final int requestId, 
-                                                final int offset, 
+        public void onCharacteristicReadRequest(final BluetoothDevice device,
+                                                final int requestId,
+                                                final int offset,
                                                 final BluetoothGattCharacteristic characteristic) {
             super.onCharacteristicReadRequest(device, requestId, offset, characteristic);
-            if (gattServer == null) {
-                return;
-            }
+            if (gattServer == null) return;
             Log.d(TAG, "onCharacteristicReadRequest characteristic: " + characteristic.getUuid() + ", offset: " + offset);
 
-            handler.post(new Runnable() {
-                @Override
-                @SuppressLint("MissingPermission")
-                public void run() {
-
-                    final UUID characteristicUuid = characteristic.getUuid();
-                    if (BleUtils.matches(CHARACTERISTIC_HID_INFORMATION, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, RESPONSE_HID_INFORMATION);
-                    } else if (BleUtils.matches(CHARACTERISTIC_REPORT_MAP, characteristicUuid)) {
-                        if (offset == 0) {
-                            gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, HIDPasskey.getReportMap());
-                        } else {
-                            final int remainLength = HIDPasskey.getReportMap().length - offset;
-                            if (remainLength > 0) {
-                                final byte[] data = new byte[remainLength];
-                                System.arraycopy(HIDPasskey.getReportMap(), offset, data, 0, remainLength);
-                                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, data);
-                            } else {
-                                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null);
-                            }
-                        }
-                    } else if (BleUtils.matches(CHARACTERISTIC_HID_CONTROL_POINT, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, new byte []{0});
-                    } else if (BleUtils.matches(CHARACTERISTIC_REPORT, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
-                    } else if (BleUtils.matches(CHARACTERISTIC_MANUFACTURER_NAME, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, manufacturer.getBytes(StandardCharsets.UTF_8));
-                    } else if (BleUtils.matches(CHARACTERISTIC_SERIAL_NUMBER, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, serialNumber.getBytes(StandardCharsets.UTF_8));
-                    } else if (BleUtils.matches(CHARACTERISTIC_MODEL_NUMBER, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, deviceName.getBytes(StandardCharsets.UTF_8));
-                    } else if (BleUtils.matches(CHARACTERISTIC_BATTERY_LEVEL, characteristicUuid)) {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, new byte[] {0x64}); // always 100%
-                    } else {
-                        // Log information about the unhandled characteristic
-                        Log.w(TAG, "Unhandled characteristic read request: " + characteristic.getUuid() +
-                              ", service: " + characteristic.getService().getUuid() +
-                              ", properties: " + characteristic.getProperties());
-                        // For characteristics we don't explicitly handle above, return an empty response as a fallback
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
-                    }
+            handler.post(() -> {
+                final Function<Integer, byte[]> readHandler = readHandlers.get(characteristic.getUuid());
+                if (readHandler != null) {
+                    sendSuccessResponse(device, requestId, offset, readHandler.apply(offset));
+                } else {
+                    Log.w(TAG, "Unhandled characteristic read: " + characteristic.getUuid()
+                            + ", service: " + characteristic.getService().getUuid()
+                            + ", properties: " + characteristic.getProperties());
+                    sendSuccessResponse(device, requestId, 0, EMPTY_BYTES);
                 }
             });
         }
@@ -742,21 +750,12 @@ public class HIDService {
                 return;
             }
 
+            if (BleUtils.matches(CHARACTERISTIC_REPORT, characteristic.getUuid())) {
+                // Process any write to a Report characteristic as CTAP HID output
+                passkey.onOutputReport(value);
+            }
             if (responseNeeded) {
-                if (BleUtils.matches(CHARACTERISTIC_REPORT, characteristic.getUuid())) {
-                    if (characteristic.getProperties() == (BluetoothGattCharacteristic.PROPERTY_READ 
-                                                            | BluetoothGattCharacteristic.PROPERTY_WRITE 
-                                                            | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE)) {
-                        // process Output Report
-                        passkey.onOutputReport(value);
-
-                        // send empty
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
-                    } else {
-                        // send empty
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
-                    }
-                }
+                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
             }
         }
 
@@ -792,7 +791,14 @@ public class HIDService {
             Log.d(TAG, "onServiceAdded status: " + status + ", service: " + service.getUuid());
 
             if (status != 0) {
-                Log.d(TAG, "onServiceAdded Adding Service failed..");
+                Log.e(TAG, "onServiceAdded failed for " + service.getUuid());
+            }
+            if (pendingServices.isEmpty()) {
+                // All services registered — now safe to reconnect bonded devices
+                Log.d(TAG, "All services added, reconnecting bonded devices");
+                reconnectBondedDevices();
+            } else {
+                addNextPendingService();
             }
         }
     };
@@ -893,14 +899,16 @@ public class HIDService {
             return false;
         }
 
-        final BluetoothAdapter bluetoothAdapter =  (
-                (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter();
+        final BluetoothAdapter bluetoothAdapter =
+                ((BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE)).getAdapter();
 
-        if (bluetoothAdapter == null) {
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled()) {
             return false;
         }
 
-        return bluetoothAdapter.isMultipleAdvertisementSupported();
+        // isMultipleAdvertisementSupported() returns false on some devices that still support
+        // single-slot BLE peripheral advertising. Check for advertiser availability directly.
+        return bluetoothAdapter.getBluetoothLeAdvertiser() != null;
     }
 
     /**

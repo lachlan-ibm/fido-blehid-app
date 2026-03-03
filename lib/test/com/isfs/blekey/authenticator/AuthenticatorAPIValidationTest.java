@@ -5,8 +5,6 @@ package com.isfs.blekey.authenticator;
 
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
-import com.isfs.blekey.data.Passkey;
-import com.isfs.blekey.util.Cbor;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,7 +25,6 @@ public class AuthenticatorAPIValidationTest {
 
     private Map<Integer, Object> baseRequest;
     private CtapTxn mockTxn;
-    private Passkey mockPasskey;
 
     @BeforeEach
     public void setUp() {

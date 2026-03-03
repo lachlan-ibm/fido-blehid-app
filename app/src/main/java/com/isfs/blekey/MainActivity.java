@@ -17,6 +17,7 @@ import android.widget.Button;
 import com.isfs.blekey.activity.ManageActivity;
 import com.isfs.blekey.activity.ServerActivity;
 import com.isfs.blekey.data.Passkey;
+import com.isfs.blekey.util.AndroidKeystoreManager;
 
 
 /**
@@ -98,7 +99,10 @@ public class MainActivity extends AppCompatActivity {
             
             // Initialize the root key pair using the public method
             Passkey.ensureRootKeyPair(platformKeyPath, null);
-            
+
+            // Initialize the Android Keystore manager for passkey encryption
+            Passkey.setKeystoreManager(new AndroidKeystoreManager());
+
             Log.i(TAG, "Root key pair initialized successfully");
 
         } catch (Exception e) {

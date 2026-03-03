@@ -76,6 +76,11 @@ public class HIDPasskey {
      */
     public void onOutputReport(byte[] report) {
         logger.debug(TAG, "onOutputReport");
+        // The kernel HID layer prepends a Report ID byte (0x00) to every write.
+        // Strip it so the CTAP HID frame starts at the correct offset.
+        if (report != null && report.length > 0 && report[0] == 0x00) {
+            report = Arrays.copyOfRange(report, 1, report.length);
+        }
         if(report != null && report.length > 5) { //cid + (cmd || seq) === 5 bytes min
             byte[] cid = Arrays.copyOfRange(report, 0, 4);
             // Parse the CTAPHID command

@@ -18,10 +18,14 @@
     <string name="resident_credentials">Resident Credentials</string>" 
     <string name="server_start">Start BLE Server</string>
     <string name="server_stop">Stop BLE Server</string>
-    <string name="connected_devices">Connected Devices</string>
+    <string name="local_devices">Local Devices</string>
+    <string name="device_status_connected">Connected</string>
+    <string name="device_status_error">Connection Error</string>
+    <string name="device_status_disconnected">Disconnected</string>
     <string name="available_passkeys">Available Passkeys</string>
     <string name="ble_server_status">BLE Server Status</string>
     <string name="ble_server_status_text">Server is advertising...</string>
+    <string name="auto_start_on_boot">Auto-start BLE Advertise</string>
 
     <string name="no_devices_connected">No devices connected</string>
 
@@ -74,4 +78,12 @@
     <string name="cancel">Cancel</string>
     <string name="manage_credentials">Manage Credentials</string>
     <string name="selected_passkey_indicator">Selected passkey indicator</string>
+
+    <!-- ServerActivity UI labels -->
+    <string name="device_name_label">Device Name: %1$s</string>
+
+    <!-- ServerActivity activity log messages -->
+    <string name="log_advertising_started">Advertising started</string>
+    <string name="log_device_connected">Device connected: %1$s</string>
+    <string name="log_device_disconnected">Device disconnected: %1$s</string>
 </resources>

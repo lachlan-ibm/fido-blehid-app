@@ -11,8 +11,13 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"-->
     <!-- uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" -->
-    <!-- Noitification permissions -->
+    <!-- Notification permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Foreground service permissions -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Boot receiver permission -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
@@ -61,11 +66,29 @@
             android:name="com.isfs.blekey.activity.CreatePasskeyActivity"
             android:exported="false"
             android:theme="@style/AppTheme.NoActionBar" />
-        <!-- Notidy when a device connects to the app --> 
+        <!-- Notify when a device connects to the app -->
         <service
             android:name=".ForegroundNotificationService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- HID Foreground Service for persistent GATT server -->
+        <service
+            android:name=".hidsvc.HIDForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Boot receiver to auto-start service on device boot -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

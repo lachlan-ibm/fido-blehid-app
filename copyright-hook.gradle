@@ -123,17 +123,12 @@ task checkCopyrightHeaders {
                 
                 if (isModifiedThisYear && currentYear != firstYear && currentYear != secondYear) {
                     // File modified this year, but copyright doesn't include current year
-                    def updatedHeader
-                    if (firstYear != null && secondYear == null) {
-                        // Single year format, add second year
-                        updatedHeader = "Copyright IBM ${firstYear}, ${currentYear}"
-                    } else if (firstYear != null && secondYear != null) {
-                        // Two years format, update second year
-                        updatedHeader = "Copyright IBM ${firstYear}, ${currentYear}"
-                    }
-                    
-                    // Replace the copyright line
-                    def updatedContent = content.replaceFirst(copyrightPattern, updatedHeader)
+                    def newCopyrightYear = "${firstYear}, ${currentYear}"
+                    // Replace only the year portion within the existing copyright line
+                    def updatedContent = content.replaceFirst(
+                        ~/Copyright\s+(?:IBM\s+)?${firstYear}(?:[-,\s]+\d{4})?/,
+                        "Copyright IBM ${newCopyrightYear}"
+                    )
                     if (!isDryRun) {
                         file.text = updatedContent
                     }

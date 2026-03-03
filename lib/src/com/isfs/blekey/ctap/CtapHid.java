@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.ctap;
 
@@ -81,8 +81,15 @@ public class CtapHid {
     
     /**
      * Map of assigned channel IDs and their ongoing CTAP transaction context.
+     * Keyed by hex string to avoid byte[] reference-equality pitfall in HashMap.
      */
-    private static Map<byte[], CtapTxn> assignedCids = new HashMap<byte[], CtapTxn>();
+    private static Map<String, CtapTxn> assignedCids = new HashMap<String, CtapTxn>();
+
+    private static String cidKey(byte[] cid) {
+        StringBuilder sb = new StringBuilder(cid.length * 2);
+        for (byte b : cid) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
 
     /**
      * Logger for debugging and error reporting.
@@ -125,10 +132,8 @@ public class CtapHid {
      * @return The associated CtapHid instance, or null if none exists
      */
     public static CtapHid getPendingByCid(byte[] cid) {
-        if (CtapHid.assignedCids.containsKey(cid)) {
-            return CtapHid.assignedCids.get(cid).getCmd();
-        } //else 
-        return null;
+        CtapTxn txn = CtapHid.assignedCids.get(cidKey(cid));
+        return txn != null ? txn.getCmd() : null;
     }
 
     /**
@@ -138,7 +143,7 @@ public class CtapHid {
      * @return true if the channel ID has an open transaction, false otherwise
      */
     public static boolean hasOpenCid(byte[] cid) {
-        return CtapHid.assignedCids.containsKey(cid);
+        return CtapHid.assignedCids.containsKey(cidKey(cid));
     }
 
     /**
@@ -255,7 +260,9 @@ public class CtapHid {
                 outputStream.write(frame, 5, frame.length - 5);
             }
         }
-        return outputStream.toByteArray();
+        // Trim to byteCount to strip HID frame zero-padding
+        byte[] raw = outputStream.toByteArray();
+        return Arrays.copyOf(raw, Math.min(this.byteCount, raw.length));
     }
 
     /**
@@ -326,7 +333,7 @@ public class CtapHid {
     private void ctapAck(int bcnt, byte[] data) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
         bos.write(this.getCid());
-        bos.write(this.messageType.getValue());
+        bos.write(0x80 | this.messageType.getValue()); // MSB must be set on command bytes
         bos.write((bcnt & 0xFF00) >> 8);
         bos.write(bcnt & 0xFF);
         if(data == null || data.length == 0) { /* continue */ }
@@ -352,7 +359,7 @@ public class CtapHid {
     private void ctapErr(Ctap2StatusCode code) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
         bos.write(this.getCid());
-        bos.write(CtapHidCmd.ERROR.getValue());
+        bos.write(0x80 | CtapHidCmd.ERROR.getValue()); // MSB must be set on command bytes
         bos.write(0);
         bos.write(1);
         bos.write(code.getCode());
@@ -388,29 +395,30 @@ public class CtapHid {
      * @param data The CBOR message data
      * @throws IOException if an error occurs while processing the message
      */
-    @SuppressWarnings({ "unchecked", "rawtypes" })
+    @SuppressWarnings({ "unchecked" })
     private void cbor(byte[] data) throws IOException {
         if(data.length < 1) {
             this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
         } else {
             int api = (int) data[0];
             logger.debug("api : : " + api);
-            byte[] cborBytes = new byte[data.length - 1];
-            System.arraycopy(data, 1, cborBytes, 0, data.length - 1);
-            Object cborObj = Cbor.decode(cborBytes);
-            logger.debug("cborObj :: " + cborObj);
-            if(cborObj == null || !(cborObj instanceof Map)) {
-                this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
-            } else {
-                try {
-                    Map cbor = (Map) cborObj;
-                    buildCborInitAndSequencePackets(
-                        AuthenticatorAPI.process(
-                                        CtapHid.assignedCids.get(this.cid), api, (Map<Integer, Object>) cbor));
-                } catch (Exception e) {
-                    logger.error(e.getMessage(), e);
-                    this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
+            try {
+                Map<Integer, Object> cbor = null;
+                if (data.length > 1) {
+                    byte[] cborBytes = new byte[data.length - 1];
+                    System.arraycopy(data, 1, cborBytes, 0, cborBytes.length);
+                    Object cborObj = Cbor.decode(cborBytes);
+                    if (!(cborObj instanceof Map)) {
+                        this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
+                        return;
+                    }
+                    cbor = (Map<Integer, Object>) cborObj;
                 }
+                buildCborInitAndSequencePackets(
+                    AuthenticatorAPI.process(CtapHid.assignedCids.get(cidKey(this.cid)), api, cbor));
+            } catch (Exception e) {
+                logger.error(e.getMessage(), e);
+                this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
             }
         }
         this.responseReady = true;
@@ -439,7 +447,7 @@ public class CtapHid {
         byte[] rsp = bos.toByteArray();
         logger.debug("init response :: " + Arrays.toString(rsp));
         CtapTxn txn = new CtapTxn(newCid, this, null, null, null);
-        CtapHid.assignedCids.put(newCid, txn);
+        CtapHid.assignedCids.put(cidKey(newCid), txn);
         ctapAck(rsp.length, rsp);
     }
 
@@ -460,7 +468,7 @@ public class CtapHid {
      * @throws IOException if an error occurs while creating the response
      */
     private void cancel(byte[] data) throws IOException  {
-        if(CtapHid.assignedCids.keySet().contains(this.getCid())) {
+        if(CtapHid.assignedCids.containsKey(cidKey(this.getCid()))) {
             //TODO cleanup request in progress
             ctapAck(0, null);
         }

@@ -48,19 +48,39 @@
             android:textColor="#4CAF50" />
 
         <TextView
-            android:id="@+id/deviceNameText"
+            android:id="@+id/bleDeviceNameText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Device Name: IBleKey"
             android:layout_marginTop="4dp" />
+
+        <!-- Auto-start toggle -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="12dp"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/auto_start_on_boot"
+                android:textSize="14sp" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/autoStartSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
     </LinearLayout>
 
-    <!-- Connected Devices Section -->
+    <!-- Bluetooth Devices Section -->
     <TextView
         android:id="@+id/connectedDevicesTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/connected_devices"
+        android:text="@string/local_devices"
         android:textSize="16sp"
         android:textStyle="bold"
         android:layout_marginBottom="8dp" />
@@ -71,7 +91,7 @@
         android:layout_height="wrap_content"
         android:text="@string/no_devices_connected"
         android:textAlignment="center"
-        android:visibility="visible"
+        android:visibility="gone"
         android:layout_marginBottom="16dp" />
 
     <ListView
@@ -81,7 +101,7 @@
         android:layout_weight="1"
         android:divider="@android:color/darker_gray"
         android:dividerHeight="0.5dp"
-        android:visibility="gone" />
+        android:visibility="visible" />
 
     <!-- Authentication Challenge Section -->
     <LinearLayout

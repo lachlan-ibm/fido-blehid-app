@@ -904,13 +904,13 @@ public class AuthenticatorAPI {
     protected static byte[] getInfo(CtapTxn txn, Map<Integer, Object> req) {
         logger.debug("getInfo");
         Map<String, Boolean> capabilities = Map.of("rk", true,
-                                                   "plat", true, //XD
-                                                   "clientPint", true);
+                                                   "plat", true,
+                                                   "clientPin", true);
         Map<Integer, Object> info = Map.of(
             0x01, new String[] {"FIDO_2_1", "FIDO_2_0"},
             0x02, new String[] {"hmac-secret"}, //extensions
-            0x03, new int[] {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, //AAGUID
-            0x04, capabilities, //capabilities
+            0x03, new byte[16], //AAGUID - must be 16-byte bytestring per CTAP2 spec
+            0x04, capabilities,
             0x05, 4096, // maxMsgSize
             0x06, new int[] {1} //PIN/UV Auth Protocol One
         );
