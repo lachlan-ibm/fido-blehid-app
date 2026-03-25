@@ -3,13 +3,15 @@
  */
 package com.isfs.blekey.util;
 
+import java.security.PrivateKey;
+import java.security.PublicKey;
 import javax.crypto.SecretKey;
 
 /**
  * Platform-agnostic interface for secure key storage and encryption operations.
  * This interface allows different implementations for Android Keystore, Apple Keychain,
  * or other platform-specific secure storage mechanisms.
- * 
+ *
  * Implementations should provide hardware-backed encryption when available,
  * with fallback to software-based encryption if necessary.
  */
@@ -18,31 +20,29 @@ public interface KeystoreManager {
     /**
      * Retrieves or creates the application's master encryption key.
      * This key is used to encrypt sensitive data like PIN hash components.
-     * 
+     *
      * @return The application's master SecretKey
      * @throws Exception if key generation or retrieval fails
      */
     SecretKey getOrCreateAppKey() throws Exception;
     
     /**
-     * Encrypts data using the application's master key.
-     * The encryption should use authenticated encryption (e.g., AES-GCM)
-     * to ensure both confidentiality and integrity.
-     * 
-     * @param data The plaintext data to encrypt
-     * @return The encrypted data, including any necessary metadata (IV, tag, etc.)
-     * @throws Exception if encryption fails
+     * Retrieves or creates an EC256 (secp256r1/P-256) key pair for ECDH operations.
+     * Returns the public key component.
+     *
+     * @return The EC256 public key
+     * @throws Exception if key generation or retrieval fails
      */
-    byte[] encryptWithAppKey(byte[] data) throws Exception;
+    PublicKey getEC256PublicKey() throws Exception;
     
     /**
-     * Decrypts data that was encrypted with the application's master key.
-     * 
-     * @param encryptedData The encrypted data to decrypt
-     * @return The decrypted plaintext data
-     * @throws Exception if decryption fails (wrong key, corrupted data, etc.)
+     * Retrieves or creates an EC256 (secp256r1/P-256) key pair for ECDH operations.
+     * Returns the private key component.
+     *
+     * @return The EC256 private key
+     * @throws Exception if key generation or retrieval fails
      */
-    byte[] decryptWithAppKey(byte[] encryptedData) throws Exception;
+    PrivateKey getEC256PrivateKey() throws Exception;
     
     /**
      * Checks if the keystore is available and functional on this platform.

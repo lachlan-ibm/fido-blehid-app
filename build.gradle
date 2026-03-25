@@ -2,6 +2,7 @@
  * Copyright IBM 2025
  */
 apply plugin: 'java'
+apply plugin: 'eclipse'
 
 
 repositories {

@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.ctap;
 
@@ -28,7 +28,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.authenticator.AuthenticatorCmd;
-import com.isfs.blekey.authenticator.Fido2Authenticator;
 import com.isfs.blekey.authenticator.PinSubCmd;
 import com.isfs.blekey.authenticator.TestConfig;
 import com.isfs.blekey.authenticator.TestHelper;
@@ -46,6 +45,7 @@ public class Ctap2HidRequestTest {
     private SecureRandom random;
     private byte[] pinHash;
     private java.lang.reflect.Field assignedCidsField;
+    private java.io.File tempDir;
     
     /**
      * Creates a test passkey for use in tests.
@@ -61,67 +61,39 @@ public class Ctap2HidRequestTest {
         java.security.cert.X509Certificate cert = com.isfs.blekey.util.CertUtils.generateCaCert(
                 "CN=Test Passkey", keyPair, 365, true);
         
-        // Create a seed for the passkey
-        byte[] seed = new byte[32];
-        random.nextBytes(seed);
-        
-        // Create an empty map for resident credentials
-        Map<byte[], Map<String, byte[]>> resCreds = new HashMap<>();
+        // Create an empty list for resident credentials
+        List<Map<String, byte[]>> resCreds = new ArrayList<>();
         
         // Create the passkey using the protected constructor via reflection
         java.lang.reflect.Constructor<Passkey> constructor =
                 com.isfs.blekey.data.Passkey.class.getDeclaredConstructor(
                         java.security.PrivateKey.class,
                         java.security.cert.X509Certificate.class,
-                        byte[].class,
-                        Map.class);
+                        List.class);
         constructor.setAccessible(true);
-        return constructor.newInstance(keyPair.getPrivate(), cert, seed, resCreds);
+        return constructor.newInstance(keyPair.getPrivate(), cert, resCreds);
     }
     
     /**
-     * A custom HashMap that compares byte arrays by content, not by reference.
+     * Helper method to set the root key pair in the Passkey class using reflection
      */
-    private static class ByteArrayMap<V> extends HashMap<byte[], V> {
-        @Override
-        public boolean containsKey(Object key) {
-            if (!(key instanceof byte[])) {
-                return false;
-            }
-            byte[] keyBytes = (byte[]) key;
-            for (byte[] k : keySet()) {
-                if (Arrays.equals(k, keyBytes)) {
-                    return true;
-                }
-            }
-            return false;
-        }
+    private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
+        java.lang.reflect.Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        rootPublicKeyField.setAccessible(true);
+        rootPublicKeyField.set(null, publicKey);
         
-        @Override
-        public V get(Object key) {
-            if (!(key instanceof byte[])) {
-                return null;
-            }
-            byte[] keyBytes = (byte[]) key;
-            for (Map.Entry<byte[], V> entry : entrySet()) {
-                if (Arrays.equals(entry.getKey(), keyBytes)) {
-                    return entry.getValue();
-                }
-            }
-            return null;
-        }
-        
-        @Override
-        public V put(byte[] key, V value) {
-            // Remove any existing entry with the same content
-            for (byte[] k : new ArrayList<>(keySet())) {
-                if (Arrays.equals(k, key)) {
-                    remove(k);
-                    break;
-                }
-            }
-            return super.put(key, value);
-        }
+        java.lang.reflect.Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        rootPrivateKeyField.setAccessible(true);
+        rootPrivateKeyField.set(null, privateKey);
+    }
+    
+    /**
+     * Helper method to convert byte array CID to String key (matching CtapHid.cidKey())
+     */
+    private static String cidKey(byte[] cid) {
+        StringBuilder sb = new StringBuilder(cid.length * 2);
+        for (byte b : cid) sb.append(String.format("%02x", b));
+        return sb.toString();
     }
     
     /**
@@ -135,9 +107,20 @@ public class Ctap2HidRequestTest {
         byte[] pinToken = new byte[32];
         random.nextBytes(pinToken);
         
-        // Create a CtapTxn with the passkey
+        // Create a passkey file in the FIDO2_HOME directory (set in setUp())
+        String passkeyFileName = "test-passkey-" + System.currentTimeMillis() + ".passkey";
+        java.io.File tempFile = new java.io.File(tempDir, passkeyFileName);
+        tempFile.deleteOnExit();
+        
+        // Write the passkey to the temp file so it exists
+        com.isfs.blekey.data.Passkey.writeKey(passkey, pinHash, tempFile);
+        
+        // Create a CtapTxn with the passkey (no cmd parameter needed for test setup)
         com.isfs.blekey.ctap.CtapTxn txn = new com.isfs.blekey.ctap.CtapTxn(
                 channelId, null, pinToken, passkey, pinHash);
+        
+        // Set just the filename (not absolute path) - resolvePasskeyFile() will combine with FIDO2_HOME
+        txn.setPasskeyFileName(passkeyFileName);
         
         // Get the assignedCids field from CtapHid
         if (assignedCidsField == null) {
@@ -145,28 +128,30 @@ public class Ctap2HidRequestTest {
             assignedCidsField.setAccessible(true);
         }
         
-        // Replace the assignedCids map with our custom implementation
-        ByteArrayMap<com.isfs.blekey.ctap.CtapTxn> newMap = new ByteArrayMap<>();
-        
-        // Get the current assignedCids map
+        // Get the current assignedCids map (now String-based)
         @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> currentMap =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
+        Map<String, com.isfs.blekey.ctap.CtapTxn> currentMap =
+                (Map<String, com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
-        // Copy all entries from the current map to our new map
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : currentMap.entrySet()) {
-            newMap.put(entry.getKey(), entry.getValue());
-        }
-        
-        // Add our new transaction to the map
-        newMap.put(channelId, txn);
-        
-        // Replace the assignedCids map with our custom implementation
-        assignedCidsField.set(null, newMap);
+        // Add our new transaction to the map using String key
+        currentMap.put(cidKey(channelId), txn);
     }
     
     @BeforeEach
     public void setUp() throws Exception {
+        // Create a temporary directory for FIDO2_HOME
+        tempDir = java.nio.file.Files.createTempDirectory("fido2-test-").toFile();
+        tempDir.deleteOnExit();
+        System.setProperty("FIDO2_HOME", tempDir.getAbsolutePath());
+        
+        // Initialize KeystoreManager for Passkey operations
+        com.isfs.blekey.data.Passkey.setKeystoreManager(
+            com.isfs.blekey.authenticator.TestHelper.createMockKeystoreManager());
+        
+        // Generate and set root key pair for Passkey encryption
+        KeyPair rootKeyPair = KeyUtils.generateKeyPair("EC", 256);
+        setRootKeyPair(rootKeyPair.getPublic(), rootKeyPair.getPrivate());
+        
         // Generate a random channel ID for testing
         random = new SecureRandom();
         channelId = new byte[4];
@@ -182,25 +167,16 @@ public class Ctap2HidRequestTest {
         
         // Verify that the passkey was added to the assignedCids map
         @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCids =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
+        Map<String, com.isfs.blekey.ctap.CtapTxn> assignedCids =
+                (Map<String, com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
-        // Find the transaction by comparing byte arrays by content
-        boolean found = false;
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : assignedCids.entrySet()) {
-            if (Arrays.equals(entry.getKey(), channelId)) {
-                found = true;
-                System.err.println("Found transaction in setUp with channel ID: " + Arrays.toString(channelId));
-                break;
-            }
-        }
-        
-        if (!found) {
+        // Check if the transaction was added using String key
+        String key = cidKey(channelId);
+        if (assignedCids.containsKey(key)) {
+            System.err.println("Found transaction in setUp with channel ID: " + Arrays.toString(channelId));
+        } else {
             System.err.println("Transaction not found in setUp with channel ID: " + Arrays.toString(channelId));
-            System.err.println("assignedCids keys: ");
-            for (byte[] key : assignedCids.keySet()) {
-                System.err.println("  " + Arrays.toString(key));
-            }
+            System.err.println("assignedCids keys: " + assignedCids.keySet());
         }
     }
     
@@ -556,8 +532,52 @@ public class Ctap2HidRequestTest {
      * 
      * This test should now succeed because we're including a valid PIN token in the request.
      */
-    @Test
-    public void testAuthenticatorMakeCredential() throws Exception {
+    /**
+     * Helper method to extract credential ID from authenticator data.
+     * AuthData structure: rpIdHash(32) + flags(1) + counter(4) + attestedCredentialData
+     * AttestedCredentialData: aaguid(16) + credIdLength(2) + credId(L) + credentialPublicKey
+     */
+    private byte[] extractCredIdFromAuthData(byte[] authData) {
+        // Skip rpIdHash (32 bytes) + flags (1 byte) + counter (4 bytes) = 37 bytes
+        int offset = 37;
+        
+        // Skip AAGUID (16 bytes)
+        offset += 16;
+        
+        // Read credential ID length (2 bytes, big-endian)
+        int credIdLength = ((authData[offset] & 0xFF) << 8) | (authData[offset + 1] & 0xFF);
+        System.err.println("Credential ID length from authData: " + credIdLength);
+        offset += 2;
+        
+        // Extract credential ID
+        byte[] credId = new byte[credIdLength];
+        System.arraycopy(authData, offset, credId, 0, credIdLength);
+        
+        // Debug: Check if it's a valid base64url string
+        try {
+            String credIdStr = new String(credId, java.nio.charset.StandardCharsets.UTF_8);
+            System.err.println("Credential ID as UTF-8 string (length " + credIdStr.length() + "): " + credIdStr);
+            System.err.println("First 50 chars: " + credIdStr.substring(0, Math.min(50, credIdStr.length())));
+        } catch (Exception e) {
+            System.err.println("Failed to convert credId to UTF-8 string: " + e.getMessage());
+        }
+        
+        return credId;
+    }
+    
+    /**
+     * Test helper that creates a credential and returns its ID.
+     * This is called by testAuthenticatorGetAssertion to set up a credential first.
+     */
+    private byte[] createCredentialAndGetId() throws Exception {
+        return makeCredentialAndReturnCredId();
+    }
+    
+    /**
+     * Helper method that creates a credential and returns its ID.
+     * Not a @Test method since it returns a value.
+     */
+    private byte[] makeCredentialAndReturnCredId() throws Exception {
         System.err.println("testAuthenticatorMakeCredential");
         // Create client data hash (normally from the browser)
         byte[] clientDataHash = new byte[32];
@@ -568,31 +588,13 @@ public class Ctap2HidRequestTest {
         rpEntity.put("id", TestConfig.getRelyingPartyId());
         rpEntity.put("name", TestConfig.getRelyingPartyName());
         
-        // Add a resident credential for this relying party to the passkey
-        byte[] rpIdBytes = TestConfig.getRelyingPartyId().getBytes();
-        byte[] credId = new byte[32];
-        random.nextBytes(credId);
-        byte[] userHandle = TestConfig.getUserId().getBytes();
-        
-        // Get the CtapTxn from the assignedCids map
+        // Get the CtapTxn from the assignedCids map (now String-based)
         @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> cidMap =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
+        Map<String, com.isfs.blekey.ctap.CtapTxn> cidMap =
+                (Map<String, com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
-        // Find the transaction by comparing byte arrays by content
-        com.isfs.blekey.ctap.CtapTxn transaction = null;
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : cidMap.entrySet()) {
-            if (Arrays.equals(entry.getKey(), channelId)) {
-                transaction = entry.getValue();
-                break;
-            }
-        }
-        
-        // Add the resident credential to the passkey
-        if (transaction != null && transaction.getPasskey() != null) {
-            transaction.getPasskey().addResCred(rpIdBytes, credId, userHandle);
-        }
-        
+        // Get the transaction using String key
+        com.isfs.blekey.ctap.CtapTxn transaction = cidMap.get(cidKey(channelId));
         
         // Create user entity using TestConfig
         Map<String, Object> userEntity = new HashMap<>();
@@ -617,6 +619,11 @@ public class Ctap2HidRequestTest {
         
         params.put(0x04, new Map[] { credParam }); // pubKeyCredParams
         
+        // Add options to request resident key
+        Map<String, Object> options = new HashMap<>();
+        options.put("rk", true); // Request resident key
+        params.put(0x07, options); // options
+        
         // Add PIN token
         
         // Make sure we found the transaction
@@ -624,10 +631,25 @@ public class Ctap2HidRequestTest {
         
         byte[] pinToken = transaction.getPinAuthTkn();
         
-        // Add PIN token to request
+        // Add PIN auth to request
         if (pinToken != null) {
-            params.put(0x07, pinToken); // pinAuth
-            params.put(0x08, 1); // pinProtocol
+            // Compute pinUvAuthParam = HMAC-SHA-256(pinToken, rpIdHash)[0:16]
+            try {
+                String rpId = "example.com";
+                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] rpIdHash = digest.digest(rpId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                
+                javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                javax.crypto.spec.SecretKeySpec keySpec = new javax.crypto.spec.SecretKeySpec(pinToken, "HmacSHA256");
+                mac.init(keySpec);
+                byte[] hmac = mac.doFinal(rpIdHash);
+                byte[] pinUvAuthParam = java.util.Arrays.copyOfRange(hmac, 0, 16);
+                
+                params.put(0x08, pinUvAuthParam); // pinUvAuthParam
+                params.put(0x09, 1); // pinUvAuthProtocol
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to compute pinUvAuthParam", e);
+            }
         }
         
         // Create CBOR request for authenticatorMakeCredential (0x01)
@@ -638,24 +660,17 @@ public class Ctap2HidRequestTest {
         // Process the request
         // Before creating the CtapHid, verify that the transaction exists in the map
         @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCidsBeforeRequest =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
+        Map<String, com.isfs.blekey.ctap.CtapTxn> assignedCidsBeforeRequest =
+                (Map<String, com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
-        boolean foundBeforeRequest = false;
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : assignedCidsBeforeRequest.entrySet()) {
-            if (Arrays.equals(entry.getKey(), channelId)) {
-                foundBeforeRequest = true;
-                System.err.println("Found transaction before request with channel ID: " + Arrays.toString(channelId));
-                break;
-            }
-        }
+        String channelKey = cidKey(channelId);
+        boolean foundBeforeRequest = assignedCidsBeforeRequest.containsKey(channelKey);
         
-        if (!foundBeforeRequest) {
+        if (foundBeforeRequest) {
+            System.err.println("Found transaction before request with channel ID: " + Arrays.toString(channelId));
+        } else {
             System.err.println("Transaction not found before request with channel ID: " + Arrays.toString(channelId));
-            System.err.println("assignedCids keys before request: ");
-            for (byte[] key : assignedCidsBeforeRequest.keySet()) {
-                System.err.println("  " + Arrays.toString(key));
-            }
+            System.err.println("assignedCids keys before request: " + assignedCidsBeforeRequest.keySet());
         }
         
         CtapHid ctapHid = new CtapHid(request);
@@ -696,10 +711,27 @@ public class Ctap2HidRequestTest {
             // Verify authData is present and not empty
             byte[] authData = (byte[]) cborResponse.get(0x02);
             assertTrue(authData.length > 0, "AuthData should not be empty");
+            
+            // Extract and return credential ID from authData
+            byte[] credId = extractCredIdFromAuthData(authData);
+            System.err.println("Extracted credential ID length: " + credId.length);
+            return credId;
         }
         else {
-            assert false: "Attesation failed " + Arrays.toString(response);;
+            assert false: "Attestation failed " + Arrays.toString(response);
+            return null;
         }
+    }
+    
+    /**
+     * Test 4: authenticatorMakeCredential request
+     * This is the actual JUnit test that doesn't return a value.
+     */
+    @Test
+    public void testAuthenticatorMakeCredential() throws Exception {
+        byte[] credId = makeCredentialAndReturnCredId();
+        assertNotNull(credId, "Credential ID should not be null");
+        assertTrue(credId.length > 0, "Credential ID should not be empty");
     }
     
     /**
@@ -713,57 +745,13 @@ public class Ctap2HidRequestTest {
     public void testAuthenticatorGetAssertion() throws Exception {
         System.err.println("testAuthenticatorGetAssertion");
         
-        // Add a resident credential for this relying party to the passkey
+        // First, call makeCredential to create a credential and get its ID
+        byte[] credId = createCredentialAndGetId();
+        assertNotNull(credId, "Credential ID should not be null");
+        
+        
         String rpIdString = TestConfig.getRelyingPartyId();
-        byte[] rpIdBytes = rpIdString.getBytes();
-        // Use the authenticator's credential ID instead of a random one
-        byte[] credId = null;
-        try {
-            // Get the transaction first
-            @SuppressWarnings("unchecked")
-            Map<byte[], com.isfs.blekey.ctap.CtapTxn> cidMap =
-                    (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
-            
-            // Find the transaction by comparing byte arrays by content
-            com.isfs.blekey.ctap.CtapTxn transaction = null;
-            for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : cidMap.entrySet()) {
-                if (Arrays.equals(entry.getKey(), channelId)) {
-                    transaction = entry.getValue();
-                    break;
-                }
-            }
-            
-            if (transaction != null && transaction.getPasskey() != null) {
-                Fido2Authenticator authenticator = new Fido2Authenticator();
-                authenticator.setSymKeys(KeyUtils.getPasskeySeed(rpIdBytes, transaction.getPasskey().getPrivateKey()));
-                credId = authenticator.getCredId();
-            } else {
-                fail("Transaction or passkey is null");
-            }
-        } catch (Exception e) {
-            fail("Failed to get credential ID: " + e.getMessage());
-        }
-        assert credId != null: "cred id not set from authenticator";
         byte[] userHandle = TestConfig.getUserId().getBytes();
-        
-        // Get the CtapTxn from the assignedCids map
-        @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> cidMap =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
-        
-        // Find the transaction by comparing byte arrays by content
-        com.isfs.blekey.ctap.CtapTxn transaction = null;
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : cidMap.entrySet()) {
-            if (Arrays.equals(entry.getKey(), channelId)) {
-                transaction = entry.getValue();
-                break;
-            }
-        }
-        
-        // Add the resident credential to the passkey
-        if (transaction != null && transaction.getPasskey() != null) {
-            transaction.getPasskey().addResCred(rpIdBytes, credId, userHandle);
-        }
         
         // Create client data hash (normally from the browser)
         byte[] clientDataHash = new byte[32];
@@ -773,10 +761,8 @@ public class Ctap2HidRequestTest {
         Map<Integer, Object> params = new HashMap<>();
         params.put(0x01, clientDataHash); // clientDataHash
         
-        // Create a map with rpId as a key-value pair - this is what AuthenticatorAPI.generateSignedAssertion expects
-        Map<String, Object> pubKeyMap = new HashMap<>();
-        pubKeyMap.put("rpId", rpIdString);
-        params.put(0x02, pubKeyMap); // rpId as a map with "rpId" key
+        // For getAssertion, parameter 0x02 is the rpId string directly (not a map like in makeCredential)
+        params.put(0x02, rpIdString); // rpId as string
         
         // Add allowCredentials parameter with the credential ID we just created
         Map<String, byte[]> allowedCred = new HashMap<>();
@@ -789,27 +775,36 @@ public class Ctap2HidRequestTest {
         // Add PIN token
         // Get the CtapTxn from the assignedCids map
         @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCids =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
+        Map<String, com.isfs.blekey.ctap.CtapTxn> assignedCids =
+                (Map<String, com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
-        // Find the transaction by comparing byte arrays by content
-        com.isfs.blekey.ctap.CtapTxn txn = null;
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : assignedCids.entrySet()) {
-            if (Arrays.equals(entry.getKey(), channelId)) {
-                txn = entry.getValue();
-                break;
-            }
-        }
+        // Get the transaction using String key
+        com.isfs.blekey.ctap.CtapTxn txn = assignedCids.get(cidKey(channelId));
         
         // Make sure we found the transaction
         assertNotNull(txn, "Transaction should not be null");
         
         byte[] pinToken = txn.getPinAuthTkn();
         
-        // Add PIN token to request
+        // Add PIN auth to request
         if (pinToken != null) {
-            params.put(0x06, pinToken); // pinAuth
-            params.put(0x07, 1); // pinProtocol
+            // Compute pinUvAuthParam = HMAC-SHA-256(pinToken, rpIdHash)[0:16]
+            try {
+                String rpId = "example.com";
+                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] rpIdHash = digest.digest(rpId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                
+                javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                javax.crypto.spec.SecretKeySpec keySpec = new javax.crypto.spec.SecretKeySpec(pinToken, "HmacSHA256");
+                mac.init(keySpec);
+                byte[] hmac = mac.doFinal(rpIdHash);
+                byte[] pinUvAuthParam = java.util.Arrays.copyOfRange(hmac, 0, 16);
+                
+                params.put(0x08, pinUvAuthParam); // pinUvAuthParam
+                params.put(0x09, 1); // pinUvAuthProtocol
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to compute pinUvAuthParam", e);
+            }
         }
         
         // Create CBOR request for authenticatorGetAssertion (0x02)
@@ -818,24 +813,17 @@ public class Ctap2HidRequestTest {
         // Process the request
         // Before creating the CtapHid, verify that the transaction exists in the map
         @SuppressWarnings("unchecked")
-        Map<byte[], com.isfs.blekey.ctap.CtapTxn> assignedCidsBeforeRequest =
-                (Map<byte[], com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
+        Map<String, com.isfs.blekey.ctap.CtapTxn> assignedCidsBeforeRequest =
+                (Map<String, com.isfs.blekey.ctap.CtapTxn>) assignedCidsField.get(null);
         
-        boolean foundBeforeRequest = false;
-        for (Map.Entry<byte[], com.isfs.blekey.ctap.CtapTxn> entry : assignedCidsBeforeRequest.entrySet()) {
-            if (Arrays.equals(entry.getKey(), channelId)) {
-                foundBeforeRequest = true;
-                System.err.println("Found transaction before request with channel ID: " + Arrays.toString(channelId));
-                break;
-            }
-        }
+        String channelKey = cidKey(channelId);
+        boolean foundBeforeRequest = assignedCidsBeforeRequest.containsKey(channelKey);
         
-        if (!foundBeforeRequest) {
+        if (foundBeforeRequest) {
+            System.err.println("Found transaction before request with channel ID: " + Arrays.toString(channelId));
+        } else {
             System.err.println("Transaction not found before request with channel ID: " + Arrays.toString(channelId));
-            System.err.println("assignedCids keys before request: ");
-            for (byte[] key : assignedCidsBeforeRequest.keySet()) {
-                System.err.println("  " + Arrays.toString(key));
-            }
+            System.err.println("assignedCids keys before request: " + assignedCidsBeforeRequest.keySet());
         }
         
         CtapHid ctapHid = new CtapHid(request);

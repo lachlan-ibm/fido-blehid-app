@@ -221,7 +221,10 @@ public class ManageActivity extends AppCompatActivity {
             deleteButton.setVisibility(View.VISIBLE);
             
             // Update the adapter to refresh the view
-            ((ArrayAdapter<?>) parent.getAdapter()).notifyDataSetChanged();
+            Object adapter = parent.getAdapter();
+            if (adapter instanceof ArrayAdapter<?>) {
+                ((ArrayAdapter<?>) adapter).notifyDataSetChanged();
+            }
         });
     }
     
@@ -404,15 +407,15 @@ public class ManageActivity extends AppCompatActivity {
     
     /**
      * Validates the entered password and shows/hides UI elements accordingly.
-     * Uses SHA-256 to hash the password and extracts the lower 16 bytes
+     * Uses SHA-256 to hash the password (full 32 bytes)
      * to attempt to decrypt the passkey file.
      */
     private void validatePassword() {
         String enteredPassword = passwordInput.getText().toString();
-        byte[] lowerHash = KeyUtils.getLowerPinHash(enteredPassword);
+        byte[] pinHash = KeyUtils.getPinHash(enteredPassword);
         
         // Try to decrypt the passkey file
-        Passkey passkey = Passkey.openKey(lowerHash, selectedPasskeyFile);
+        Passkey passkey = Passkey.openKey(pinHash, selectedPasskeyFile);
         
         if (passkey != null) {
             // Password is correct
@@ -436,7 +439,7 @@ public class ManageActivity extends AppCompatActivity {
             Intent intent = new Intent(getApplicationContext(), ResidentCredentialsActivity.class);
             intent.putExtra("passkey_file", selectedPasskeyFile.getAbsolutePath());
             // Pass the password hash to allow decrypting the passkey file
-            intent.putExtra("passkey", lowerHash);
+            intent.putExtra("passkey", pinHash);
             intent.putExtra("file", selectedPasskeyFile.getName());
             startActivity(intent);
         } else {

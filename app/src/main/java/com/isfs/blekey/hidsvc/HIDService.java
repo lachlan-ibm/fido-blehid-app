@@ -10,6 +10,7 @@ import java.util.UUID;
 import java.util.Set;
 import java.util.Queue;
 import java.util.Map;
+import java.util.List;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Arrays;
@@ -57,12 +58,23 @@ public class HIDService {
     private static final String TAG = HIDService.class.getCanonicalName();
 
     /**
+     * HID service enumeration state for a device.
+     */
+    public enum HidEnumerationState {
+        NOT_ENUMERATED,  // HID service not discovered yet
+        ENUMERATED,      // HID Report Map read (service discovered)
+        ACTIVE           // Notifications enabled (ready for input)
+    }
+
+    /**
      * Listener for device connection/disconnection events.
      */
     public interface ConnectionListener {
         void onDeviceConnected(BluetoothDevice device);
         void onDeviceDisconnected(BluetoothDevice device);
         void onDeviceError(BluetoothDevice device);
+        void onHidServiceEnumerated(BluetoothDevice device);
+        void onHidServiceActive(BluetoothDevice device);
     }
 
     private String manufacturer = "lowkey";
@@ -77,6 +89,7 @@ public class HIDService {
     @Nullable
     private BluetoothGattServer gattServer;
     private final Map<String, BluetoothDevice> bluetoothDevicesMap = new ConcurrentHashMap<>();
+    private final Map<String, HidEnumerationState> deviceHidState = new ConcurrentHashMap<>();
     @Nullable
     private ConnectionListener connectionListener;
 
@@ -140,10 +153,13 @@ public class HIDService {
     public HIDService(final Context context, boolean bToothConnect, boolean bToothAdvertise) throws UnsupportedOperationException {
         applicationContext = context.getApplicationContext();
         if(!bToothConnect || !bToothAdvertise) {
-            Log.e(TAG, "Bluetooth is not available/permitted...back to main");
-            ServerActivity sa = (ServerActivity) context;
-            Toast.makeText(sa, sa.getString(R.string.ble_perip_not_supported), Toast.LENGTH_SHORT).show();
-            sa.finish();
+            Log.e(TAG, "Bluetooth is not available/permitted");
+            if (context instanceof ServerActivity) {
+                ServerActivity sa = (ServerActivity) context;
+                Toast.makeText(sa, sa.getString(R.string.ble_perip_not_supported), Toast.LENGTH_SHORT).show();
+                sa.finish();
+            }
+            throw new UnsupportedOperationException("Bluetooth permissions not granted");
         }
         handler = new Handler(applicationContext.getMainLooper());
 
@@ -268,12 +284,29 @@ public class HIDService {
                 (BluetoothManager) applicationContext.getSystemService(Context.BLUETOOTH_SERVICE);
         final BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
         if (bluetoothAdapter == null) return;
+        
+        // Get list of connected GATT devices to detect existing connections
+        final List<BluetoothDevice> connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
+        
         final Set<BluetoothDevice> bonded = bluetoothAdapter.getBondedDevices();
         if (bonded == null || bonded.isEmpty()) return;
         for (final BluetoothDevice device : bonded) {
             if (device.getType() == BluetoothDevice.DEVICE_TYPE_LE
                     || device.getType() == BluetoothDevice.DEVICE_TYPE_DUAL) {
                 Log.d(TAG, "Reconnecting to bonded BLE device: " + device.getAddress());
+                
+                // Check if device is already connected (from before app restart)
+                final boolean alreadyConnected = connectedDevices.contains(device);
+                if (alreadyConnected) {
+                    Log.d(TAG, "Device " + device.getAddress() + " already connected, updating UI state");
+                    // Add to our device map and notify listener
+                    bluetoothDevicesMap.put(device.getAddress(), device);
+                    handler.post(() -> {
+                        sendServiceChangedIndication(device);
+                        postConnectedActions(device);
+                    });
+                }
+                
                 handler.post(() -> {
                     if (gattServer != null) {
                         gattServer.connect(device, true);
@@ -522,6 +555,25 @@ public class HIDService {
         return Collections.unmodifiableSet(new HashSet<>(bluetoothDevicesMap.values()));
     }
 
+    /**
+     * Gets the HID enumeration state for a specific device.
+     *
+     * @param deviceAddress The Bluetooth address of the device
+     * @return The HID enumeration state, or NOT_ENUMERATED if not found
+     */
+    public HidEnumerationState getHidState(String deviceAddress) {
+        return deviceHidState.getOrDefault(deviceAddress, HidEnumerationState.NOT_ENUMERATED);
+    }
+
+    /**
+     * Gets all devices with their HID enumeration states.
+     *
+     * @return Unmodifiable map of device address to HID state
+     */
+    public Map<String, HidEnumerationState> getAllHidStates() {
+        return Collections.unmodifiableMap(new HashMap<>(deviceHidState));
+    }
+
     private void postConnectedActions(final BluetoothDevice device) {
         handler.post(() -> {
             if (connectionListener != null) {
@@ -555,7 +607,7 @@ public class HIDService {
     private void buildReadHandlers() {
         readHandlers = new HashMap<>();
         readHandlers.put(CHARACTERISTIC_HID_INFORMATION,   offset -> RESPONSE_HID_INFORMATION);
-        readHandlers.put(CHARACTERISTIC_REPORT_MAP,        this::getReportMapSlice);
+        readHandlers.put(CHARACTERISTIC_REPORT_MAP,        offset -> getReportMapSlice(offset));
         readHandlers.put(CHARACTERISTIC_PROTOCOL_MODE,     offset -> RESPONSE_PROTOCOL_MODE);
         readHandlers.put(CHARACTERISTIC_HID_CONTROL_POINT, offset -> new byte[]{0});
         readHandlers.put(CHARACTERISTIC_REPORT,            offset -> EMPTY_BYTES);
@@ -660,6 +712,7 @@ public class HIDService {
 
                 case BluetoothProfile.STATE_DISCONNECTED:
                     bluetoothDevicesMap.remove(device.getAddress());
+                    deviceHidState.remove(device.getAddress());
                     handler.post(() -> {
                         if (gattServer != null) gattServer.connect(device, true);
                         if (connectionListener != null) connectionListener.onDeviceDisconnected(device);
@@ -684,6 +737,18 @@ public class HIDService {
                 final Function<Integer, byte[]> readHandler = readHandlers.get(characteristic.getUuid());
                 if (readHandler != null) {
                     sendSuccessResponse(device, requestId, offset, readHandler.apply(offset));
+                    
+                    // Track HID enumeration when Report Map is read
+                    if (characteristic.getUuid().equals(CHARACTERISTIC_REPORT_MAP) && offset == 0) {
+                        HidEnumerationState currentState = deviceHidState.get(device.getAddress());
+                        if (currentState != HidEnumerationState.ACTIVE) {
+                            deviceHidState.put(device.getAddress(), HidEnumerationState.ENUMERATED);
+                            Log.d(TAG, "HID service enumerated for device: " + device.getAddress());
+                            if (connectionListener != null) {
+                                connectionListener.onHidServiceEnumerated(device);
+                            }
+                        }
+                    }
                 } else {
                     Log.w(TAG, "Unhandled characteristic read: " + characteristic.getUuid()
                             + ", service: " + characteristic.getService().getUuid()
@@ -761,12 +826,12 @@ public class HIDService {
 
         @Override
         @SuppressLint("MissingPermission")
-        public void onDescriptorWriteRequest(final BluetoothDevice device, 
-                                             final int requestId, 
-                                             final BluetoothGattDescriptor descriptor, 
-                                             final boolean preparedWrite, 
-                                             final boolean responseNeeded, 
-                                             final int offset, 
+        public void onDescriptorWriteRequest(final BluetoothDevice device,
+                                             final int requestId,
+                                             final BluetoothGattDescriptor descriptor,
+                                             final boolean preparedWrite,
+                                             final boolean responseNeeded,
+                                             final int offset,
                                              final byte[] value) {
             super.onDescriptorWriteRequest(device, requestId, descriptor, preparedWrite, responseNeeded, offset, value);
             Log.d(TAG, "onDescriptorWriteRequest descriptor: " + descriptor.getUuid() +
@@ -775,9 +840,19 @@ public class HIDService {
             // Note: As per Android issue #280288203, we should not set values directly on descriptors
             // Instead, we store the value in our application logic and use it when needed
             
+            // Track HID activation when notifications are enabled
+            if (BleUtils.matches(DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION, descriptor.getUuid())) {
+                if (value != null && Arrays.equals(value, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
+                    deviceHidState.put(device.getAddress(), HidEnumerationState.ACTIVE);
+                    Log.d(TAG, "HID service active for device: " + device.getAddress());
+                    if (connectionListener != null) {
+                        handler.post(() -> connectionListener.onHidServiceActive(device));
+                    }
+                }
+            }
+            
             if (responseNeeded) {
                 if (BleUtils.matches(DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION, descriptor.getUuid())) {
-                    // send empty
                     if (gattServer != null) {
                         gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, EMPTY_BYTES);
                     }

@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 
 package com.isfs.blekey.authenticator;
@@ -77,9 +77,13 @@ public class Fido2Authenticator implements java.io.Serializable {
 
     public Fido2Authenticator() {
         try {
-            this.keyPair = KeyUtils.getKeyPair("EC");
+            this.keyPair = KeyUtils.getKeyPair("ECDSA");
+            if (this.keyPair == null) {
+                throw new IllegalStateException("Failed to generate EC KeyPair - KeyUtils.getKeyPair returned null");
+            }
         } catch (Exception e) {
             e.printStackTrace();
+            throw new RuntimeException("Failed to initialize Fido2Authenticator: " + e.getMessage(), e);
         }
     }
 
@@ -114,9 +118,8 @@ public class Fido2Authenticator implements java.io.Serializable {
             try {
                 byte[] encoded = this.keyPair.getPrivate().getEncoded();
                 String cred = aesKey.encrypt(encoded); // b64url
-                //System.err.println(Arrays.toString(cbor));
-                this.credId = cred.getBytes();
-                //System.err.println("cred Id Bytes: " + Arrays.toString(credId));
+                this.credId = cred.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                System.err.println("getCredId() - aesKey: " + this.credId.length);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -125,6 +128,7 @@ public class Fido2Authenticator implements java.io.Serializable {
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 digest.update(this.keyPair.getPublic().getEncoded());
                 this.credId = digest.digest();
+                System.err.println("getCredId() - SHA-256 fallback: " + this.credId.length);
             } catch (NoSuchAlgorithmException e) {
                 throw new RuntimeException(e);
             }
@@ -134,7 +138,7 @@ public class Fido2Authenticator implements java.io.Serializable {
 
     public void initFromCredId(byte[] credId) throws Exception {
         this.credId = credId;
-        String credIdStr = new String(credId);
+        String credIdStr = new String(credId, java.nio.charset.StandardCharsets.UTF_8);
         // Decrypt the token
         byte[] asn1Bytes = aesKey.decrypt(credIdStr, null);
         // Generate the key pair from the parameters
@@ -970,7 +974,10 @@ public class Fido2Authenticator implements java.io.Serializable {
             byte[] authData, byte[] credId, X509Certificate caCert, KeyPair caKeyPair,
             KeyPair aikKeyPair) throws Exception {
         Map<String, Object> result = new HashMap<>();
-        KeyPair intermediateKeyPair = KeyUtils.generateKeyPair("RSA", 2048);
+        // Generate intermediate key pair matching the CA key type
+        String keyAlgorithm = caKeyPair.getPublic().getAlgorithm();
+        int keySize = keyAlgorithm.equals("EC") ? 256 : 2048;
+        KeyPair intermediateKeyPair = KeyUtils.generateKeyPair(keyAlgorithm, keySize);
         X509Certificate intermediateCert = CertUtils.generateIntermediateCACert(caCert,
                 "CN=intermediateCA", 365, intermediateKeyPair, caKeyPair);
         String altNames = Fido2Authenticator.TPM_VENDOR + "=IBMTPM+"

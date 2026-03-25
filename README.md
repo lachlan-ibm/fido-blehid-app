@@ -92,6 +92,68 @@ The project includes GitHub Actions workflows for continuous integration:
 - Java Development Kit (JDK) 17 or higher
 - Android Studio (for app development)
 - Gradle 8.1.1 or higher
+- Android SDK with API level 34 installed
+
+### VS Code / Bob IDE Setup
+
+If you're using VS Code or Bob IDE for development, you need to configure the Java Language Server to properly recognize the Android project:
+
+#### Fixing "Missing system library" Error
+
+If you encounter `java.lang.IllegalStateException: Missing system library` errors, follow these steps:
+
+1. **Enable Android Support** in `.vscode/settings.json`:
+   ```json
+   {
+     "java.jdt.ls.androidSupport.enabled": "on"
+   }
+   ```
+
+2. **Configure Eclipse Plugin** in `app/build.gradle`:
+   ```gradle
+   apply plugin: 'eclipse'
+
+   eclipse {
+       classpath {
+           containers 'org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17'
+           file.whenMerged { cp ->
+               def entries = cp.entries
+               
+               // Add main source directory
+               def src = new org.gradle.plugins.ide.eclipse.model.SourceFolder('src/main/java', null)
+               entries.add(src)
+               
+               // Add Android SDK android.jar
+               def androidJar = new org.gradle.plugins.ide.eclipse.model.Library(
+                   fileReferenceFactory.fromPath("${android.sdkDirectory}/platforms/${android.compileSdkVersion}/android.jar")
+               )
+               androidJar.sourcePath = fileReferenceFactory.fromPath("${android.sdkDirectory}/sources/${android.compileSdkVersion}")
+               entries.add(androidJar)
+           }
+       }
+   }
+   ```
+
+3. **Generate Eclipse Project Files**:
+   ```bash
+   cd app && ./gradlew eclipse
+   ```
+
+4. **Update the Generated `.classpath`** file to ensure proper JRE and Gradle container:
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <classpath>
+       <classpathentry kind="output" path="bin/default"/>
+       <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17/"/>
+       <classpathentry kind="src" path="src/main/java"/>
+       <classpathentry sourcepath="/home/lowkey/Android/sources/android-34" kind="lib" path="/home/lowkey/Android/platforms/android-34/android.jar"/>
+       <classpathentry kind="con" path="org.eclipse.buildship.core.gradleclasspathcontainer"/>
+   </classpath>
+   ```
+
+5. **Reload VS Code Window**: Press `Ctrl+Shift+P` → "Developer: Reload Window"
+
+This configuration ensures the Java Language Server can properly resolve Java system libraries and Android dependencies while keeping the project managed by Gradle (not in "unmanaged" mode).
 
 ### Building the Project
 
@@ -136,6 +198,18 @@ To see what changes would be made without actually making them:
 ```
 
 For more information about the copyright management system, see [COPYRIGHT.md](COPYRIGHT.md).
+
+## Important Changes
+
+### HKDF-Based Passkey Seed Generation
+
+**Version 1.0.0+** introduces a breaking change to passkey seed generation:
+
+- **What Changed**: Replaced non-standard cryptographic construction with RFC 5869 HKDF (HMAC-based Key Derivation Function)
+- **Impact**: Existing credentials encrypted with old seeds cannot be decrypted with new seeds
+- **Action Required**: Users must re-register all credentials after upgrading
+
+This change improves security by using a standardized, well-reviewed key derivation function instead of the previous custom implementation.
 
 ## Usage
 

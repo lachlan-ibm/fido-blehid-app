@@ -1,7 +1,9 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.authenticator;
+
+import static org.mockito.Mockito.*;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -11,6 +13,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.isfs.blekey.util.CertUtils;
+import com.isfs.blekey.util.KeystoreManager;
 
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
@@ -30,6 +33,7 @@ public class TestHelper {
      */
     public static KeyPair createTestKeyPair(String algorithm) throws NoSuchAlgorithmException {
         KeyPairGenerator keyGen = KeyPairGenerator.getInstance(algorithm);
+        keyGen.initialize(256); // Initialize with P-256 curve (secp256r1)
         return keyGen.generateKeyPair();
     }
     
@@ -124,6 +128,24 @@ public class TestHelper {
                 .add("challenge", "Y2hhbGxlbmdlMTIz") // Base64 encoded "challenge123"
                 .add("type", type)
                 .build();
+    }
+    
+    /**
+     * Creates a mock KeystoreManager for testing purposes.
+     * The mock is configured with common behaviors needed for tests.
+     *
+     * @return A mocked KeystoreManager instance
+     * @throws Exception if mock setup fails
+     */
+    public static KeystoreManager createMockKeystoreManager() throws Exception {
+        KeystoreManager mock = mock(KeystoreManager.class);
+        
+        // Configure mock to return false for keystore availability
+        // This forces the code to use ECDH encryption with the platform key,
+        // which produces consistent 230-byte headers for 16-byte plaintext
+        when(mock.isKeystoreAvailable()).thenReturn(false);
+        
+        return mock;
     }
 }
 

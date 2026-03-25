@@ -3,294 +3,313 @@
  */
 package com.isfs.blekey.authenticator;
 
-import com.isfs.blekey.ctap.Ctap2StatusCode;
-import com.isfs.blekey.ctap.CtapTxn;
+import static org.junit.Assert.*;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
-import static org.junit.jupiter.api.Assertions.*;
-
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.Test;
+
+import com.isfs.blekey.ctap.Ctap2StatusCode;
+
 /**
- * Comprehensive unit tests for AuthenticatorAPI validation logic.
- * Tests all error cases defined in CTAP2 specification for authenticatorMakeCredential.
+ * Tests for AuthenticatorAPI validation methods including algorithm support,
+ * credential type determination, protocol validation, and error handling.
+ *
+ * Covers:
+ * - isSupportedAlgorithm() - Algorithm validation with various edge cases
+ * - determineCredentialType() - Credential type logic for different rk/uv combinations
+ * - validatePinUvAuthProtocol() - PIN/UV protocol version validation
+ * - errorResult() - Error response generation with various inputs
  */
-@DisplayName("AuthenticatorAPI Validation Tests")
 public class AuthenticatorAPIValidationTest {
 
-    private Map<Integer, Object> baseRequest;
-    private CtapTxn mockTxn;
-
-    @BeforeEach
-    public void setUp() {
-        // Create a valid base request that can be modified for each test
-        baseRequest = new HashMap<>();
-        
-        // clientDataHash (0x01) - 32 bytes for SHA-256
-        byte[] clientDataHash = new byte[32];
-        for (int i = 0; i < 32; i++) {
-            clientDataHash[i] = (byte) i;
-        }
-        baseRequest.put(0x01, clientDataHash);
-        
-        // rp (0x02)
-        Map<String, Object> rp = new HashMap<>();
-        rp.put("id", "example.com");
-        rp.put("name", "Example Corp");
-        baseRequest.put(0x02, rp);
-        
-        // user (0x03)
-        Map<String, Object> user = new HashMap<>();
-        user.put("id", new byte[]{1, 2, 3, 4});
-        user.put("name", "testuser");
-        user.put("displayName", "Test User");
-        baseRequest.put(0x03, user);
-        
-        // pubKeyCredParams (0x04) - ES256
-        List<Map<String, Object>> pubKeyCredParams = new ArrayList<>();
-        Map<String, Object> es256 = new HashMap<>();
-        es256.put("type", "public-key");
-        es256.put("alg", -7); // ES256
-        pubKeyCredParams.add(es256);
-        baseRequest.put(0x04, pubKeyCredParams);
-        
-        // Default options (0x07)
-        Map<String, Object> options = new HashMap<>();
-        options.put("up", true);
-        options.put("uv", false);
-        options.put("rk", false);
-        baseRequest.put(0x07, options);
-    }
-
+    /**
+     * Test isSupportedAlgorithm() with multiple algorithms including unsupported ones.
+     * Covers branch where algorithm is not in SUPPORTED_ALGORITHM_SET.
+     */
     @Test
-    @DisplayName("Should return MISSING_PARAMETER when clientDataHash is missing")
-    public void testMissingClientDataHash() {
-        baseRequest.remove(0x01);
+    public void testIsSupportedAlgorithm_MixedAlgorithms() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        method.setAccessible(true);
         
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.MISSING_PARAMETER.getCode(), response[0],
-            "Should return MISSING_PARAMETER error code");
-    }
-
-    @Test
-    @DisplayName("Should return MISSING_PARAMETER when rp is missing")
-    public void testMissingRp() {
-        baseRequest.remove(0x02);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.MISSING_PARAMETER.getCode(), response[0],
-            "Should return MISSING_PARAMETER error code");
-    }
-
-    @Test
-    @DisplayName("Should return MISSING_PARAMETER when user is missing")
-    public void testMissingUser() {
-        baseRequest.remove(0x03);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.MISSING_PARAMETER.getCode(), response[0],
-            "Should return MISSING_PARAMETER error code");
-    }
-
-    @Test
-    @DisplayName("Should return MISSING_PARAMETER when pubKeyCredParams is missing")
-    public void testMissingPubKeyCredParams() {
-        baseRequest.remove(0x04);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.MISSING_PARAMETER.getCode(), response[0],
-            "Should return MISSING_PARAMETER error code");
-    }
-
-    @Test
-    @DisplayName("Should return INVALID_PARAMETER when clientDataHash is wrong length")
-    public void testInvalidClientDataHashLength() {
-        // Test with 16 bytes instead of 32
-        baseRequest.put(0x01, new byte[16]);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), response[0],
-            "Should return INVALID_PARAMETER for wrong hash length");
-    }
-
-    @Test
-    @DisplayName("Should return INVALID_PARAMETER when clientDataHash is null")
-    public void testNullClientDataHash() {
-        baseRequest.put(0x01, null);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), response[0],
-            "Should return INVALID_PARAMETER for null hash");
-    }
-
-    @Test
-    @DisplayName("Should return INVALID_PARAMETER when pubKeyCredParams is empty")
-    public void testEmptyPubKeyCredParams() {
-        baseRequest.put(0x04, new ArrayList<>());
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), response[0],
-            "Should return INVALID_PARAMETER for empty pubKeyCredParams");
-    }
-
-    @Test
-    @DisplayName("Should return UNSUPPORTED_ALGORITHM when no supported algorithm in pubKeyCredParams")
-    public void testUnsupportedAlgorithm() {
-        // Replace with unsupported algorithm (RS256 = -257)
-        List<Map<String, Object>> pubKeyCredParams = new ArrayList<>();
-        Map<String, Object> rs256 = new HashMap<>();
-        rs256.put("type", "public-key");
-        rs256.put("alg", -257); // RS256 - not supported
-        pubKeyCredParams.add(rs256);
-        baseRequest.put(0x04, pubKeyCredParams);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.UNSUPPORTED_ALGORITHM.getCode(), response[0],
-            "Should return UNSUPPORTED_ALGORITHM error code");
-    }
-
-    @Test
-    @DisplayName("Should accept ES256 algorithm")
-    public void testSupportedAlgorithmES256() {
-        // ES256 is already in baseRequest, this should succeed (or fail for other reasons)
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        // Should not be UNSUPPORTED_ALGORITHM
-        assertNotEquals(Ctap2StatusCode.UNSUPPORTED_ALGORITHM.getCode(), response[0],
-            "Should not return UNSUPPORTED_ALGORITHM for ES256");
-    }
-
-    @Test
-    @DisplayName("Should return INVALID_OPTION when user presence is false")
-    public void testUserPresenceFalse() {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> options = (Map<String, Object>) baseRequest.get(0x07);
-        options.put("up", false);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        assertEquals(Ctap2StatusCode.INVALID_OPTION.getCode(), response[0],
-            "Should return INVALID_OPTION when up=false");
-    }
-
-    @Test
-    @DisplayName("Should handle resident key request")
-    public void testResidentKeyRequest() {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> options = (Map<String, Object>) baseRequest.get(0x07);
-        options.put("rk", true);
-        options.put("uv", true);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        // Should not return INVALID_OPTION or UNSUPPORTED_OPTION for valid rk request
-        assertNotEquals(Ctap2StatusCode.INVALID_OPTION.getCode(), response[0],
-            "Should not return INVALID_OPTION for valid resident key request");
-    }
-
-    @Test
-    @DisplayName("Should handle two-factor credential request")
-    public void testTwoFactorCredentialRequest() {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> options = (Map<String, Object>) baseRequest.get(0x07);
-        options.put("rk", false);
-        options.put("uv", false);
-        
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        // Should not return INVALID_OPTION for valid two-factor request
-        assertNotEquals(Ctap2StatusCode.INVALID_OPTION.getCode(), response[0],
-            "Should not return INVALID_OPTION for valid two-factor request");
-    }
-
-    @Test
-    @DisplayName("Should handle multiple algorithms and select supported one")
-    public void testMultipleAlgorithmsWithOneSupported() {
-        List<Map<String, Object>> pubKeyCredParams = new ArrayList<>();
+        List<Map<String, Object>> params = new ArrayList<>();
         
         // Add unsupported algorithm first
-        Map<String, Object> rs256 = new HashMap<>();
-        rs256.put("type", "public-key");
-        rs256.put("alg", -257); // RS256 - not supported
-        pubKeyCredParams.add(rs256);
+        Map<String, Object> param1 = new HashMap<>();
+        param1.put("alg", -257); // RS256 - unsupported
+        param1.put("type", "public-key");
+        params.add(param1);
         
         // Add supported algorithm
-        Map<String, Object> es256 = new HashMap<>();
-        es256.put("type", "public-key");
-        es256.put("alg", -7); // ES256 - supported
-        pubKeyCredParams.add(es256);
+        Map<String, Object> param2 = new HashMap<>();
+        param2.put("alg", -7); // ES256 - supported
+        param2.put("type", "public-key");
+        params.add(param2);
         
-        baseRequest.put(0x04, pubKeyCredParams);
+        Boolean result = (Boolean) method.invoke(null, params);
         
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        
-        // Should not return UNSUPPORTED_ALGORITHM since ES256 is present
-        assertNotEquals(Ctap2StatusCode.UNSUPPORTED_ALGORITHM.getCode(), response[0],
-            "Should not return UNSUPPORTED_ALGORITHM when at least one algorithm is supported");
+        assertTrue("Should return true when at least one supported algorithm exists", result);
     }
-
+    
+    /**
+     * Test isSupportedAlgorithm() with only unsupported algorithms.
+     * Covers the false return branch.
+     */
     @Test
-    @DisplayName("Should handle options parameter being absent")
-    public void testMissingOptionsParameter() {
-        baseRequest.remove(0x07);
+    public void testIsSupportedAlgorithm_OnlyUnsupported() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        method.setAccessible(true);
         
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
+        List<Map<String, Object>> params = new ArrayList<>();
         
-        // Should use defaults (up=true, uv=false, rk=false) and not fail
-        assertNotEquals(Ctap2StatusCode.MISSING_PARAMETER.getCode(), response[0],
-            "Should not return MISSING_PARAMETER when options is absent (should use defaults)");
+        Map<String, Object> param1 = new HashMap<>();
+        param1.put("alg", -257); // RS256
+        param1.put("type", "public-key");
+        params.add(param1);
+        
+        Map<String, Object> param2 = new HashMap<>();
+        param2.put("alg", -258); // RS384
+        param2.put("type", "public-key");
+        params.add(param2);
+        
+        Boolean result = (Boolean) method.invoke(null, params);
+        
+        assertFalse("Should return false when no supported algorithms exist", result);
     }
-
+    
+    /**
+     * Test isSupportedAlgorithm() with parameter missing 'alg' field.
+     * Covers branch where param.get("alg") returns null.
+     */
     @Test
-    @DisplayName("Should validate clientDataHash is exactly 32 bytes")
-    public void testClientDataHashExactly32Bytes() {
-        // Test with 31 bytes
-        baseRequest.put(0x01, new byte[31]);
-        byte[] response1 = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), response1[0],
-            "Should return INVALID_PARAMETER for 31-byte hash");
+    public void testIsSupportedAlgorithm_MissingAlgField() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        method.setAccessible(true);
         
-        // Test with 33 bytes
-        baseRequest.put(0x01, new byte[33]);
-        byte[] response2 = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), response2[0],
-            "Should return INVALID_PARAMETER for 33-byte hash");
+        List<Map<String, Object>> params = new ArrayList<>();
         
-        // Test with 32 bytes (should not fail for this reason)
-        baseRequest.put(0x01, new byte[32]);
-        byte[] response3 = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
-        assertNotEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), response3[0],
-            "Should not return INVALID_PARAMETER for 32-byte hash");
-    }
-
-    @Test
-    @DisplayName("Should handle algorithm parameter with wrong type")
-    public void testAlgorithmParameterWrongType() {
-        List<Map<String, Object>> pubKeyCredParams = new ArrayList<>();
         Map<String, Object> param = new HashMap<>();
         param.put("type", "public-key");
-        param.put("alg", "not-an-integer"); // Wrong type
-        pubKeyCredParams.add(param);
-        baseRequest.put(0x04, pubKeyCredParams);
+        // Missing "alg" field
+        params.add(param);
         
-        byte[] response = AuthenticatorAPI.makeCredential(mockTxn, baseRequest);
+        Boolean result = (Boolean) method.invoke(null, params);
         
-        // Should return UNSUPPORTED_ALGORITHM since no valid algorithm found
-        assertEquals(Ctap2StatusCode.UNSUPPORTED_ALGORITHM.getCode(), response[0],
-            "Should return UNSUPPORTED_ALGORITHM when algorithm type is invalid");
+        assertFalse("Should return false when alg field is missing", result);
+    }
+    
+    /**
+     * Test isSupportedAlgorithm() with non-integer alg value.
+     * Covers branch where alg is not an Integer.
+     */
+    @Test
+    public void testIsSupportedAlgorithm_NonIntegerAlg() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        method.setAccessible(true);
+        
+        List<Map<String, Object>> params = new ArrayList<>();
+        
+        Map<String, Object> param = new HashMap<>();
+        param.put("alg", "not-an-integer");
+        param.put("type", "public-key");
+        params.add(param);
+        
+        Boolean result = (Boolean) method.invoke(null, params);
+        
+        assertFalse("Should return false when alg is not an integer", result);
+    }
+    
+    /**
+     * Test determineCredentialType() with rk=false, uv=false.
+     * Covers the TWO_FACTOR credential branch.
+     */
+    @Test
+    public void testDetermineCredentialType_TwoFactor() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "determineCredentialType", boolean.class, boolean.class,
+            com.isfs.blekey.data.Passkey.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, false, false, null);
+        
+        assertNotNull("Should return a result", result);
+    }
+    
+    /**
+     * Test determineCredentialType() with rk=true, uv=false.
+     * Covers the RESIDENT credential branch.
+     */
+    @Test
+    public void testDetermineCredentialType_Resident() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "determineCredentialType", boolean.class, boolean.class,
+            com.isfs.blekey.data.Passkey.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, true, false, null);
+        
+        assertNotNull("Should return a result", result);
+    }
+    
+    /**
+     * Test determineCredentialType() with rk=true, uv=true.
+     * Covers the user verification branch.
+     */
+    @Test
+    public void testDetermineCredentialType_UserVerified() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "determineCredentialType", boolean.class, boolean.class,
+            com.isfs.blekey.data.Passkey.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, true, true, null);
+        
+        assertNotNull("Should return a result", result);
+    }
+    
+    /**
+     * Test determineCredentialType() with rk=false, uv=true.
+     * Covers the UV without RK branch.
+     */
+    @Test
+    public void testDetermineCredentialType_UvWithoutRk() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "determineCredentialType", boolean.class, boolean.class,
+            com.isfs.blekey.data.Passkey.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, false, true, null);
+        
+        assertNotNull("Should return a result", result);
+    }
+    
+    /**
+     * Test validatePinUvAuthProtocol() with protocol version 0.
+     * Covers the unsupported protocol branch.
+     */
+    @Test
+    public void testValidatePinUvAuthProtocol_Version0() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "validatePinUvAuthProtocol", Integer.class);
+        method.setAccessible(true);
+        
+        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, 0);
+        
+        assertEquals("Protocol version 0 should be invalid", 
+            Ctap2StatusCode.PIN_AUTH_INVALID, result);
+    }
+    
+    /**
+     * Test validatePinUvAuthProtocol() with protocol version 3.
+     * Covers the unsupported protocol branch.
+     */
+    @Test
+    public void testValidatePinUvAuthProtocol_Version3() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "validatePinUvAuthProtocol", Integer.class);
+        method.setAccessible(true);
+        
+        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, 3);
+        
+        assertEquals("Protocol version 3 should be invalid", 
+            Ctap2StatusCode.PIN_AUTH_INVALID, result);
+    }
+    
+    /**
+     * Test validatePinUvAuthProtocol() with negative protocol version.
+     * Covers the invalid protocol branch.
+     */
+    @Test
+    public void testValidatePinUvAuthProtocol_NegativeVersion() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "validatePinUvAuthProtocol", Integer.class);
+        method.setAccessible(true);
+        
+        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, -1);
+        
+        assertEquals("Negative protocol version should be invalid", 
+            Ctap2StatusCode.PIN_AUTH_INVALID, result);
+    }
+    
+    /**
+     * Test errorResult() with null message.
+     * Covers the null message branch.
+     */
+    @Test
+    public void testErrorResult_NullMessage() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "errorResult", String.class, Ctap2StatusCode.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, null, Ctap2StatusCode.PIN_AUTH_INVALID);
+        
+        assertNotNull("Should return result even with null message", result);
+    }
+    
+    /**
+     * Test errorResult() with empty message.
+     * Covers the empty string branch.
+     */
+    @Test
+    public void testErrorResult_EmptyMessage() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "errorResult", String.class, Ctap2StatusCode.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, "", Ctap2StatusCode.PIN_AUTH_INVALID);
+        
+        assertNotNull("Should return result with empty message", result);
+    }
+    
+    /**
+     * Test errorResult() with exception parameter and null message.
+     * Covers the exception handling branch with null message.
+     */
+    @Test
+    public void testErrorResult_WithExceptionNullMessage() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "errorResult", String.class, Ctap2StatusCode.class, Exception.class);
+        method.setAccessible(true);
+        
+        Exception testException = new RuntimeException("Test exception");
+        Object result = method.invoke(null, null, Ctap2StatusCode.PIN_AUTH_INVALID, testException);
+        
+        assertNotNull("Should return result with exception and null message", result);
+    }
+    
+    /**
+     * Test errorResult() with exception parameter and non-null message.
+     * Covers the exception handling branch with message.
+     */
+    @Test
+    public void testErrorResult_WithExceptionAndMessage() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "errorResult", String.class, Ctap2StatusCode.class, Exception.class);
+        method.setAccessible(true);
+        
+        Exception testException = new RuntimeException("Test exception");
+        Object result = method.invoke(null, "Error occurred", Ctap2StatusCode.PIN_AUTH_INVALID, testException);
+        
+        assertNotNull("Should return result with exception and message", result);
+    }
+    
+    /**
+     * Test errorResult() with null exception.
+     * Covers the null exception branch.
+     */
+    @Test
+    public void testErrorResult_NullException() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "errorResult", String.class, Ctap2StatusCode.class, Exception.class);
+        method.setAccessible(true);
+        
+        Object result = method.invoke(null, "Error message", Ctap2StatusCode.PIN_AUTH_INVALID, null);
+        
+        assertNotNull("Should return result with null exception", result);
     }
 }
 

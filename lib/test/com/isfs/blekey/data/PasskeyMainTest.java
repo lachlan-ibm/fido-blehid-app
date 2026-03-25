@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.data;
 
@@ -60,14 +60,26 @@ public class PasskeyMainTest {
         
         // Generate a root key pair for testing
         rootKeyPair = KeyUtils.generateKeyPair("EC", 521);
+        
+        // Initialize KeystoreManager for Passkey operations
+        Passkey.setKeystoreManager(com.isfs.blekey.authenticator.TestHelper.createMockKeystoreManager());
     }
     
     @After
-    public void tearDown() {
+    public void tearDown() throws Exception {
         // Restore stdout, stderr, and stdin
         System.setOut(originalOut);
         System.setErr(originalErr);
         System.setIn(originalIn);
+        
+        // Reset static fields to prevent test pollution
+        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        rootPublicKeyField.setAccessible(true);
+        rootPublicKeyField.set(null, null);
+        
+        Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        rootPrivateKeyField.setAccessible(true);
+        rootPrivateKeyField.set(null, null);
         
         // Explicitly delete any passkey files that might have been created
         if (fido2Home != null) {
@@ -154,41 +166,50 @@ public class PasskeyMainTest {
     public void testMainWithManageCommand() throws Exception {
         originalErr.println("testMainWithManageCommand");
         // First generate a passkey to manage
+        File passkeyFile;
+        String passkeyName;
+        
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
+            // Allow readFileBytes to call the real implementation
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class)))
+                .thenCallRealMethod();
+            
+            // Initialize root key pair within mock scope so rootPublicKey is set
+            Passkey.ensureRootKeyPair(null, null);
             
             // Create a passkey file first with a unique name
-            File passkeyFile = getUniquePasskeyFile("manage_test");
-            String passkeyName = passkeyFile.getName();
+            passkeyFile = getUniquePasskeyFile("manage_test");
+            passkeyName = passkeyFile.getName();
             byte[] pinHash = KeyUtils.getPinHash("testpassword123");
             Passkey passkey = Passkey.generatePasskey(pinHash, passkeyFile);
             assertNotNull("Generated passkey should not be null", passkey);
             assertTrue("Passkey file should exist", passkeyFile.exists());
+            assertTrue("Passkey file should have content", passkeyFile.length() > 0);
             logOutErr();
             // Clear the output streams
             originalErr.println("testMainWithManageCommand read test start");
+            originalErr.println("Passkey file size: " + passkeyFile.length());
             outContent.reset();
             errContent.reset();
             
             // Set up input for the scanner
-            String simulatedUserInput = 
+            String simulatedUserInput =
                 "\n" +             // Accept default platform key
                 passkeyName + "\n" +  // Generated passkey file
                 "testpassword123\n";  // PIN
                 
             System.setIn(new ByteArrayInputStream(simulatedUserInput.getBytes()));
             
-            // Set the root key pair
-            setRootKeyPair(rootKeyPair.getPublic(), rootKeyPair.getPrivate());
-            
-            // Call the main method with 'manage' command
+            // Call the main method with 'manage' command - must be within mock scope
+            // Note: rootKeyPair was already set by ensureRootKeyPair() at line 168
             Passkey.main(new String[]{"manage"});
             logOutErr();
 
             // Verify output contains success message
             String output = outContent.toString();
-            assertTrue("Output should indicate successful opening", 
+            assertTrue("Output should indicate successful opening",
                       output.contains("Passkey successfully opened"));
         }
     }

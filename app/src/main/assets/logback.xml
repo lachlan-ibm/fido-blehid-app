@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ Copyright IBM 2025
+-->
+<configuration>
+    <!-- Output to logcat -->
+    <appender name="LOGCAT" class="ch.qos.logback.classic.android.LogcatAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Set default log level -->
+    <root level="DEBUG">
+        <appender-ref ref="LOGCAT" />
+    </root>
+
+    <!-- Set specific package log levels -->
+    <logger name="com.isfs.blekey" level="DEBUG" />
+    <logger name="com.isfs.blekey.ctap" level="DEBUG" />
+    <logger name="com.isfs.blekey.authenticator" level="DEBUG" />
+</configuration>
+
+<!-- Made with Bob -->

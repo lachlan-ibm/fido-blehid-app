@@ -67,19 +67,28 @@ public class HIDForegroundService extends Service {
 
         if (hidService == null) {
             try {
+                Log.d(TAG, "Creating HIDService...");
                 hidService = new HIDService(
                     this,
                     true,  // BLUETOOTH_CONNECT permission
                     true   // BLUETOOTH_ADVERTISE permission
                 );
+                Log.d(TAG, "HIDService created successfully");
                 hidService.setDeviceName(getString(R.string.ble_beekey));
+                Log.d(TAG, "Device name set, starting advertising...");
                 hidService.startAdvertising();
                 Log.d(TAG, "HIDService started and advertising");
             } catch (UnsupportedOperationException e) {
-                Log.e(TAG, "Failed to start HIDService: " + e.getMessage());
+                Log.e(TAG, "Failed to start HIDService: " + e.getMessage(), e);
+                stopSelf();
+                return START_NOT_STICKY;
+            } catch (Exception e) {
+                Log.e(TAG, "Unexpected error starting HIDService: " + e.getMessage(), e);
                 stopSelf();
                 return START_NOT_STICKY;
             }
+        } else {
+            Log.d(TAG, "HIDService already running");
         }
 
         return START_STICKY;

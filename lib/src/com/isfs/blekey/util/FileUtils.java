@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.util;
 
@@ -127,19 +127,19 @@ public class FileUtils {
 
     /**
      * Reads all bytes from a file using Java NIO.
-     * 
+     *
      * @param file The file to read
      * @return The byte contents of the file
-     * 
+     * @throws IOException if the file cannot be read
      */
-    public static byte[] readFileBytes(File file) {
-        try {
-            return Files.readAllBytes(file.toPath());
-        } catch (IOException e) {
-            logger.error("Error reading file", e);
-            return new byte[0];
+    public static byte[] readFileBytes(File file) throws IOException {
+        if (file == null || !file.exists()) {
+            throw new IOException("File does not exist: " + (file != null ? file.getAbsolutePath() : "null"));
         }
-
+        if (!file.canRead()) {
+            throw new IOException("File is not readable: " + file.getAbsolutePath());
+        }
+        return Files.readAllBytes(file.toPath());
     }
 
     public static void _writeFile(File file, String[] content) throws IOException {

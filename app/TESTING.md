@@ -501,6 +501,131 @@ Key fields relevant to BLE HID:
 - [Bumble Bluetooth Library](https://google.github.io/bumble/)
 - [CBOR2 Library](https://pypi.org/project/cbor2/)
 - [BlueZ HOGP plugin source — profiles/input/hog.c](https://git.kernel.org/pub/scm/bluetooth/bluez.git/tree/profiles/input/hog.c)
+
+## 10. Troubleshooting HID Device Reconnection Issues
+
+### Problem: HID Device Not Reconnecting After App Restart
+
+**Symptoms:**
+- First connection works: `/dev/hidraw*` device appears and FIDO2 commands work
+- After closing and restarting the app: device shows as "Connected" in `bluetoothctl` but no `/dev/hidraw*` device
+- No BLE HID device appears in `/sys/bus/hid/devices/0005:*`
+
+**Root Cause:**
+
+When the Android app stops, [`HIDService.stopAdvertising()`](../app/src/main/java/com/isfs/blekey/hidsvc/HIDService.java:492-516) closes the GATT server entirely, which:
+1. Terminates all BLE connections
+2. Removes the HID device from the Linux kernel
+3. Leaves a **stale service cache** in BlueZ
+
+When the app restarts with a new GATT server instance, BlueZ reconnects but uses its cached service list (which may not include the HID service or has outdated GATT handles). The HOGP plugin never fires, and no HID device is created.
+
+**Solution: Clear BlueZ Service Cache**
+
+The app already sends **Service Changed indications** ([`HIDService.java:594-616`](../app/src/main/java/com/isfs/blekey/hidsvc/HIDService.java:594-616)) to trigger cache invalidation, but BlueZ sometimes doesn't properly invalidate the cache when connections are abruptly terminated.
+
+#### Manual Fix (One-Time)
+
+```bash
+# Disconnect the device
+bluetoothctl disconnect A8:88:CE:7F:89:32
+
+# Clear the BlueZ service cache
+# BlueZ stores device cache at: /var/lib/bluetooth/<HOST_ADAPTER_MAC>/<DEVICE_MAC>/cache
+sudo rm -rf /var/lib/bluetooth/*/A8:88:CE:7F:89:32/cache
+
+# Restart Bluetooth service
+sudo systemctl restart bluetooth
+
+# Wait a moment, then reconnect
+sleep 3
+bluetoothctl connect A8:88:CE:7F:89:32
+
+# Verify HID device appeared
+sleep 5
+ls -la /sys/bus/hid/devices/0005:*
+ls -la /dev/hidraw*
+
+# Test FIDO2 functionality
+fido2-token -I /dev/hidraw5  # Replace with your device
+```
+
+#### Automated Fix (Using Helper Script)
+
+The [`bt-pair-device.sh`](../app/host-utils/bt-pair-device.sh) script now includes automatic cache clearing:
+
+```bash
+cd app/host-utils
+./bt-pair-device.sh
+```
+
+This script will:
+1. Detect your device's Bluetooth MAC address
+2. Clear any stale BlueZ service cache
+3. Pair and connect the device
+4. Verify the HID device appears
+
+#### Verification
+
+After reconnecting, verify the HID device is functional:
+
+```bash
+# Check for BLE HID devices (vendor ID 0005)
+ls -la /sys/bus/hid/devices/0005:*
+
+# Check hidraw devices
+ls -la /dev/hidraw*
+
+# Verify FIDO2 functionality
+for dev in /dev/hidraw*; do
+    if sudo fido2-token -I "$dev" 2>/dev/null | grep -q "proto: 0x02"; then
+        echo "✓ FIDO2 device found: $dev"
+        sudo fido2-token -I "$dev" | head -10
+        break
+    fi
+done
+
+# Check Bluetooth connection status
+bluetoothctl info A8:88:CE:7F:89:32 | grep Connected
+```
+
+Expected output:
+- `Connected: yes`
+- BLE HID device in `/sys/bus/hid/devices/0005:*`
+- Working `/dev/hidraw*` device responding to FIDO2 commands
+
+#### Why This Happens
+
+BlueZ caches GATT services to avoid re-discovery on every connection. When the Android app:
+1. Closes the GATT server (on app stop)
+2. Creates a new GATT server instance (on app restart)
+3. The GATT attribute handles change
+
+BlueZ should receive the Service Changed indication and invalidate its cache, but this doesn't always work reliably when:
+- The connection was abruptly terminated
+- The device is dual-mode (BR/EDR + BLE) and BlueZ has cached classic services
+- The Service Changed indication is lost or not processed
+
+Manually clearing the cache forces BlueZ to perform fresh GATT service discovery, which correctly enumerates the HID service and triggers the HOGP plugin.
+
+#### Prevention
+
+The issue is mitigated by:
+1. **Service Changed indications** (already implemented in [`HIDService.java`](../app/src/main/java/com/isfs/blekey/hidsvc/HIDService.java:594-616))
+2. **Auto-reconnection logic** (already implemented in [`HIDService.java`](../app/src/main/java/com/isfs/blekey/hidsvc/HIDService.java:667))
+3. **Cache clearing in pairing script** (now implemented in [`bt-pair-device.sh`](../app/host-utils/bt-pair-device.sh))
+
+For most users, the automatic mechanisms work correctly. Manual cache clearing is only needed when:
+- Testing during development (frequent app restarts)
+- After app reinstallation
+- When BlueZ's cache becomes corrupted
+
+#### Related Issues
+
+If you encounter similar issues with other symptoms:
+- **Device shows as paired but won't connect**: Try `bluetoothctl remove <MAC>` then re-pair
+- **HID device appears but doesn't respond**: Check permissions on `/dev/hidraw*` (should be `crw-rw----+`)
+- **Multiple HID devices appear**: Old devices may persist; reboot to clean up
 - [HID Descriptor Test Script](test_hid_descriptor.py) — Python script for testing HID Report Map on real devices and emulator
 - [Bluetooth Core Spec Vol 3 Part G §7.1 — Service Changed characteristic](https://www.bluetooth.com/specifications/specs/core-specification/)
 
@@ -804,3 +929,239 @@ done
 ```
 
 - [BlueZ HOGP plugin source — profiles/input/hog.c](https://git.kernel.org/pub/scm/bluetooth/bluez.git/tree/profiles/input/hog.c)
+
+## 11. Bluetooth Pairing Troubleshooting
+
+### Problem: Device Not Found During BLE Scan
+
+The diagnostic output shows the device was previously paired and uses **Resolvable Private Addresses (RPA)**:
+
+```
+[DEL] Device A8:88:CE:7F:89:32 OPPO A5 5G  (Public MAC)
+[DEL] Device 5A:D6:9C:B9:F6:BB OPPO A5 5G  (RPA)
+```
+
+#### Root Cause
+
+BLE scanning fails because:
+1. **RPA Privacy**: Android BLE HID uses Resolvable Private Addresses that change periodically
+2. **Previous Pairing**: Device was already paired, so it may not advertise actively
+3. **Scan Timing**: RPA may not be visible during the scan window
+4. **BlueZ Cache**: Cached pairing information may interfere
+
+#### Solution 1: Use Existing Pairing (Recommended)
+
+If device is already paired (check with diagnostic script):
+
+```bash
+# Run diagnostic to check pairing status
+cd app/host-utils
+./bt-diagnose-scan.sh
+
+# If already paired, just connect
+bluetoothctl trust A8:88:CE:7F:89:32
+bluetoothctl connect A8:88:CE:7F:89:32
+```
+
+#### Solution 2: Direct Connection Without Scan
+
+Since we know the public MAC address, try direct connection:
+
+```bash
+bluetoothctl power on
+bluetoothctl agent on
+bluetoothctl default-agent
+bluetoothctl connect A8:88:CE:7F:89:32
+```
+
+This works because BlueZ can resolve the RPA if the device was previously paired.
+
+#### Solution 3: Remove and Re-pair
+
+If pairing is corrupted:
+
+```bash
+# Remove existing pairing
+bluetoothctl remove A8:88:CE:7F:89:32
+
+# Clear BlueZ cache
+sudo rm -rf /var/lib/bluetooth/*/A8:88:CE:7F:89:32
+
+# Restart Bluetooth
+sudo systemctl restart bluetooth
+sleep 3
+
+# Run pairing script
+cd app/host-utils
+./bt-pair-device.sh
+```
+
+#### Solution 4: Manual Interactive Pairing
+
+If automated scripts fail:
+
+```bash
+bluetoothctl
+# In bluetoothctl:
+power on
+agent on
+default-agent
+scan on
+
+# Wait 30 seconds, look for "OPPO A5 5G" or "CPH2735"
+# Note the MAC address shown
+
+# Connect using discovered MAC (either public or RPA)
+connect <MAC_ADDRESS>
+
+# Accept pairing on both devices
+# Then trust the device
+trust <MAC_ADDRESS>
+
+scan off
+exit
+```
+
+### Diagnostic Tools
+
+#### 1. Run Diagnostic Script
+
+```bash
+cd app/host-utils
+./bt-diagnose-scan.sh
+```
+
+This shows:
+- Bluetooth adapter status
+- Device pairing status
+- Active scan results
+- Discovered devices
+
+#### 2. Check Android App Status
+
+Verify app is advertising correctly:
+
+```bash
+# Check if app is running
+adb shell dumpsys activity services | grep HIDService
+
+# Check Bluetooth advertising
+adb logcat -s HIDBTAdvertiser:* HIDService:* -d | tail -20
+
+# Verify Bluetooth is enabled
+adb shell settings get global bluetooth_on
+```
+
+#### 3. Monitor Bluetooth Events
+
+```bash
+# Watch for device advertisements
+bluetoothctl
+# Then: scan on
+# Look for [NEW] and [CHG] events with device name
+```
+
+### Common Issues and Fixes
+
+#### Issue: "No devices discovered during scan"
+
+**Symptoms**: Scan completes but no devices found
+
+**Fixes**:
+1. Ensure Android app shows "Advertising..." status
+2. Restart the Android app
+3. Try direct connection with public MAC: `bluetoothctl connect A8:88:CE:7F:89:32`
+4. Check if already paired: `bluetoothctl devices | grep A8:88:CE:7F:89:32`
+
+#### Issue: "Device found but connection fails"
+
+**Symptoms**: Device appears in scan but `connect` fails
+
+**Fixes**:
+1. Accept pairing request on both devices
+2. Check Android notification for pairing request
+3. Ensure no PIN/passkey mismatch
+4. Try removing and re-pairing (Solution 3 above)
+
+#### Issue: "Device paired but HID not working"
+
+**Symptoms**: Connected but no `/dev/hidraw*` device
+
+**Fixes**:
+1. Clear BlueZ service cache:
+   ```bash
+   sudo rm -rf /var/lib/bluetooth/*/A8:88:CE:7F:89:32/cache
+   sudo systemctl restart bluetooth
+   ```
+2. Verify Service Changed indication is sent (check Android logs)
+3. See Section 10 for detailed HID reconnection troubleshooting
+
+### Technical Notes
+
+#### RPA Behavior
+- **Changes**: Every 15 minutes (Android default)
+- **Resolution**: Requires IRK (Identity Resolving Key) from pairing
+- **Privacy**: Prevents tracking by non-paired devices
+- **BlueZ**: Automatically resolves RPA after pairing
+
+#### Why Direct Connection Works
+BlueZ can connect without scanning if:
+- Device accepts connections on public address
+- Previous pairing exists (IRK stored)
+- Device is in connectable mode
+
+#### Pairing Process
+1. **Discovery**: Host scans for BLE devices
+2. **Connection**: Host connects to RPA or public address
+3. **Pairing**: LE Secure Connections pairing (SMP)
+4. **Key Exchange**: IRK, LTK, CSRK exchanged
+5. **Resolution**: BlueZ can now resolve future RPAs
+
+### Recommended Workflow
+
+**First Time Setup:**
+```bash
+cd app/host-utils
+./bt-pair-device.sh
+```
+
+**Subsequent Connections:**
+```bash
+cd app/host-utils
+./bt-reconnect-hid.sh
+```
+
+**If Issues Occur:**
+```bash
+cd app/host-utils
+./bt-diagnose-scan.sh
+# Review output and follow recommendations
+```
+
+**Reset Pairing:**
+```bash
+cd app/host-utils
+./bt-reset-pairing.sh
+./bt-pair-device.sh
+```
+
+### Android App Checklist
+
+Ensure app is configured correctly:
+
+1. **Permissions Granted**:
+   - BLUETOOTH_CONNECT
+   - BLUETOOTH_ADVERTISE
+   - BLUETOOTH_SCAN
+
+2. **Advertising Active**:
+   - App shows "Advertising..." status
+   - Foreground service running
+   - No errors in logcat
+
+3. **Advertising Configuration** (from [`HIDBTAdvertiser.java`](src/main/java/com/isfs/blekey/hidsvc/HIDBTAdvertiser.java)):
+   - Mode: `ADVERTISE_MODE_LOW_LATENCY`
+   - TX Power: `ADVERTISE_TX_POWER_HIGH`
+   - Connectable: `true`
+   - Service UUID: `0x1812` (HID over GATT)
+   - Device name in scan response

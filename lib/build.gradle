@@ -1,7 +1,8 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 apply plugin: 'java-library'
+apply plugin: 'eclipse'
 apply plugin: 'jacoco'  // Add JaCoCo plugin
 
 // Apply the copyright hook
@@ -36,13 +37,12 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.0'
     implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.18.1'
     implementation 'org.slf4j:slf4j-api:2.0.9'
-    implementation 'org.slf4j:slf4j-simple:2.0.9'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.79'
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.79'
     implementation 'com.macasaet.fernet:fernet-java8:1.4.2'
     implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.2'
-    
-    // Use Glassfish JSON implementation (includes the API)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'org.glassfish:jakarta.json:2.0.1'
     
     // Use jose4j but exclude its transitive jakarta.json-api dependency
@@ -51,10 +51,13 @@ dependencies {
     }
     
     // Test dependencies
+    testImplementation 'org.slf4j:slf4j-simple:2.0.9'
+    
     // JUnit 5 (Jupiter)
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
     testImplementation 'org.junit.platform:junit-platform-launcher:1.10.2' // Added for compatibility with Mockito 5.x
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     
     // JUnit 4 (for backward compatibility with existing tests)
     testImplementation 'junit:junit:4.13.2'

@@ -19,12 +19,16 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 
 import com.isfs.blekey.R;
 
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
 import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
@@ -56,6 +60,7 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AlertDialog.Builder;
 
 import com.isfs.blekey.util.FileUtils;
+import com.isfs.blekey.hidsvc.DeviceStateManager;
 import com.isfs.blekey.MainActivity;
 
 /**
@@ -69,7 +74,13 @@ public class ServerActivity extends AppCompatActivity {
     private final String TAG = ServerActivity.class.getCanonicalName();
 
     /** Device connection status values. */
-    private enum DeviceStatus { DISCONNECTED, CONNECTED, ERROR }
+    private enum DeviceStatus {
+        DISCONNECTED,
+        CONNECTED,
+        HID_ENUMERATED,
+        HID_ACTIVE,
+        ERROR
+    }
 
     /** Holds display name and current status for a BT device. */
     private static class DeviceItem {
@@ -111,6 +122,16 @@ public class ServerActivity extends AppCompatActivity {
             nameView.setText(item.name);
 
             switch (item.status) {
+                case HID_ACTIVE:
+                    statusView.setText(getString(R.string.device_active));
+                    statusView.setTextColor(getColor(R.color.device_connected));
+                    statusBar.setBackgroundColor(getColor(R.color.device_connected));
+                    break;
+                case HID_ENUMERATED:
+                    statusView.setText(getString(R.string.device_discovered));
+                    statusView.setTextColor(getColor(android.R.color.holo_orange_light));
+                    statusBar.setBackgroundColor(getColor(android.R.color.holo_orange_light));
+                    break;
                 case CONNECTED:
                     statusView.setText(getString(R.string.device_status_connected));
                     statusView.setTextColor(getColor(R.color.device_connected));
@@ -141,6 +162,7 @@ public class ServerActivity extends AppCompatActivity {
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
                 upsertDevice(addr, name, DeviceStatus.CONNECTED);
+                saveDeviceState(addr, name, DeviceStatus.CONNECTED);
                 appendLog(getString(R.string.log_device_connected, name));
             });
         }
@@ -152,6 +174,7 @@ public class ServerActivity extends AppCompatActivity {
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
                 upsertDevice(addr, name, DeviceStatus.DISCONNECTED);
+                saveDeviceState(addr, name, DeviceStatus.DISCONNECTED);
                 appendLog(getString(R.string.log_device_disconnected, name));
             });
         }
@@ -163,7 +186,32 @@ public class ServerActivity extends AppCompatActivity {
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
                 upsertDevice(addr, name, DeviceStatus.ERROR);
+                saveDeviceState(addr, name, DeviceStatus.ERROR);
                 appendLog("[ERROR] " + name);
+            });
+        }
+
+        @Override
+        @SuppressLint("MissingPermission")
+        public void onHidServiceEnumerated(BluetoothDevice device) {
+            final String addr = device.getAddress();
+            final String name = getDisplayName(device);
+            runOnUiThread(() -> {
+                upsertDevice(addr, name, DeviceStatus.HID_ENUMERATED);
+                saveDeviceState(addr, name, DeviceStatus.HID_ENUMERATED);
+                appendLog(name + ": HID service discovered");
+            });
+        }
+
+        @Override
+        @SuppressLint("MissingPermission")
+        public void onHidServiceActive(BluetoothDevice device) {
+            final String addr = device.getAddress();
+            final String name = getDisplayName(device);
+            runOnUiThread(() -> {
+                upsertDevice(addr, name, DeviceStatus.HID_ACTIVE);
+                saveDeviceState(addr, name, DeviceStatus.HID_ACTIVE);
+                appendLog(name + ": HID ready for input");
             });
         }
     }
@@ -178,6 +226,107 @@ public class ServerActivity extends AppCompatActivity {
      */
     private HIDForegroundService foregroundService;
     private boolean serviceBound = false;
+    
+    /**
+     * Manager for persistent device state storage.
+     */
+    private DeviceStateManager stateManager;
+
+    /**
+     * Reconciles device states by comparing persisted state with current BT state.
+     * This ensures UI shows accurate state even after app/service restarts.
+     */
+    @SuppressLint("MissingPermission")
+    private void reconcileDeviceStates() {
+        if (passkeyService == null || stateManager == null) return;
+        
+        // Load persisted states
+        Map<String, DeviceStateManager.DeviceState> persistedStates = stateManager.loadAllDeviceStates();
+        
+        // Get currently connected devices
+        final BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        final List<BluetoothDevice> connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
+        Set<String> connectedAddresses = new HashSet<>();
+        
+        // Update connected devices with their HID state
+        for (BluetoothDevice device : connectedDevices) {
+            String addr = device.getAddress();
+            connectedAddresses.add(addr);
+            String name = getDisplayName(device);
+            
+            // Check HID state from service
+            HIDService.HidEnumerationState hidState = passkeyService.getHidState(addr);
+            DeviceStatus status = mapHidStateToDeviceStatus(hidState);
+            
+            upsertDevice(addr, name, status);
+            saveDeviceState(addr, name, status);
+            appendLog("Reconciled " + name + ": " + status);
+        }
+        
+        // Mark disconnected devices
+        for (Map.Entry<String, DeviceStateManager.DeviceState> entry : persistedStates.entrySet()) {
+            if (!connectedAddresses.contains(entry.getKey())) {
+                DeviceStateManager.DeviceState state = entry.getValue();
+                upsertDevice(state.address, state.name, DeviceStatus.DISCONNECTED);
+                state.btState = DeviceStateManager.BtState.DISCONNECTED;
+                state.hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
+                stateManager.saveDeviceState(state.address, state);
+                appendLog("Reconciled " + state.name + ": DISCONNECTED");
+            }
+        }
+    }
+    
+    /**
+     * Maps HID enumeration state to DeviceStatus.
+     */
+    private DeviceStatus mapHidStateToDeviceStatus(HIDService.HidEnumerationState hidState) {
+        switch (hidState) {
+            case ACTIVE:
+                return DeviceStatus.HID_ACTIVE;
+            case ENUMERATED:
+                return DeviceStatus.HID_ENUMERATED;
+            case NOT_ENUMERATED:
+            default:
+                return DeviceStatus.CONNECTED;
+        }
+    }
+    
+    /**
+     * Saves device state to persistent storage.
+     */
+    private void saveDeviceState(String address, String name, DeviceStatus status) {
+        if (stateManager == null) return;
+        
+        DeviceStateManager.BtState btState;
+        DeviceStateManager.HidState hidState;
+        
+        switch (status) {
+            case HID_ACTIVE:
+                btState = DeviceStateManager.BtState.CONNECTED;
+                hidState = DeviceStateManager.HidState.ACTIVE;
+                break;
+            case HID_ENUMERATED:
+                btState = DeviceStateManager.BtState.CONNECTED;
+                hidState = DeviceStateManager.HidState.ENUMERATED;
+                break;
+            case CONNECTED:
+                btState = DeviceStateManager.BtState.CONNECTED;
+                hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
+                break;
+            case ERROR:
+                btState = DeviceStateManager.BtState.ERROR;
+                hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
+                break;
+            case DISCONNECTED:
+            default:
+                btState = DeviceStateManager.BtState.DISCONNECTED;
+                hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
+                break;
+        }
+        
+        DeviceStateManager.DeviceState state = new DeviceStateManager.DeviceState(address, name, btState, hidState);
+        stateManager.saveDeviceState(address, state);
+    }
     
     /**
      * Service connection for binding to HIDForegroundService.
@@ -195,6 +344,7 @@ public class ServerActivity extends AppCompatActivity {
                 passkeyService.setConnectionListener(new PasskeyConnectionListener());
                 appendLog(getString(R.string.log_advertising_started));
                 populateBondedDevices();
+                reconcileDeviceStates();
             }
         }
         
@@ -257,6 +407,9 @@ public class ServerActivity extends AppCompatActivity {
 
         devicesAdapter = new DeviceListAdapter(deviceItems);
         devicesList.setAdapter(devicesAdapter);
+
+        // Initialize state manager
+        stateManager = new DeviceStateManager(this);
 
         setupAutoStartSwitch();
 
@@ -371,10 +524,21 @@ public class ServerActivity extends AppCompatActivity {
     @SuppressLint("MissingPermission")
     private void populateBondedDevices() {
         if (passkeyService == null) return;
-        final android.bluetooth.BluetoothAdapter adapter =
-                ((android.bluetooth.BluetoothManager) getSystemService(BLUETOOTH_SERVICE)).getAdapter();
-        for (android.bluetooth.BluetoothDevice device : passkeyService.getBondedBleDevices(adapter)) {
-            upsertDevice(device.getAddress(), getDisplayName(device), DeviceStatus.DISCONNECTED);
+        
+        final BluetoothManager bluetoothManager = 
+                (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        final BluetoothAdapter adapter = bluetoothManager.getAdapter();
+        
+        // Get currently connected GATT devices
+        final List<BluetoothDevice> connectedDevices = 
+                bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
+        
+        for (BluetoothDevice device : passkeyService.getBondedBleDevices(adapter)) {
+            // Check if device is currently connected
+            DeviceStatus status = connectedDevices.contains(device) 
+                    ? DeviceStatus.CONNECTED 
+                    : DeviceStatus.DISCONNECTED;
+            upsertDevice(device.getAddress(), getDisplayName(device), status);
         }
     }
 
@@ -612,6 +776,22 @@ public class ServerActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+    /**
+     * Called when the activity returns to the foreground.
+     * Reconciles device states to handle changes that occurred while in background
+     * (e.g., device unpaired, disconnected, etc.)
+     */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Log.d(TAG, "onResume - reconciling device states");
+        
+        // Only reconcile if service is bound and ready
+        if (serviceBound && passkeyService != null && stateManager != null) {
+            reconcileDeviceStates();
+        }
     }
 
     /**

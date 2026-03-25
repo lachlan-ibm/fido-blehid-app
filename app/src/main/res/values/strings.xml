@@ -2,9 +2,9 @@
  Copyright IBM 2025
 -->
 <resources>
-    <string name="app_name">I Bee Key</string>
+    <string name="app_name">Aye Ble Key</string>
     <string name="requires_bl_enabled">This app requires bluetooth to be enabled.</string>
-    <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. I Bee Key will exit.</string>
+    <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. Aye Bee Key will exit.</string>
     <string name="not_supported">Not supported</string>
     <string name="ble_not_permitted">Bluetooth access is not permitted on this device.</string>
     <string name="ok">OK</string>
@@ -22,6 +22,8 @@
     <string name="device_status_connected">Connected</string>
     <string name="device_status_error">Connection Error</string>
     <string name="device_status_disconnected">Disconnected</string>
+    <string name="device_active">HID Active</string>
+    <string name="device_discovered">HID Discovered</string>
     <string name="available_passkeys">Available Passkeys</string>
     <string name="ble_server_status">BLE Server Status</string>
     <string name="ble_server_status_text">Server is advertising...</string>
@@ -86,4 +88,7 @@
     <string name="log_advertising_started">Advertising started</string>
     <string name="log_device_connected">Device connected: %1$s</string>
     <string name="log_device_disconnected">Device disconnected: %1$s</string>
+    <string name="log_hid_enumerated">%1$s: HID service discovered</string>
+    <string name="log_hid_active">%1$s: HID ready for input</string>
+    <string name="log_device_reconciled">Reconciled %1$s: %2$s</string>
 </resources>

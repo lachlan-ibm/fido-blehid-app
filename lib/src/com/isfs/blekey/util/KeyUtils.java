@@ -1,14 +1,6 @@
 /*
  *Copyright IBM 2025, 2026
-/*IBM Confidential
-* OCO Source Materials
-* 5725-V89 5725-V90
-*
-* Copyright IBM Corp. 2019, 2025
-*
-* The source code for this program is not published or otherwise divested of its trade secrets,
-* irrespective of what has been deposited with the U.S. Copyright Office.
-*/
+ */
 package com.isfs.blekey.util;
 
 import java.io.ByteArrayInputStream;
@@ -36,7 +28,6 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.security.Provider;
-import java.security.Signature;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
@@ -65,11 +56,15 @@ import javax.crypto.Cipher;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import javax.crypto.KeyAgreement;
 
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.util.SubjectPublicKeyInfoFactory;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
+import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
+import org.bouncycastle.crypto.params.HKDFParameters;
+import org.bouncycastle.crypto.digests.SHA256Digest;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -128,7 +123,8 @@ public class KeyUtils {
     private static final String ERROR_UNSUPPORTED_EC_ALGORITHM = "Unsupported EC algorithm: ";
 
     // Algorithm Constants
-    private static final String EC_ALGORITHM = "ECDSA";
+    private static final String ECDSA_ALGORITHM = "ECDSA";
+    private static final String EC_ALGORITHM = "EC";
     private static final String RSA_ALGORITHM = "RSA";
     private static final String ED25519_ALGORITHM = "Ed25519";
     private static final String EDDSA_ALGORITHM = "EdDSA";
@@ -163,6 +159,41 @@ public class KeyUtils {
     private static final int COSE_ALG_ECDH_ES_HKDF_256 = -25; // ECDH with SHA-256
     private static final int COSE_ALG_RS256 = -257;  // RSASSA-PKCS1-v1_5 with SHA-256
     
+    // EC Coordinate Lengths
+    private static final int P256_COORDINATE_LENGTH = 32;
+    
+    /**
+     * Builder class for constructing COSE EC keys with type safety.
+     */
+    private static class CoseEcKeyBuilder {
+        private final Map<Integer, Object> key = new HashMap<>();
+        
+        CoseEcKeyBuilder withKeyType(int type) {
+            key.put(COSE_KEY_KTY, type);
+            return this;
+        }
+        
+        CoseEcKeyBuilder withAlgorithm(int alg) {
+            key.put(COSE_KEY_ALG, alg);
+            return this;
+        }
+        
+        CoseEcKeyBuilder withCurve(int crv) {
+            key.put(COSE_EC_CRV, crv);
+            return this;
+        }
+        
+        CoseEcKeyBuilder withCoordinates(byte[] x, byte[] y) {
+            key.put(COSE_EC_X, x);
+            key.put(COSE_EC_Y, y);
+            return this;
+        }
+        
+        Map<Integer, Object> build() {
+            return Collections.unmodifiableMap(key);
+        }
+    }
+    
     private KeyUtils() { }
     
     public static KeyPair getKeyPair(String alg) {
@@ -172,7 +203,7 @@ public class KeyUtils {
             if (RSA_ALGORITHM.equals(alg)) {
                 return getRSAKeyPair();
             }
-            else if (EC_ALGORITHM.equals(alg)) {
+            else if (EC_ALGORITHM.equals(alg) || ECDSA_ALGORITHM.equals(alg)) {
                 return getECKeyPair();
             }
             else if (ED25519_ALGORITHM.equals(alg)) {
@@ -220,7 +251,8 @@ public class KeyUtils {
        } else if (pubkey instanceof RSAPublicKey) {
            return createCoseRsaKey((RSAPublicKey) pubkey);
        } else if ("EdDSA".equals(pubkey.getAlgorithm()) ||
-                  pubkey.getClass().getName().contains("Ed25519")) {
+                  pubkey.getClass().getName().contains("Ed25519") ||
+                  pubkey.getClass().getName().contains("EdDSA")) {
            return createCoseEd25519Key(pubkey);
        }
        logger.error("NO COSE KEY FOR " + pubkey);
@@ -239,33 +271,81 @@ public class KeyUtils {
     * @return A map containing the COSE key parameters
     */
    private static Map<Integer, Object> createCoseEcKey(ECPublicKey ecKey, Integer algorithm) {
-       Map<Integer, Object> coseKey = new HashMap<>();
        ECPoint point = ecKey.getW();
        
-       // COSE key parameters for EC P256 key
-       coseKey.put(COSE_KEY_KTY, COSE_KEY_TYPE_EC2);
+       // Extract and normalize coordinates to P-256 field size
+       byte[] x = extractAndNormalizeCoordinate(point.getAffineX(), P256_COORDINATE_LENGTH, "X");
+       byte[] y = extractAndNormalizeCoordinate(point.getAffineY(), P256_COORDINATE_LENGTH, "Y");
        
-       // Set algorithm based on parameter or default to ES256
-       if (algorithm != null) {
-           coseKey.put(COSE_KEY_ALG, algorithm);
-       } else {
-           coseKey.put(COSE_KEY_ALG, COSE_ALG_ES256);
-       }
+       // Determine algorithm to use
+       int algorithmToUse = (algorithm != null) ? algorithm : COSE_ALG_ES256;
        
-       coseKey.put(COSE_EC_CRV, COSE_EC_CRV_P256);
+       // Build COSE key using builder pattern
+       Map<Integer, Object> coseKey = new CoseEcKeyBuilder()
+           .withKeyType(COSE_KEY_TYPE_EC2)
+           .withAlgorithm(algorithmToUse)
+           .withCurve(COSE_EC_CRV_P256)
+           .withCoordinates(x, y)
+           .build();
        
-       // Extract x and y coordinates as byte arrays
-       byte[] xBytes = point.getAffineX().toByteArray();
-       byte[] yBytes = point.getAffineY().toByteArray();
-       
-       // Ensure coordinates are exactly 32 bytes (P-256 field size)
-       byte[] x = normalizeCoordinate(xBytes, 32);
-       byte[] y = normalizeCoordinate(yBytes, 32);
-       
-       coseKey.put(COSE_EC_X, x); // x-coordinate
-       coseKey.put(COSE_EC_Y, y); // y-coordinate
+       logCoseKeyIfDebugEnabled(coseKey, algorithm);
        
        return coseKey;
+   }
+   
+   /**
+    * Extracts a coordinate from a BigInteger, normalizes it to the target length,
+    * and logs debug information if debug logging is enabled.
+    *
+    * @param coordinate The coordinate as a BigInteger
+    * @param targetLength The desired length in bytes
+    * @param coordinateName The name of the coordinate (for logging)
+    * @return A normalized byte array of the specified length
+    */
+   private static byte[] extractAndNormalizeCoordinate(BigInteger coordinate, int targetLength, String coordinateName) {
+       byte[] rawBytes = coordinate.toByteArray();
+       
+       if (logger.isDebugEnabled()) {
+           logger.debug("Raw {} coordinate bytes (length={}): {}",
+               coordinateName, rawBytes.length, ByteUtils.bytesToHex(rawBytes));
+       }
+       
+       byte[] normalized = normalizeCoordinate(rawBytes, targetLength);
+       
+       if (logger.isDebugEnabled()) {
+           logger.debug("Normalized {} coordinate ({} bytes): {}",
+               coordinateName, targetLength, ByteUtils.bytesToHex(normalized));
+       }
+       
+       return normalized;
+   }
+   
+   /**
+    * Logs COSE key structure details if debug logging is enabled.
+    *
+    * @param coseKey The COSE key map to log
+    * @param algorithm The algorithm used (may be null)
+    */
+   private static void logCoseKeyIfDebugEnabled(Map<Integer, Object> coseKey, Integer algorithm) {
+       if (logger.isDebugEnabled()) {
+           logger.debug("COSE key structure created:");
+           logger.debug("  kty (1): {} (EC2)", coseKey.get(COSE_KEY_KTY));
+           logger.debug("  alg (3): {} ({})", coseKey.get(COSE_KEY_ALG), getAlgorithmName(algorithm));
+           logger.debug("  crv (-1): {} (P-256)", coseKey.get(COSE_EC_CRV));
+       }
+   }
+   
+   /**
+    * Returns a human-readable name for the COSE algorithm.
+    *
+    * @param algorithm The COSE algorithm identifier (may be null)
+    * @return The algorithm name
+    */
+   private static String getAlgorithmName(Integer algorithm) {
+       if (algorithm != null && algorithm == COSE_ALG_ECDH_ES_HKDF_256) {
+           return "ECDH-ES+HKDF-256";
+       }
+       return "ES256";
    }
    
    /**
@@ -458,7 +538,7 @@ public class KeyUtils {
      * @throws Exception if the parameters cannot be created
      */
     private static ECParameterSpec createECParameterSpec(String curveName) throws Exception {
-       AlgorithmParameters parameters = AlgorithmParameters.getInstance(EC_ALGORITHM);
+       AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC", "BC");
        parameters.init(new ECGenParameterSpec(curveName));
        return parameters.getParameterSpec(ECParameterSpec.class);
     }
@@ -471,6 +551,8 @@ public class KeyUtils {
      * @throws Exception if the key cannot be created
      */
     private static PublicKey fromCoseEcKey(Map<Integer, Object> coseKey) throws Exception {
+       logger.debug("KeyUtils: fromCoseEcKey: Parsing COSE EC key");
+       
        // Validate the COSE key
        validateCoseEcKey(coseKey);
        
@@ -479,19 +561,32 @@ public class KeyUtils {
        byte[] x = (byte[]) coseKey.get(COSE_EC_X);
        byte[] y = (byte[]) coseKey.get(COSE_EC_Y);
        
+       logger.debug("KeyUtils: fromCoseEcKey: Extracted coordinates:");
+       logger.debug("  Curve: " + crv + " (" + COSE_CURVE_TO_STD_NAME.get(crv) + ")");
+       logger.debug("  X length: " + x.length + " bytes");
+       logger.debug("  X hex: " + ByteUtils.bytesToHex(x));
+       logger.debug("  Y length: " + y.length + " bytes");
+       logger.debug("  Y hex: " + ByteUtils.bytesToHex(y));
+       
        // Get standard curve name from map
        String curveName = COSE_CURVE_TO_STD_NAME.get(crv);
        
        // Create EC point from coordinates
        ECPoint point = createECPoint(x, y);
+       logger.debug("KeyUtils: fromCoseEcKey: Created ECPoint:");
+       logger.debug("  X (BigInteger): " + point.getAffineX().toString(16));
+       logger.debug("  Y (BigInteger): " + point.getAffineY().toString(16));
        
        // Get EC parameters
        ECParameterSpec ecParams = createECParameterSpec(curveName);
        
        // Create key spec and generate public key
        ECPublicKeySpec keySpec = new ECPublicKeySpec(point, ecParams);
-       KeyFactory keyFactory = KeyFactory.getInstance(EC_ALGORITHM);
-       return keyFactory.generatePublic(keySpec);
+       KeyFactory keyFactory = KeyFactory.getInstance(EC_ALGORITHM, BOUNCY_CASTLE_PROVIDER_NAME);
+       PublicKey publicKey = keyFactory.generatePublic(keySpec);
+       logger.debug("KeyUtils: fromCoseEcKey: Successfully created PublicKey");
+       
+       return publicKey;
     }
     
     /**
@@ -608,42 +703,48 @@ public class KeyUtils {
     /**
      * Decapsulates a shared secret using ECDH key agreement.
      *
-     * @param theirKey The public key of the other party
-     * @param myKey The private key of this party
-     * @return The shared secret as a byte array, or null if the operation fails
+     * @param theirKey The EC public key of the other party (must not be null)
+     * @param myKey The EC private key of this party (must not be null)
+     * @return The shared secret as a 32-byte array
+     * @throws IllegalArgumentException if keys are null or not EC keys
+     * @throws RuntimeException if ECDH operation fails
      */
     public static byte[] decapsulate(PublicKey theirKey, PrivateKey myKey) {
+        if (theirKey == null || myKey == null) {
+            throw new IllegalArgumentException("Keys cannot be null");
+        }
+        
+        // Check if keys are EC keys
+        boolean isPublicKeyEC = theirKey.getAlgorithm().equals("EC") ||
+                                theirKey.getClass().getName().contains("ECPublicKey");
+        boolean isPrivateKeyEC = myKey.getAlgorithm().equals("EC") ||
+                                 myKey.getClass().getName().contains("ECPrivateKey");
+        
+        if (!isPublicKeyEC || !isPrivateKeyEC) {
+            throw new IllegalArgumentException("Keys must be EC keys for ECDH, got " +
+                theirKey.getClass().getCanonicalName() + " and " + myKey.getClass().getCanonicalName());
+        }
+        
         try {
-            if (!(theirKey instanceof java.security.interfaces.ECPublicKey) ||
-                !(myKey instanceof java.security.interfaces.ECPrivateKey)) {
-                throw new IllegalArgumentException("Keys must be EC keys for ECDH");
-            }
+            logger.debug("Starting ECDH key agreement");
             
-            java.security.interfaces.ECPublicKey ecPublicKey = (java.security.interfaces.ECPublicKey) theirKey;
-            java.security.interfaces.ECPrivateKey ecPrivateKey = (java.security.interfaces.ECPrivateKey) myKey;
+            // Use standard KeyAgreement API (works for all EC keys including Android Keystore)
+            KeyAgreement keyAgreement = KeyAgreement.getInstance("ECDH");
+            keyAgreement.init(myKey);
+            keyAgreement.doPhase(theirKey, true);
+            byte[] sharedSecret = keyAgreement.generateSecret();
             
-            // Get the public key point
-            java.security.spec.ECPoint publicPoint = ecPublicKey.getW();
+            // Normalize to 32 bytes
+            byte[] normalized = normalizeCoordinate(sharedSecret, 32);
+            logger.debug("ECDH key agreement completed successfully");
+            return normalized;
             
-            // Get the private key scalar
-            java.math.BigInteger privateScalar = ecPrivateKey.getS();
-            
-            // Perform scalar multiplication: privateScalar * publicPoint
-            java.security.spec.ECPoint sharedPoint = scalmult(
-                    ecPublicKey.getParams().getCurve(),
-                    publicPoint,
-                    privateScalar);
-            
-            // Use the x-coordinate of the shared point as the shared secret
-            byte[] sharedX = sharedPoint.getAffineX().toByteArray();
-            
-            // Hash the shared secret to derive the AES key
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            return digest.digest(sharedX);
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid arguments for ECDH: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
-            // Log the error and return null
-            System.err.println("Error decapsulating shared secret: " + e.getMessage());
-            return null;
+            logger.error("ECDH key agreement failed", e);
+            throw new RuntimeException("Failed to decapsulate shared secret: " + e.getMessage(), e);
         }
     }
 
@@ -764,7 +865,19 @@ public class KeyUtils {
     
     
     private static KeyPair getECKeyPair() throws Exception {
-        return generateKeyPair(EC_ALGORITHM, 521);
+        ensureBouncyCastleProvider();
+        try {
+            // Try with default provider first
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance(ECDSA_ALGORITHM);
+            kpg.initialize(256);
+            return kpg.generateKeyPair();
+        } catch (Exception e) {
+            logger.error("Failed to generate EC keypair with default provider, trying BouncyCastle: " + e.getMessage());
+            // Try BouncyCastle if default fails
+            KeyPairGenerator kpg = KeyPairGenerator.getInstance(ECDSA_ALGORITHM, BOUNCY_CASTLE_PROVIDER_NAME);
+            kpg.initialize(256);
+            return kpg.generateKeyPair();
+        }
     }
     
     
@@ -789,8 +902,8 @@ public class KeyUtils {
             throws NoSuchAlgorithmException, InvalidKeySpecException, IOException, NoSuchProviderException {
         PrivateKey privateKey = null;
         PublicKey publicKey = null;
-        if (EC_ALGORITHM.equals(alg)) {
-            privateKey = generatePrivate(alg, 256);
+        if (ECDSA_ALGORITHM.equals(alg) || EC_ALGORITHM.equals(alg)) {
+            privateKey = generatePrivate(ECDSA_ALGORITHM, 256);
             publicKey = getPubKey((ECPrivateKey) privateKey);
         }
         else if (RSA_ALGORITHM.equals(alg)) {
@@ -798,9 +911,9 @@ public class KeyUtils {
             publicKey =  getPubKey((RSAPrivateCrtKey) privateKey);
         }
         else {
-            throw new NoSuchAlgorithmException(String.format("Invalid alg:  %s", alg));
+            throw new NoSuchAlgorithmException(String.format("Invalid alg: %s", alg));
         }
-        return new KeyPair(publicKey, privateKey);      
+        return new KeyPair(publicKey, privateKey);
     }
 
     /**
@@ -875,8 +988,13 @@ public class KeyUtils {
         try {
             ensureBouncyCastleProvider();
             
-            // 1. Generate ephemeral EC P-256 key pair
-            KeyPair ephemeralKeyPair = generateKeyPair("EC", 256);
+            // 1. Generate ephemeral EC key pair using the same curve as the recipient
+            int keySize = 256; // Default to P-256
+            if (recipient instanceof ECPublicKey) {
+                ECPublicKey ecPubKey = (ECPublicKey) recipient;
+                keySize = ecPubKey.getParams().getCurve().getField().getFieldSize();
+            }
+            KeyPair ephemeralKeyPair = generateKeyPair("EC", keySize);
 
             // 2. Perform ECDH key agreement
             byte[] sharedSecret = decapsulate(recipient, ephemeralKeyPair.getPrivate());
@@ -984,12 +1102,22 @@ public class KeyUtils {
             
             // Extract ephemeral public key length (4 bytes, big endian)
             int pubKeyLength = buffer.getInt();
-            // P-256 public key in PEM format is exactly 178 bytes
-            final int EXPECTED_P256_PEM_SIZE = 178;
-            if (pubKeyLength != EXPECTED_P256_PEM_SIZE) {
+            
+            // Validate public key length for standard NIST curves
+            // P-256 (secp256r1): 178 bytes
+            // P-384 (secp384r1): 215 bytes
+            // P-521 (secp521r1): 268 bytes
+            final int P256_PEM_SIZE = 178;
+            final int P384_PEM_SIZE = 215;
+            final int P521_PEM_SIZE = 268;
+            
+            if (pubKeyLength != P256_PEM_SIZE &&
+                pubKeyLength != P384_PEM_SIZE &&
+                pubKeyLength != P521_PEM_SIZE) {
                 throw new IllegalArgumentException(
-                    "Invalid P-256 public key length: expected " + EXPECTED_P256_PEM_SIZE +
-                    ", got " + pubKeyLength);
+                    "Invalid EC public key PEM length: expected " + P256_PEM_SIZE +
+                    " (P-256), " + P384_PEM_SIZE + " (P-384), or " + P521_PEM_SIZE +
+                    " (P-521) bytes, got " + pubKeyLength);
             }
             
             // Validate remaining buffer size
@@ -1136,8 +1264,8 @@ public class KeyUtils {
         // Ensure BouncyCastle is available for PKCS12 operations
         ensureBouncyCastleProvider();
         
-        // Convert pinHash to char[] by base64 encodign the pin hash before encoding charts to utf-8
-        char[] password = Base64.getEncoder().encodeToString(pinHash).toCharArray();
+        // Convert pinHash to char[] using ISO-8859-1 for 1:1 byte-to-char mapping
+        char[] password = new String(pinHash, StandardCharsets.ISO_8859_1).toCharArray();
         
         // Create a new PKCS12 KeyStore using BouncyCastle provider
         KeyStore keyStore = KeyStore.getInstance("PKCS12", BOUNCY_CASTLE_PROVIDER_NAME);
@@ -1173,65 +1301,191 @@ public class KeyUtils {
         return null;
     }
 
+    /**
+     * Context string for HKDF key derivation.
+     * Used as the 'info' parameter to provide domain separation for FIDO2 passkey seeds.
+     */
+    private static final String HKDF_INFO_PASSKEY_SEED = "FIDO2-PASSKEY-SEED";
+
+    /**
+     * Derives a passkey seed using HKDF (HMAC-based Key Derivation Function) as defined in RFC 5869.
+     *
+     * <p>HKDF provides a standardized, secure way to derive cryptographic keys from input key material.
+     * It uses an extract-then-expand paradigm:
+     * <ol>
+     *   <li>Extract: Derive a pseudorandom key (PRK) from the input key material using HMAC</li>
+     *   <li>Expand: Expand the PRK into the desired output key material using HMAC</li>
+     * </ol>
+     *
+     * <p><b>Parameters used:</b>
+     * <ul>
+     *   <li><b>IKM (Input Keying Material)</b>: The encoded private key bytes - provides high-entropy secret material</li>
+     *   <li><b>Salt</b>: The entropy parameter (rpId bytes) - provides domain separation per relying party</li>
+     *   <li><b>Info</b>: Fixed context string "FIDO2-PASSKEY-SEED" - prevents cross-application attacks</li>
+     *   <li><b>Hash</b>: SHA-256 - provides 256-bit security level</li>
+     *   <li><b>Output Length</b>: 32 bytes - suitable for AES-256 encryption</li>
+     * </ul>
+     *
+     * <p><b>Security Properties:</b>
+     * <ul>
+     *   <li>Deterministic: Same inputs always produce the same output (required for credential recovery)</li>
+     *   <li>Standardized: Follows RFC 5869 with formal security analysis</li>
+     *   <li>Domain Separation: Salt and info parameters prevent cross-protocol attacks</li>
+     *   <li>One-way: Computationally infeasible to derive the private key from the seed</li>
+     * </ul>
+     *
+     * <p><b>BREAKING CHANGE:</b> This method now uses HKDF instead of the previous non-standard
+     * cryptographic construction. Credentials encrypted with seeds from the old implementation cannot
+     * be decrypted with seeds from this new implementation. Migration requires credential re-registration.
+     *
+     * @param entropy The entropy bytes (typically rpId bytes) used as salt for domain separation
+     * @param key The private key used as input keying material
+     * @return A Base64 URL-encoded 32-byte seed suitable for AES-256 key derivation, or null on error
+     * @see <a href="https://www.rfc-editor.org/rfc/rfc5869">RFC 5869: HKDF</a>
+     */
     public static String getPasskeySeed(byte[] entropy, PrivateKey key) {
-        try {
-            Signature signer = Signature.getInstance("ECDSAwithSHA256");
-            signer.initSign(key);
-            signer.update(entropy);
-            byte[] sig = signer.sign();
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(Arrays.copyOfRange(sig, 0, 32));
-        } catch (GeneralSecurityException e) {
-            logger.error(e.getMessage(), e);
+        // Validate inputs
+        if (entropy == null || key == null) {
+            logger.error("HKDF key derivation failed: entropy and key must not be null");
+            return null;
         }
-        return null;
+        
+        try {
+            // Extract input keying material from the private key
+            byte[] ikm = key.getEncoded();
+            // Use fixed context string for application-specific domain separation
+            byte[] info = HKDF_INFO_PASSKEY_SEED.getBytes(StandardCharsets.UTF_8);
+            byte[] okm = hkdf(ikm, entropy, info, 32);
+            
+            // Return Base64 URL-encoded seed (without padding)
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(okm);
+        } catch (Exception e) {
+            logger.error("HKDF key derivation failed: {}", e.getMessage(), e);
+            return null;
+        }
     }
     /**
-     * Encrypts the data with app key (if available) ECDH.
-     * This provides encryption for PIN hash caching:
-     * - App key encryption for fast access (hardware-backed when available)
-     *
-     * @param plaintext The bytes to encrypt
-     * @param keystoreManager The platform-specific keystore manager (may be null)
-     * @return byte[] containing: [ciphertext]
-     * @throws IOException if writing to the stream fails
+     * Performs HKDF key derivation with custom parameters.
+     * This is a generic HKDF implementation for use cases beyond passkey seeds.
+     * 
+     * @param ikm Input keying material
+     * @param salt Salt value for extraction phase
+     * @param info Context and application-specific information
+     * @param length Desired output length in bytes
+     * @return Derived key material
+     * @throws IllegalArgumentException if parameters are invalid
      */
-    public static byte[] ksmEncrypt(
-            byte[] plaintext, 
-            KeystoreManager keystoreManager) throws IOException {
-        
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        
-        // Encrypt upper hash with app key if available
-        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
-            try {
-                bos.write(keystoreManager.encryptWithAppKey(plaintext));
-                logger.debug("Encrypted plaintext with app key (length: {})", plaintext.length);
-            } catch (Exception e) {
-                logger.warn("Failed to encrypt with app key, writing zero length", e);
-            }
-        } else {
-            logger.debug("KeystoreManager not available, skipping app key encryption");
+    public static byte[] hkdf(byte[] ikm, byte[] salt, byte[] info, int length) {
+        if (ikm == null || ikm.length == 0) {
+            throw new IllegalArgumentException("Input keying material cannot be null or empty");
         }
-        return bos.toByteArray();
+        if (length <= 0 || length > 255 * 32) {
+            throw new IllegalArgumentException("Invalid output length: " + length);
+        }
+        
+        try {
+            HKDFBytesGenerator hkdf = new HKDFBytesGenerator(new SHA256Digest());
+            hkdf.init(new HKDFParameters(ikm, salt, info));
+            
+            byte[] output = new byte[length];
+            hkdf.generateBytes(output, 0, length);
+            
+            return output;
+        } catch (Exception e) {
+            logger.error("HKDF derivation failed", e);
+            throw new RuntimeException("HKDF derivation failed", e);
+        }
     }
     
     /**
-     * Decrypts the data with the app key
-     * This method reads the encrypted data.
+     * Signs data using a private key.
+     * Supports EC (ECDSA with SHA-256) and RSA (RSASSA-PKCS1-v1_5 with SHA-256) keys.
+     * 
+     * @param data Data to sign
+     * @param privateKey Private key for signing
+     * @return Signature bytes
+     * @throws IllegalArgumentException if parameters are invalid
+     * @throws RuntimeException if signing fails
+     */
+    public static byte[] sign(byte[] data, PrivateKey privateKey) {
+        if (data == null || data.length == 0) {
+            throw new IllegalArgumentException("Data to sign cannot be null or empty");
+        }
+        if (privateKey == null) {
+            throw new IllegalArgumentException("Private key cannot be null");
+        }
+        
+        try {
+            java.security.Signature signature;
+            
+            if (privateKey instanceof java.security.interfaces.ECPrivateKey) {
+                signature = java.security.Signature.getInstance("SHA256withECDSA", "BC");
+            } else if (privateKey instanceof java.security.interfaces.RSAPrivateKey) {
+                signature = java.security.Signature.getInstance("SHA256withRSA", "BC");
+            } else {
+                throw new IllegalArgumentException("Unsupported private key type: " + 
+                                                 privateKey.getClass().getName());
+            }
+            
+            signature.initSign(privateKey);
+            signature.update(data);
+            return signature.sign();
+        } catch (Exception e) {
+            logger.error("Signing failed", e);
+            throw new RuntimeException("Signing failed", e);
+        }
+    }
+
+    /**
+     * Encrypts the data using ECDH with the keystore manager's public key.
+     * This provides encryption for PIN hash caching using hardware-backed keys when available.
+     *
+     * @param plaintext The bytes to encrypt
+     * @param keystoreManager The platform-specific keystore manager (may be null)
+     * @return byte[] containing the ECDH-encrypted ciphertext
+     * @throws IOException if encryption fails
+     */
+    public static byte[] ksmEncrypt(
+            byte[] plaintext,
+            KeystoreManager keystoreManager) throws IOException {
+        
+        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
+            try {
+                // Get the public key from the keystore manager
+                PublicKey publicKey = keystoreManager.getEC256PublicKey();
+                // Use standard ECDH encryption
+                byte[] encrypted = ecdhEncrypt(plaintext, publicKey);
+                logger.debug("Encrypted plaintext with keystore EC key (length: {})", plaintext.length);
+                return encrypted;
+            } catch (Exception e) {
+                logger.warn("Failed to encrypt with keystore key", e);
+                throw new IOException("Keystore encryption failed", e);
+            }
+        } else {
+            logger.debug("KeystoreManager not available, cannot encrypt");
+            throw new IOException("KeystoreManager not available");
+        }
+    }
+    
+    /**
+     * Decrypts the data using ECDH with the keystore manager's private key.
      *
      * @param ciphertext The encrypted data
      * @param keystoreManager The platform-specific keystore manager (may be null)
-     * @return Array containing [plaintext]
-     * @throws Exception if decryption fails with both methods
+     * @return The decrypted plaintext
+     * @throws Exception if decryption fails
      */
     public static byte[] ksmDecrypt(
             byte[] ciphertext,
             KeystoreManager keystoreManager) throws Exception {
         if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
             try {
-                return keystoreManager.decryptWithAppKey(ciphertext);
+                // Get the private key from the keystore manager
+                PrivateKey privateKey = keystoreManager.getEC256PrivateKey();
+                // Use standard ECDH decryption
+                return ecdhDecrypt(ciphertext, privateKey);
             } catch (Exception e) {
-                logger.debug("App key decryption failed", e);
+                logger.debug("Keystore key decryption failed", e);
                 return null;
             }
         }
@@ -1243,7 +1497,7 @@ public class KeyUtils {
     public static PrivateKey getPlatformKey() {
         File platKeyFile = new File(FileUtils.getFido2Home() + File.separator + PLATFORM_KEY);
         try {
-            if (!platKeyFile.exists()) {
+            if (platKeyFile.exists()) {
                 return FileUtils.readPrivatePEM(platKeyFile);
             }
         } catch (Exception e) {

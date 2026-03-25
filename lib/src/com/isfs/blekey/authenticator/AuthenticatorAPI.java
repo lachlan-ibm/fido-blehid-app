@@ -14,6 +14,8 @@ import com.isfs.blekey.data.Passkey;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.KeyPair;
 import java.security.MessageDigest;
@@ -21,6 +23,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.interfaces.ECPrivateKey;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -30,6 +33,7 @@ import java.util.Map;
 import java.util.Set;
 
 import javax.crypto.Cipher;
+import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -53,13 +57,13 @@ public class AuthenticatorAPI {
     /**
      * Key pair used for platform authentication.
      */
-    private static KeyPair platKeyPair = KeyUtils.getKeyPair("EC");
+    private static KeyPair platKeyPair = KeyUtils.getKeyPair("ECDSA");
     
     /**
-     * Map of channel IDs to their associated platform keys and passkeys.
-     * Maps CID to a map containing the passkey and platform public key.
+     * Map of channel IDs to their authenticated passkeys.
+     * Maps CID to the Passkey that was authenticated via PIN verification.
      */
-    private static Map<byte[], Map<String, Object>> openKeys = new HashMap<byte[], Map<String, Object>>();
+    private static Map<byte[], Passkey> openKeys = new HashMap<>();
 
     /**
      * Supported COSE algorithm identifiers.
@@ -98,6 +102,42 @@ public class AuthenticatorAPI {
                 throw new RuntimeException("HmacSHA256 algorithm not available", e);
             }
         });
+    /**
+     * PIN token size in bytes (32 bytes as per CTAP2 specification).
+     */
+    private static final int PIN_TOKEN_SIZE = 32;
+
+    /**
+     * AES block size in bytes (16 bytes for AES-128/256).
+     */
+    private static final int AES_BLOCK_SIZE = 16;
+
+    /**
+     * Maximum number of PIN retry attempts before lockout.
+     */
+    private static final int MAX_PIN_RETRIES = 5;
+
+    /**
+     * CBOR map key for encrypted PIN hash in clientPin requests.
+     */
+    private static final int KEY_PIN_HASH_ENC = 0x06;
+
+    /**
+     * CBOR map key for platform key agreement key in clientPin requests.
+     */
+    private static final int KEY_PLATFORM_KEY_AGREEMENT = 0x03;
+
+    /**
+     * CBOR map key for PIN token in clientPin responses.
+     */
+    private static final int KEY_PIN_TOKEN = 0x02;
+
+    /**
+     * Reusable SecureRandom instance for generating cryptographic tokens.
+     * SecureRandom initialization is expensive, so we reuse a single instance.
+     */
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
 
     private static PinUvAuthResult verifyPinAuthToken(byte[] pinAuthToken, byte[] pinUvAuthParam, String rpId)
             throws InvalidKeyException {
@@ -327,6 +367,7 @@ public class AuthenticatorAPI {
         }
     }
 
+
     /**
      * Result class for credential validation containing both the type and any error code.
      */
@@ -339,9 +380,153 @@ public class AuthenticatorAPI {
             this.errorCode = errorCode;
         }
         
+        /**
+         * Factory method for creating error results.
+         *
+         * @param code The error code
+         * @return CredentialValidationResult with NONE type and the specified error code
+         */
+        static CredentialValidationResult error(Ctap2StatusCode code) {
+            return new CredentialValidationResult(CredentialType.NONE, code);
+        }
+        
         boolean isValid() {
             return errorCode == null && type != CredentialType.NONE;
         }
+    }
+    /**
+     * Result of PIN hash validation containing either the extracted PIN hash or an error code.
+     */
+    private static class PinHashValidationResult {
+        private final byte[] pinHashEnc;
+        private final Ctap2StatusCode errorCode;
+        
+        private PinHashValidationResult(byte[] pinHashEnc, Ctap2StatusCode errorCode) {
+            this.pinHashEnc = pinHashEnc;
+            this.errorCode = errorCode;
+        }
+        
+        static PinHashValidationResult success(byte[] pinHashEnc) {
+            return new PinHashValidationResult(pinHashEnc, null);
+        }
+        
+        static PinHashValidationResult failure(Ctap2StatusCode errorCode) {
+            return new PinHashValidationResult(null, errorCode);
+        }
+        
+        boolean isValid() {
+            return pinHashEnc != null;
+        }
+        
+        byte[] getPinHashEnc() {
+            return pinHashEnc;
+        }
+        
+        Ctap2StatusCode getErrorCode() {
+            return errorCode;
+        }
+    }
+
+
+    /**
+     * Result of PIN verification containing either the passkey and PIN hash or an error code.
+     */
+    private static class PinVerificationResult {
+        private final Passkey passkey;
+        private final byte[] pinHash;
+        private final Ctap2StatusCode errorCode;
+        
+        private PinVerificationResult(Passkey passkey, byte[] pinHash, Ctap2StatusCode errorCode) {
+            this.passkey = passkey;
+            this.pinHash = pinHash;
+            this.errorCode = errorCode;
+        }
+        
+        static PinVerificationResult success(Passkey passkey, byte[] pinHash) {
+            return new PinVerificationResult(passkey, pinHash, null);
+        }
+        
+        static PinVerificationResult failure(Ctap2StatusCode errorCode) {
+            return new PinVerificationResult(null, null, errorCode);
+        }
+        
+        boolean isValid() {
+            return passkey != null;
+        }
+        
+        Passkey getPasskey() {
+            return passkey;
+        }
+        
+        byte[] getPinHash() {
+            return pinHash;
+        }
+        
+        Ctap2StatusCode getErrorCode() {
+            return errorCode;
+        }
+    }
+
+    /**
+     * Builder for PIN token responses.
+     */
+    private static class PinTokenResponseBuilder {
+        private final Map<Integer, Object> response = new HashMap<>();
+        
+        PinTokenResponseBuilder withPinToken(byte[] pinToken) {
+            response.put(KEY_PIN_TOKEN, pinToken);
+            return this;
+        }
+        
+        byte[] build() {
+            return success(Cbor.encode(response));
+        }
+    }
+
+
+    /**
+     * CTAP2 makeCredential request parameter keys.
+     * Defines the integer keys used in the request map according to CTAP2 specification.
+     */
+    private interface MakeCredentialKeys {
+        int CLIENT_DATA_HASH = 0x01;
+        int RP = 0x02;
+        int USER = 0x03;
+        int PUB_KEY_CRED_PARAMS = 0x04;
+        int EXCLUDE_LIST = 0x05;
+        int OPTIONS = 0x07;
+    }
+
+    /**
+     * Type-safe accessor for clientDataHash from request.
+     *
+     * @param req The request parameters map
+     * @return The client data hash byte array
+     */
+    private static byte[] getClientDataHash(Map<Integer, Object> req) {
+        return (byte[]) req.get(MakeCredentialKeys.CLIENT_DATA_HASH);
+    }
+
+    /**
+     * Type-safe accessor for pubKeyCredParams from request.
+     *
+     * @param req The request parameters map
+     * @return List of public key credential parameters
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> getPubKeyCredParams(Map<Integer, Object> req) {
+        return (List<Map<String, Object>>) req.get(MakeCredentialKeys.PUB_KEY_CRED_PARAMS);
+    }
+
+    /**
+     * Type-safe accessor for excludeList from request.
+     *
+     * @param req The request parameters map
+     * @return List of credentials to exclude
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> getExcludeList(Map<Integer, Object> req) {
+        return (List<Map<String, Object>>) req.get(MakeCredentialKeys.EXCLUDE_LIST);
     }
 
     private static Ctap2StatusCode validateRequiredParameter(Map<Integer, Object> req, int key, String paramName) {
@@ -424,18 +609,44 @@ public class AuthenticatorAPI {
         return null;
     }
 
+    /**
+     * Checks if any of the provided algorithms is supported.
+     *
+     * @param pubKeyCredParams List of public key credential parameters
+     * @return true if at least one supported algorithm is found
+     */
     private static boolean isSupportedAlgorithm(List<Map<String, Object>> pubKeyCredParams) {
         if (pubKeyCredParams == null || pubKeyCredParams.isEmpty()) {
             return false;
-        } else {
-            for (Map<String, Object> param : pubKeyCredParams) {
-                if (param.containsKey("alg") 
-                            && SUPPORTED_ALGORITHM_SET.contains(param.get("alg"))) {
-                    return true;
-                }
+        }
+        
+        for (Map<String, Object> param : pubKeyCredParams) {
+            Object alg = param.get("alg");
+            if (alg != null && SUPPORTED_ALGORITHM_SET.contains(alg)) {
+                return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Validates algorithm support in pubKeyCredParams.
+     *
+     * @param pubKeyCredParams List of public key credential parameters
+     * @return Error code if validation fails, null otherwise
+     */
+    private static Ctap2StatusCode validateAlgorithmSupport(List<Map<String, Object>> pubKeyCredParams) {
+        if (pubKeyCredParams == null || pubKeyCredParams.isEmpty()) {
+            logger.error("pubKeyCredParams is null or empty");
+            return Ctap2StatusCode.INVALID_PARAMETER;
+        }
+        
+        if (!isSupportedAlgorithm(pubKeyCredParams)) {
+            logger.error("No supported algorithm found in pubKeyCredParams");
+            return Ctap2StatusCode.UNSUPPORTED_ALGORITHM;
+        }
+        
+        return null;
     }
 
     /**
@@ -461,7 +672,7 @@ public class AuthenticatorAPI {
      */
     private static CredentialOptions parseOptions(Map<Integer, Object> req) {
         @SuppressWarnings("unchecked")
-        Map<String, Object> options = (Map<String, Object>) req.getOrDefault(0x07, new HashMap<>());
+        Map<String, Object> options = (Map<String, Object>) req.getOrDefault(MakeCredentialKeys.OPTIONS, new HashMap<>());
         
         boolean up = (boolean) options.getOrDefault("up", true);
         boolean uv = (boolean) options.getOrDefault("uv", false);
@@ -508,37 +719,35 @@ public class AuthenticatorAPI {
         // Step 1: Validate required parameters (CTAP2 spec section 6.1.2)
         Ctap2StatusCode error = validateRequiredParameters(req);
         if (error != null) {
-            return new CredentialValidationResult(CredentialType.NONE, error);
+            return CredentialValidationResult.error(error);
         }
         
         // Step 2: Validate clientDataHash length (must be 32 bytes for SHA-256)
-        byte[] clientDataHash = (byte[]) req.get(0x01);
+        byte[] clientDataHash = getClientDataHash(req);
         error = validateClientDataHash(clientDataHash);
         if (error != null) {
-            return new CredentialValidationResult(CredentialType.NONE, error);
+            return CredentialValidationResult.error(error);
         }
 
         // Step 3: Validate algorithm support
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> pubKeyCredParams = (List<Map<String, Object>>) req.get(0x04);
-        if (!isSupportedAlgorithm(pubKeyCredParams)) {
-            logger.error("No supported algorithm found in pubKeyCredParams");
-            return new CredentialValidationResult(CredentialType.NONE, Ctap2StatusCode.UNSUPPORTED_ALGORITHM);
+        List<Map<String, Object>> pubKeyCredParams = getPubKeyCredParams(req);
+        error = validateAlgorithmSupport(pubKeyCredParams);
+        if (error != null) {
+            return CredentialValidationResult.error(error);
         }
 
         // Step 4: Check excludeList for existing credentials
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> excludeList = (List<Map<String, Object>>) req.get(0x05);
+        List<Map<String, Object>> excludeList = getExcludeList(req);
         error = checkExcludeList(excludeList, passkey);
         if (error != null) {
-            return new CredentialValidationResult(CredentialType.NONE, error);
+            return CredentialValidationResult.error(error);
         }
 
         // Step 5: Parse and validate options
         CredentialOptions options = parseOptions(req);
         error = validateUserPresence(options);
         if (error != null) {
-            return new CredentialValidationResult(CredentialType.NONE, error);
+            return CredentialValidationResult.error(error);
         }
 
         // Step 6: Determine credential type and validate constraints
@@ -584,12 +793,12 @@ public class AuthenticatorAPI {
 
     private static CredentialInfo extractCredentialInfo(Map<Integer, Object> req) {
         @SuppressWarnings("unchecked")
-        Map<String, Object> rp = (Map<String, Object>) req.get(0x02);
+        Map<String, Object> rp = (Map<String, Object>) req.get(MakeCredentialKeys.RP);
         String rpId = (String) rp.get("id");
         byte[] rpIdBytes = rpId.getBytes(StandardCharsets.UTF_8);
         
         @SuppressWarnings("unchecked")
-        Map<String, Object> user = (Map<String, Object>) req.get(0x03);
+        Map<String, Object> user = (Map<String, Object>) req.get(MakeCredentialKeys.USER);
         byte[] userId = (byte[]) user.get("id");
         
         return new CredentialInfo(rpId, rpIdBytes, userId);
@@ -706,7 +915,15 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     protected static byte[] makeCredential(CtapTxn txn, Map<Integer, Object> req) {
-        logger.debug("makeCredential");
+        logger.info("=== makeCredential START ===");
+        logger.info("Request parameters: {}", req.keySet());
+        logger.info("Transaction CID: {}", java.util.Arrays.toString(txn.getCid()));
+        logger.info("Has passkey: {}", txn.getPasskey() != null);
+        logger.info("Has PIN auth token: {}", txn.getPinAuthTkn() != null);
+        
+        // Load authenticated session from openKeys if available
+        loadAuthenticatedSession(txn);
+        logger.info("After loading session - Has passkey: {}", txn.getPasskey() != null);
         
         // Validate the request and determine credential type
         CredentialValidationResult validation = _canMakeCredential(req, txn.getPasskey());
@@ -716,91 +933,393 @@ public class AuthenticatorAPI {
             return error(validation.errorCode);
         }
         
-        logger.debug("Creating credential of type: {}", validation.type);
+        logger.info("Creating credential of type: {}", validation.type);
         
         try {
             return _makeCredential(validation, txn, req);
         } catch (Exception e) {
-            logger.error(e.getMessage(), e);
+            logger.error("makeCredential exception: {}", e.getMessage(), e);
             return error(Ctap2StatusCode.OTHER);
         }
     }
 
-    private static byte[] _makeCredential(
-            CredentialValidationResult validation, 
-            CtapTxn txn, 
-            Map<Integer, Object> req) throws Exception {
-
-        // Verify pin auth token if it exists
-        PinUvAuthResult pinUvResult = verifyPinUvAuth(req, txn);
-        if (pinUvResult.errorCode != null) {
-            return error(pinUvResult.errorCode);
+    /**
+     * Loads the appropriate key pair for attestation based on credential type and verification status.
+     *
+     * @param credentialType The type of credential being created
+     * @param userVerified Whether the user has been verified
+     * @param txn The CTAP transaction containing passkey information
+     * @return The key pair to use for attestation
+     * @throws Exception if key generation fails
+     */
+    private static KeyPair loadAttestationKeyPair(
+            CredentialType credentialType,
+            boolean userVerified,
+            CtapTxn txn) throws Exception {
+        
+        if (credentialType == CredentialType.RESIDENT && userVerified) {
+            java.security.PrivateKey passkeyPrivateKey = txn.getPasskey().getPrivateKey();
+            PublicKey passkeyPublicKey = KeyUtils.getPubKey((ECPrivateKey) passkeyPrivateKey);
+            return new KeyPair(passkeyPublicKey, passkeyPrivateKey);
         }
-        // Load key material
-        KeyPair caKp = new KeyPair(KeyUtils.getPubKey((ECPrivateKey) KeyUtils.getPlatformKey()),
-                                    KeyUtils.getPlatformKey());
-        if(validation.type == CredentialType.RESIDENT && pinUvResult.userVerified) {
-           caKp = new KeyPair(KeyUtils.getPubKey((ECPrivateKey) txn.getPasskey().getPrivateKey()),
-                                        txn.getPasskey().getPrivateKey());
+        
+        java.security.PrivateKey platformKey = KeyUtils.getPlatformKey();
+        if (platformKey == null) {
+            // Platform key doesn't exist, generate a temporary key pair for testing
+            KeyPair tempKeyPair = KeyUtils.getKeyPair("ECDSA");
+            return tempKeyPair;
         }
-        Fido2Authenticator pkey = new Fido2Authenticator("EC", 256);
+        PublicKey platformPublicKey = KeyUtils.getPubKey((ECPrivateKey) platformKey);
+        return new KeyPair(platformPublicKey, platformKey);
+    }
 
-        // Step 1: Build Authenticator Data
-        byte[] cdh = (byte[]) req.get(0x01);
-        byte[] authenticatorData = pkey.buildAuthenticatorData(Map.of("rp", req.get(0x02), "attestation",true), 
-                    "packed", null, null, pkey.getKeyPair());
-        // Step 2: Create Attestation Statement (packed-self)
-        Map<String, Object> attStmt = pkey.processAttestationStatement("packed", cdh, authenticatorData, 
-                        pkey.getCredId(), pkey.getKeyPair(), caKp, null);
+    /**
+     * Builds authenticator data for the credential.
+     *
+     * @param req The request parameters containing RP information
+     * @param authenticator The FIDO2 authenticator instance
+     * @return The authenticator data bytes
+     * @throws Exception if authenticator data building fails
+     */
+    private static byte[] buildAuthenticatorData(
+            Map<Integer, Object> req,
+            Fido2Authenticator authenticator) throws Exception {
+        
+        Map<String, Object> options = Map.of(
+            "rp", req.get(0x02),
+            "attestation", true
+        );
+        
+        return authenticator.buildAuthenticatorData(
+            options,
+            "packed",
+            null,
+            null,
+            authenticator.getKeyPair()
+        );
+    }
 
-        // Step 3: Store Credential (if resident)
-        if (validation.type == CredentialType.RESIDENT) {
-            Ctap2StatusCode storeResult = storeResidentCredential(
-                req, pkey.getCredId(), pkey.getKeyPair(), txn.getPasskey(), txn);
-            if (storeResult != null) {
-                return error(storeResult);
-            }
-        }
+    /**
+     * Creates the attestation statement for the credential.
+     *
+     * @param clientDataHash The client data hash
+     * @param authenticatorData The authenticator data
+     * @param authenticator The FIDO2 authenticator instance
+     * @param attestationKeyPair The key pair to use for attestation
+     * @param akiCert
+     * @return The attestation statement map
+     * @throws Exception if attestation statement creation fails
+     */
+    private static Map<String, Object> createAttestationStatement(
+            byte[] clientDataHash,
+            byte[] authenticatorData,
+            Fido2Authenticator authenticator,
+            KeyPair attestationKeyPair,
+            X509Certificate akiCert) throws Exception {
+        
+        return authenticator.processAttestationStatement(
+            "packed",
+            clientDataHash,
+            authenticatorData,
+            authenticator.getCredId(),
+            authenticator.getKeyPair(),
+            attestationKeyPair,
+            akiCert
+        );
+    }
 
-        // Step 4: Build Response
+    /**
+     * Builds the makeCredential response.
+     *
+     * @param authenticatorData The authenticator data
+     * @param attestationStatement The attestation statement
+     * @return The encoded response bytes
+     */
+    private static byte[] buildMakeCredentialResponse(
+            byte[] authenticatorData,
+            Map<String, Object> attestationStatement) {
+        
         Map<Integer, Object> response = Map.of(
-            0x01, "packed", // fmt
+            0x01, "packed",  // fmt
             0x02, authenticatorData,
-            0x03, attStmt
+            0x03, attestationStatement
         );
         
         return success(Cbor.encode(response));
     }
 
-    private static Fido2Authenticator createAuthenticator(CtapTxn txn, Map<Integer, Object> req) {
-        try {
-            Fido2Authenticator a = new Fido2Authenticator();
-            if(txn.getPasskey() != null) { //PinAuth completed and passkey opened; resident credential
-                a.setAuthnCert(txn.getPasskey().getCertificate());
-                a.setSymKeys(KeyUtils.getPasskeySeed((byte[]) req.get(0x01), txn.getPasskey().getPrivateKey()));
-            } else { //U2F authenticator
-                a.setSymKeys(KeyUtils.getPasskeySeed((byte[]) req.get(0x01), KeyUtils.getPlatformKey()));
-            }
-            return a;
-        } catch (Exception e) {
-            //logger.error("Failed to create authenticator", e);
-            return null;
+    /**
+     * Extracts and validates the client data hash from the request.
+     *
+     * @param req The request parameters
+     * @return The client data hash bytes, or null if missing
+     */
+    private static byte[] extractClientDataHash(Map<Integer, Object> req) {
+        byte[] clientDataHash = (byte[]) req.get(0x01);
+        if (clientDataHash == null) {
+            logger.error("Missing required clientDataHash (0x01) in request");
+        }
+        return clientDataHash;
+    }
+
+    /**
+     * Logs the start of credential creation with key parameters.
+     *
+     * @param validation The credential validation result
+     * @param req The request parameters
+     */
+    private static void logMakeCredentialStart(
+            CredentialValidationResult validation,
+            Map<Integer, Object> req) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Starting credential creation - type: {}, hasPinUvAuthParam: {}, hasPinUvAuthProtocol: {}",
+                validation.type,
+                req.containsKey(0x08),
+                req.containsKey(0x09));
         }
     }
 
+    private static X509Certificate loadAnonCA(CtapTxn txn){
+        //TODO generate correct annon ca cert from spec
+        return (txn.getPasskey() == null) ? null : txn.getPasskey().getCertificate();
+    }
+
+    /**
+     * Handles storage of resident credentials if required.
+     * 
+     * @param type The credential type (RESIDENT or NON_RESIDENT)
+     * @param req The request parameters
+     * @param authenticator The FIDO2 authenticator instance
+     * @param txn The CTAP transaction
+     * @return Error code if storage fails, null on success
+     */
+    private static Ctap2StatusCode handleResidentCredentialStorage(
+            CredentialType type,
+            Map<Integer, Object> req,
+            Fido2Authenticator authenticator,
+            CtapTxn txn) {
+        
+        if (type != CredentialType.RESIDENT) {
+            return null;
+        }
+        
+        Ctap2StatusCode storeResult = storeResidentCredential(
+            req,
+            authenticator.getCredId(),
+            authenticator.getKeyPair(),
+            txn.getPasskey(),
+            txn
+        );
+        
+        if (storeResult != null && storeResult != Ctap2StatusCode.SUCCESS) {
+            return storeResult;
+        }
+        
+        return null;
+    }
+
+    private static byte[] _makeCredential(
+            CredentialValidationResult validation,
+            CtapTxn txn,
+            Map<Integer, Object> req) throws Exception {
+
+        // Log credential creation start
+        logMakeCredentialStart(validation, req);
+        
+        // Verify PIN/UV authentication
+        logger.debug("Verifying PIN/UV auth...");
+        PinUvAuthResult pinUvResult = verifyPinUvAuth(req, txn);
+        logger.debug("PIN/UV auth result - userVerified: {}, errorCode: {}",
+                     pinUvResult.userVerified, pinUvResult.errorCode);
+        
+        if (pinUvResult.errorCode != null) {
+            logger.debug("PIN/UV auth failed with error: {}", pinUvResult.errorCode);
+            return error(pinUvResult.errorCode);
+        }
+        
+        // Load attestation key material
+        KeyPair attestationKeyPair = loadAttestationKeyPair(
+            validation.type,
+            pinUvResult.userVerified,
+            txn
+        );
+        X509Certificate anonCA = loadAnonCA(txn);
+        Fido2Authenticator authenticator = createAuthenticator(txn, req);
+        if (authenticator == null) {
+            logger.error("Failed to create authenticator");
+            return error(Ctap2StatusCode.OTHER);
+        }
+        byte[] clientDataHash = extractClientDataHash(req);
+        if (clientDataHash == null) {
+            return error(Ctap2StatusCode.MISSING_PARAMETER);
+        }
+        byte[] authenticatorData = buildAuthenticatorData(req, authenticator);
+        Map<String, Object> attestationStatement = createAttestationStatement(
+                    clientDataHash, authenticatorData, authenticator, attestationKeyPair, anonCA);
+        
+        // Store credential if resident
+        Ctap2StatusCode storeError = handleResidentCredentialStorage(
+                    validation.type, req, authenticator, txn);
+        if (storeError != null) {
+            return error(storeError);
+        }
+        
+        // Build and return response
+        return buildMakeCredentialResponse(authenticatorData, attestationStatement);
+    }
+
+    /**
+     * Retrieves the passkey from openKeys and populates the transaction.
+     * If an authenticated session exists for this CID, sets the passkey in the transaction.
+     *
+     * @param txn The CTAP transaction to populate
+     * @return true if an authenticated session was found and applied, false otherwise
+     */
+    private static boolean loadAuthenticatedSession(CtapTxn txn) {
+        Passkey passkey = openKeys.get(txn.getCid());
+        if (passkey != null) {
+            logger.debug("Found authenticated session for CID, loading passkey");
+            txn.setPasskey(passkey);
+            return true;
+        }
+        logger.debug("No authenticated session found for CID");
+        return false;
+    }
+
+    /**
+     * Creates a Fido2Authenticator instance configured for the given transaction.
+     *
+     * @param txn The CTAP transaction context
+     * @param req The CTAP2 request parameters
+     * @return A configured Fido2Authenticator instance
+     * @throws IllegalArgumentException if request parameters are invalid
+     * @throws IllegalStateException if authenticator configuration fails
+     * @throws RuntimeException for unexpected errors
+     */
+    private static Fido2Authenticator createAuthenticator(CtapTxn txn, Map<Integer, Object> req) {
+        try {
+            Fido2Authenticator a = new Fido2Authenticator();
+            byte[] rpIdBytes = extractRpIdBytes(req);
+            
+            if (txn.getPasskey() != null) {
+                configureResidentCredential(a, txn.getPasskey(), rpIdBytes);
+            } else {
+                String seed = KeyUtils.getPasskeySeed(rpIdBytes, KeyUtils.getPlatformKey());
+                if (seed == null) {
+                    throw new IllegalStateException("Failed to generate seed from platform key");
+                }
+                
+                logger.debug("Configured U2F authenticator");
+                a.setSymKeys(seed);
+            }
+            
+            return a;
+            
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            logger.error("Authenticator creation failed: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            logger.error("Unexpected error creating authenticator", e);
+            throw new RuntimeException("Failed to create authenticator: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Extracts and validates the RP ID from the request.
+     * Handles three formats: String (getAssertion), byte array, or Map (makeCredential).
+     *
+     * @param req The CTAP2 request map
+     * @return The RP ID as bytes
+     * @throws IllegalArgumentException if RP ID is missing or has unsupported type
+     */
+    private static byte[] extractRpIdBytes(Map<Integer, Object> req) {
+        Object rpObj = req.get(MakeCredentialKeys.RP);
+        
+        if (rpObj == null) {
+            throw new IllegalArgumentException("Missing RP parameter (0x02) in request");
+        }
+        
+        if (rpObj instanceof String) {
+            logger.debug("Extracted rpId from String: {}", rpObj);
+            return ((String) rpObj).getBytes(StandardCharsets.UTF_8);
+        }
+        
+        if (rpObj instanceof byte[]) {
+            byte[] rpIdBytes = (byte[]) rpObj;
+            logger.debug("Extracted rpId from byte array (length: {})", rpIdBytes.length);
+            return rpIdBytes;
+        }
+        
+        if (rpObj instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rpMap = (Map<String, Object>) rpObj;
+            Object rpIdObj = rpMap.get("id");
+            
+            if (rpIdObj == null) {
+                throw new IllegalArgumentException("RP map missing 'id' field");
+            }
+            
+            if (rpIdObj instanceof String) {
+                logger.debug("Extracted rpId from RP map String: {}", rpIdObj);
+                return ((String) rpIdObj).getBytes(StandardCharsets.UTF_8);
+            }
+            
+            if (rpIdObj instanceof byte[]) {
+                byte[] rpIdBytes = (byte[]) rpIdObj;
+                logger.debug("Extracted rpId from RP map byte array (length: {})", rpIdBytes.length);
+                return rpIdBytes;
+            }
+            
+            throw new IllegalArgumentException(
+                "RP map 'id' field has unsupported type: " + rpIdObj.getClass().getName());
+        }
+        
+        throw new IllegalArgumentException(
+            "RP parameter has unsupported type: " + rpObj.getClass().getName());
+    }
+    
+    /**
+     * Configures authenticator for resident credential (passkey-based).
+     *
+     * @param a The authenticator to configure
+     * @param passkey The passkey containing certificate and private key
+     * @param rpIdBytes The RP ID bytes for seed generation
+     * @throws IllegalStateException if seed generation fails
+     */
+    private static void configureResidentCredential(Fido2Authenticator a, Passkey passkey, byte[] rpIdBytes) {
+        a.setAuthnCert(passkey.getCertificate());
+        
+        java.security.PrivateKey privKey = passkey.getPrivateKey();
+        logger.debug("Passkey private key algorithm: {}", privKey != null ? privKey.getAlgorithm() : "null");
+        
+        String seed = KeyUtils.getPasskeySeed(rpIdBytes, privKey);
+        if (seed == null) {
+            throw new IllegalStateException("Failed to generate seed from passkey");
+        }
+        
+        logger.debug("Configured resident credential authenticator (seed length: {})", seed.length());
+        a.setSymKeys(seed);
+    }
+
     private static boolean initializeAuthenticatorWithCredential(
-            Fido2Authenticator authenticator, 
+            Fido2Authenticator authenticator,
             ArrayList<Map<String, byte[]>> credentials) {
         
         for (Map<String, byte[]> cred : credentials) {
             try {
-                authenticator.initFromCredId(cred.get("id"));
+                byte[] credId = cred.get("id");
+                logger.debug("Attempting to initialize authenticator with credential ID (length: {})",
+                    credId != null ? credId.length : 0);
+                authenticator.initFromCredId(credId);
+                logger.debug("Successfully initialized authenticator with credential");
                 return true;
             } catch (Exception e) {
+                logger.debug("Failed to initialize with credential: {}", e.getMessage());
                 // Continue trying other credentials
                 continue;
             }
         }
+        logger.debug("Failed to initialize authenticator with any of {} credentials", credentials.size());
         return false;
     }
 
@@ -829,17 +1348,17 @@ public class AuthenticatorAPI {
 
 
     private static byte[] generateSignedAssertion(
-            Map<Integer, Object> req, 
+            Map<Integer, Object> req,
             Fido2Authenticator authenticator) {
         
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> pubKeyMap = (Map<String, Object>) req.get(0x02);
+            String rpId = (String) req.get(0x02);
             
             Map<String, Object> cred = Map.of(
                 "id", authenticator.getCredId(),
                 "type", "public-key"
             );
+            Map<String, Object> pubKeyMap = Map.of("rpId", rpId);
             
             byte[] authData = authenticator.buildAuthenticatorData(
                 pubKeyMap, "packed", null, null, authenticator.getKeyPair());
@@ -856,7 +1375,7 @@ public class AuthenticatorAPI {
             
             return success(Cbor.encode(rsp));
         } catch (Exception e) {
-            logger.error("Failed to generate signed assertion", e.getMessage());
+            logger.error("Failed to generate signed assertion: {}", e.getMessage());
             e.printStackTrace();
             return error(Ctap2StatusCode.OTHER);
         }
@@ -872,6 +1391,10 @@ public class AuthenticatorAPI {
      */
      protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
         logger.debug("getAssertion");
+        
+        // Load authenticated session from openKeys if available
+        loadAuthenticatedSession(txn);
+        
         Fido2Authenticator authenticator = createAuthenticator(txn, req);
         if (authenticator == null) {
             logger.debug("authenticator is null");
@@ -881,11 +1404,13 @@ public class AuthenticatorAPI {
         // Process credentials from allowList and resident credentials
         ArrayList<Map<String, byte[]>> credentials = processCredentials(req, txn.getPasskey());
         if (credentials.isEmpty()) {
+            logger.debug("No credentials found");
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
 
         // Initialize authenticator with a valid credential
         if (!initializeAuthenticatorWithCredential(authenticator, credentials)) {
+            logger.debug("Fido2Authenticator initialization failed with cred list");
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
 
@@ -927,16 +1452,24 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     protected static byte[] pinRequest(CtapTxn txn, Map<Integer, Object> req) {
+        System.out.println("AuthenticatorAPI: === pinRequest START ===");
         PinSubCmd cmd = PinSubCmd.fromInt((int) req.getOrDefault(2, 0));
+        System.out.println("AuthenticatorAPI: PIN subcommand: " + cmd);
+        System.out.println("AuthenticatorAPI: Request parameters: " + req.keySet());
+        
         switch(cmd)
         {
             case GETRETRY:
+                System.out.println("AuthenticatorAPI: Processing GETRETRY");
                 return pinRty(txn, req);
             case GETKEY:
+                System.out.println("AuthenticatorAPI: Processing GETKEY");
                 return getKey(txn, req);
             case GETTKN:
+                System.out.println("AuthenticatorAPI: Processing GETTKN");
                 return getTkn(txn, req);
             default:
+                System.out.println("AuthenticatorAPI: Invalid PIN subcommand: " + cmd);
                 return error(Ctap2StatusCode.INVALID_COMMAND);
         }
     }
@@ -950,10 +1483,229 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     private static byte[] getKey(CtapTxn txn, Map<Integer, Object> req) {
-        Map<Integer, Object> rsp = Map.of(0x01, 
-                KeyUtils.toCoseKey(AuthenticatorAPI.platKeyPair.getPublic()));
+        System.out.println("AuthenticatorAPI: getKey: Returning platform public key");
+        System.out.println("AuthenticatorAPI: platKeyPair is null: " + (AuthenticatorAPI.platKeyPair == null));
+        
+        if (AuthenticatorAPI.platKeyPair == null) {
+            System.out.println("AuthenticatorAPI: CRITICAL: platKeyPair is NULL! Cannot return public key");
+            return error(Ctap2StatusCode.OTHER);
+        }
+        
+        // For PIN/UV Auth Protocol 1, the platform key must use ECDH algorithm (-25)
+        // not ES256 (-7), as it's used for key agreement, not signing
+        Map<Integer, Object> coseKey = KeyUtils.toCoseKey(AuthenticatorAPI.platKeyPair.getPublic(), -25);
+        
+        System.out.println("AuthenticatorAPI: getKey: COSE key structure:");
+        System.out.println("  kty (1): " + coseKey.get(1));
+        System.out.println("  alg (3): " + coseKey.get(3));
+        System.out.println("  crv (-1): " + coseKey.get(-1));
+        System.out.println("  x (-2) length: " + (coseKey.get(-2) != null ? ((byte[])coseKey.get(-2)).length : 0));
+        System.out.println("  y (-3) length: " + (coseKey.get(-3) != null ? ((byte[])coseKey.get(-3)).length : 0));
+        
+        // Log the actual coordinate bytes
+        if (coseKey.get(-2) != null) {
+            System.out.println("  x (-2) hex: " + com.isfs.blekey.util.ByteUtils.bytesToHex((byte[])coseKey.get(-2)));
+        }
+        if (coseKey.get(-3) != null) {
+            System.out.println("  y (-3) hex: " + com.isfs.blekey.util.ByteUtils.bytesToHex((byte[])coseKey.get(-3)));
+        }
+        
+        Map<Integer, Object> rsp = Map.of(0x01, coseKey);
         byte[] key = Cbor.encode(rsp);
+        System.out.println("AuthenticatorAPI: getKey: Successfully encoded public key, size: " + key.length + " bytes");
+        System.out.println("AuthenticatorAPI: getKey: CBOR-encoded response hex dump:");
+        System.out.println(com.isfs.blekey.util.ByteUtils.hexDump(key, "GETKEY Response"));
         return success(key);
+    }
+
+    /**
+     * Extracts and parses the client's public key from the COSE key structure.
+     *
+     * @param req The request parameters containing the client COSE key at key 0x03
+     * @return The parsed PublicKey, or null if extraction/parsing fails
+     */
+    private static PublicKey extractClientPublicKey(Map<Integer, ?> req) {
+        @SuppressWarnings("unchecked")
+        Map<Integer, Object> clientCoseKey = (Map<Integer, Object>) req.get(KEY_PLATFORM_KEY_AGREEMENT);
+        if (clientCoseKey == null) {
+            logger.error("Missing client COSE key (0x03) in request");
+            return null;
+        }
+        
+        PublicKey clientKey = KeyUtils.fromCoseKey(clientCoseKey);
+        if (clientKey == null) {
+            logger.error("Failed to parse client public key from COSE format");
+        } else {
+            logger.debug("Successfully parsed client public key from COSE structure");
+        }
+        return clientKey;
+    }
+
+    /**
+     * Performs ECDH key agreement between the client's public key and platform's private key.
+     *
+     * @param clientKey The client's public key
+     * @return The shared secret bytes, or null if ECDH fails
+     */
+    private static byte[] performEcdhKeyAgreement(PublicKey clientKey) {
+        if (platKeyPair == null) {
+            logger.error("Platform key pair is null, cannot perform ECDH key agreement");
+            return null;
+        }
+        
+        byte[] sharedSecret = KeyUtils.decapsulate(clientKey, platKeyPair.getPrivate());
+        if (sharedSecret != null) {
+            logger.debug("ECDH key agreement successful, shared secret size: {} bytes", 
+                        sharedSecret.length);
+        } else {
+            logger.error("ECDH key agreement failed to generate shared secret");
+        }
+        return sharedSecret;
+    }
+
+    /**
+     * Decrypts the encrypted PIN hash using AES-CBC with the shared secret.
+     *
+     * @param pinHashEnc The encrypted PIN hash
+     * @param sharedSecret The shared secret from ECDH key agreement
+     * @return The decrypted PIN hash
+     * @throws java.security.GeneralSecurityException if decryption fails
+     */
+    private static byte[] decryptPinHash(byte[] pinHashEnc, byte[] sharedSecret) 
+            throws GeneralSecurityException {
+        SecretKeySpec secretKeySpec = new SecretKeySpec(sharedSecret, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(new byte[AES_BLOCK_SIZE]);
+        
+        Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivSpec);
+        byte[] pinHash = cipher.doFinal(pinHashEnc);
+        
+        logger.debug("PIN hash decrypted successfully, size: {} bytes", pinHash.length);
+        return pinHash;
+    }
+
+    /**
+     * Generates a new random PIN authentication token.
+     *
+     * @return A new 32-byte PIN authentication token
+     */
+    private static byte[] generatePinAuthToken() {
+        byte[] pinToken = new byte[PIN_TOKEN_SIZE];
+        SECURE_RANDOM.nextBytes(pinToken);
+        logger.debug("Generated new PIN auth token, size: {} bytes", pinToken.length);
+        return pinToken;
+    }
+
+    /**
+     * Updates the authentication state after successful PIN verification.
+     * Stores the authenticated passkey and resets retry counter.
+     *
+     * @param txn The CTAP transaction
+     * @param pkeyFile The opened passkey file
+     * @param pinToken The generated PIN authentication token
+     * @param pinHash The verified PIN hash
+     */
+    private static void updateAuthenticationState(CtapTxn txn, Passkey pkeyFile, byte[] pinToken, byte[] pinHash) {
+        openKeys.put(txn.getCid(), pkeyFile);
+        pinRetries = MAX_PIN_RETRIES;
+        txn.setPinAuthTkn(pinToken);
+        txn.setPinHash(pinHash);
+        txn.setPasskeyFileName(pkeyFile.getFileName());
+    }
+
+    /**
+     * Validates the getTkn request parameters and extracts the encrypted PIN hash.
+     *
+     * @param req The request parameters
+     * @return PinHashValidationResult containing the PIN hash or error code
+     */
+    private static PinHashValidationResult validateAndExtractPinHash(Map<Integer, ?> req) {
+        if (platKeyPair == null) {
+            logger.error("Platform key pair is null, cannot process PIN token request");
+            return PinHashValidationResult.failure(Ctap2StatusCode.OTHER);
+        }
+        
+        Object pinHashEncObj = req.get(KEY_PIN_HASH_ENC);
+        if (pinHashEncObj == null) {
+            logger.error("Missing encrypted PIN hash (0x06) in request");
+            return PinHashValidationResult.failure(Ctap2StatusCode.MISSING_PARAMETER);
+        }
+        
+        if (!(pinHashEncObj instanceof byte[])) {
+            logger.error("Invalid type for encrypted PIN hash, expected byte[]");
+            return PinHashValidationResult.failure(Ctap2StatusCode.INVALID_PARAMETER);
+        }
+        
+        return PinHashValidationResult.success((byte[]) pinHashEncObj);
+    }
+
+    /**
+     * Verifies the PIN by attempting to open the passkey file.
+     * Manages retry counter and handles PIN blocking.
+     *
+     * @param pinHash The decrypted PIN hash
+     * @return The opened Passkey file, or null if verification fails
+     */
+    private static Passkey verifyPinAndOpenPasskey(byte[] pinHash) {
+        Passkey pkeyFile = Passkey.openKey(pinHash);
+        
+        if (pkeyFile == null) {
+            pinRetries = Math.max(0, pinRetries - 1);
+            logger.error("Failed to open passkey file. Retries remaining: {}", pinRetries);
+        } else {
+            logger.debug("Passkey file opened successfully");
+        }
+        
+        return pkeyFile;
+    }
+
+    /**
+     * Maps cryptographic exceptions to appropriate CTAP2 status codes.
+     *
+     * @param e The exception to handle
+     * @return A byte array containing the error response
+     */
+    private static byte[] handleCryptographicException(Exception e) {
+        if (e instanceof NoSuchAlgorithmException || e instanceof NoSuchPaddingException) {
+            logger.error("Cryptographic algorithm not available", e);
+            return error(Ctap2StatusCode.OTHER);
+        }
+        if (e instanceof InvalidKeyException || e instanceof InvalidAlgorithmParameterException) {
+            logger.error("Invalid cryptographic parameters", e);
+            return error(Ctap2StatusCode.INVALID_PARAMETER);
+        }
+        if (e instanceof GeneralSecurityException) {
+            logger.error("Cryptographic operation failed", e);
+            return error(Ctap2StatusCode.PIN_AUTH_INVALID);
+        }
+        logger.error("Unexpected exception during PIN token generation", e);
+        return error(Ctap2StatusCode.OTHER);
+    }
+
+    /**
+     * Decrypts and verifies the PIN, handling retry logic.
+     *
+     * @param pinHashEnc The encrypted PIN hash
+     * @param sharedSecret The shared secret for decryption
+     * @return PinVerificationResult containing the passkey and PIN hash or error code
+     * @throws GeneralSecurityException if decryption fails
+     */
+    private static PinVerificationResult decryptAndVerifyPin(byte[] pinHashEnc, byte[] sharedSecret)
+            throws GeneralSecurityException {
+        byte[] pinHash = decryptPinHash(pinHashEnc, sharedSecret);
+        Passkey pkeyFile = verifyPinAndOpenPasskey(pinHash);
+        
+        if (pkeyFile == null) {
+            Ctap2StatusCode errorCode = (pinRetries == 0)
+                ? Ctap2StatusCode.PIN_BLOCKED
+                : Ctap2StatusCode.PIN_AUTH_INVALID;
+            if (pinRetries == 0) {
+                logger.error("PIN blocked due to too many failed attempts");
+            }
+            return PinVerificationResult.failure(errorCode);
+        }
+        
+        return PinVerificationResult.success(pkeyFile, pinHash);
     }
 
     /**
@@ -964,39 +1716,52 @@ public class AuthenticatorAPI {
      * @param req The request parameters
      * @return A byte array containing the response
      */
-    private static byte[] getTkn(CtapTxn txn, Map<Integer, Object> req) {
-        //Decapsulate shared secret
-        byte[] pinHashEnc = (byte[]) req.get(0x06);
-        @SuppressWarnings("unchecked")
-        PublicKey theirKey = KeyUtils.fromCoseKey((Map<Integer, Object>) req.get(0x03));
-        byte[] sharedSecret = KeyUtils.decapsulate(theirKey,
-                    AuthenticatorAPI.platKeyPair.getPrivate());
-        // Create AES key from shared secret
-        SecretKeySpec secretKeySpec = new SecretKeySpec(sharedSecret, "AES");
-        // Create all-zero IV for CBC mode
-        IvParameterSpec ivSpec = new IvParameterSpec(new byte[16]);
-        try {
-            // Initialize cipher with CBC mode and zero IV
-            Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivSpec);
-            byte[] pinHash = cipher.doFinal(pinHashEnc);
-            Passkey pkeyFile = Passkey.openKey(pinHash);
-            if (pkeyFile == null) {
-                return AuthenticatorAPI.error(Ctap2StatusCode.PIN_AUTH_INVALID);
-            }
-            //Return pin auth token
-            byte[] pinTkn = new byte[32];
-            SecureRandom random = new SecureRandom();
-            random.nextBytes(pinTkn);
-            openKeys.put(txn.getCid(), Map.of("passkey", pkeyFile, "plat", theirKey));
-            pinRetries = 5;
-            Map<Integer, Object> rsp = Map.of(0x02, pinTkn);
-            txn.setPinAuthTkn(pinTkn);
-            txn.setPinHash(pinHash);
-            txn.setPasskeyFileName(pkeyFile.getFileName());
-            return success(Cbor.encode(rsp));
-        } catch (Exception e) {
+    private static byte[] getTkn(CtapTxn txn, Map<Integer, ?> req) {
+        logger.debug("Processing PIN token request");
+        
+        // Validate request and extract encrypted PIN hash
+        PinHashValidationResult validation = validateAndExtractPinHash(req);
+        if (!validation.isValid()) {
+            return error(validation.getErrorCode());
+        }
+        byte[] pinHashEnc = validation.getPinHashEnc();
+        
+        // Extract client public key
+        PublicKey clientKey = extractClientPublicKey(req);
+        if (clientKey == null) {
             return error(Ctap2StatusCode.INVALID_PARAMETER);
+        }
+        
+        // Perform ECDH key agreement
+        byte[] sharedSecret = performEcdhKeyAgreement(clientKey);
+        if (sharedSecret == null) {
+            return error(Ctap2StatusCode.OTHER);
+        }
+        
+        try {
+            // Decrypt and verify PIN
+            PinVerificationResult pinVerification = decryptAndVerifyPin(pinHashEnc, sharedSecret);
+            if (!pinVerification.isValid()) {
+                return error(pinVerification.getErrorCode());
+            }
+            
+            Passkey pkey = pinVerification.getPasskey();
+            byte[] pinHash = pinVerification.getPinHash();
+            
+            // Generate PIN auth token
+            byte[] pinToken = generatePinAuthToken();
+            
+            // Update authentication state
+            updateAuthenticationState(txn, pkey, pinToken, pinHash);
+            
+            // Build and return response
+            logger.debug("PIN auth token successfully generated");
+            return new PinTokenResponseBuilder()
+                .withPinToken(pinToken)
+                .build();
+            
+        } catch (GeneralSecurityException e) {
+            return handleCryptographicException(e);
         }
     }
 

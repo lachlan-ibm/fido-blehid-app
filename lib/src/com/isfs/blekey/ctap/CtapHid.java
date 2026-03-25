@@ -123,6 +123,11 @@ public class CtapHid {
         int high = byteBuffer.get() & 0xFF; // byte 5
         int low = byteBuffer.get() & 0xFF; // byte 6
         this.byteCount = (high << 8) | low; // combine to 16-bit int
+        
+        logger.info("=== CtapHid NEW COMMAND ===");
+        logger.info("CID: {}", java.util.Arrays.toString(this.cid));
+        logger.info("Command: {} (0x{:02x})", this.messageType, cmdByte);
+        logger.info("Byte count: {}", this.byteCount);
     }
 
     /**
@@ -155,12 +160,14 @@ public class CtapHid {
      * @return This CtapHid instance
      */
     public CtapHid processSequence(byte[] segment) {
+        logger.debug("Processing sequence frame, total frames: {}", this.sequenceFrames.size() + 1);
         this.sequenceFrames.add(segment);
         if(this.hasSufficientBytes()) {
+            logger.info("Sufficient bytes received, processing complete message");
             try {
                 this.processMessage();
             } catch (Exception e) {
-                logger.error("processSequence", e);
+                logger.error("processSequence exception: {}", e.getMessage(), e);
             }
         }
         return this;
@@ -333,7 +340,7 @@ public class CtapHid {
     private void ctapAck(int bcnt, byte[] data) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
         bos.write(this.getCid());
-        bos.write(0x80 | this.messageType.getValue()); // MSB must be set on command bytes
+        bos.write(this.messageType.getValue()); // Response command byte (no MSB set)
         bos.write((bcnt & 0xFF00) >> 8);
         bos.write(bcnt & 0xFF);
         if(data == null || data.length == 0) { /* continue */ }

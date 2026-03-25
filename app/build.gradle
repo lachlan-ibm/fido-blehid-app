@@ -5,7 +5,7 @@ buildscript {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
+        maven { url = 'https://jitpack.io' }
         mavenLocal()
     }
 
@@ -16,9 +16,30 @@ buildscript {
 
 
 apply plugin: 'com.android.application'
+apply plugin: 'eclipse'
+
+eclipse {
+    classpath {
+        containers 'org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17'
+        file.whenMerged { cp ->
+            def entries = cp.entries
+            
+            // Add main source directory
+            def src = new org.gradle.plugins.ide.eclipse.model.SourceFolder('src/main/java', null)
+            entries.add(src)
+            
+            // Add Android SDK android.jar
+            def androidJar = new org.gradle.plugins.ide.eclipse.model.Library(
+                fileReferenceFactory.fromPath("${android.sdkDirectory}/platforms/${android.compileSdkVersion}/android.jar")
+            )
+            androidJar.sourcePath = fileReferenceFactory.fromPath("${android.sdkDirectory}/sources/${android.compileSdkVersion}")
+            entries.add(androidJar)
+        }
+    }
+}
 
 android {
-    namespace 'com.isfs.blekey' 
+    namespace = 'com.isfs.blekey'
 
     compileSdkVersion 34
 
@@ -50,6 +71,14 @@ android {
         resources.excludes.add("META-INF/LICENSE.md")
     }
 
+    sourceSets {
+        main {
+            java {
+                srcDirs = ['src/main/java']
+            }
+        }
+    }
+
 }
 
 
@@ -65,7 +94,7 @@ configurations.configureEach {
 repositories {
     google()
     mavenCentral()
-    maven { url 'https://jitpack.io' }
+    maven { url = 'https://jitpack.io' }
     mavenLocal()
 }
 
@@ -74,7 +103,6 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'androidx.annotation:annotation:1.7.1'
     implementation 'org.slf4j:slf4j-api:2.0.9'
-    implementation 'org.slf4j:slf4j-simple:2.0.9'
     implementation 'androidx.core:core:1.13.0'
     implementation 'com.google.android.material:material:1.13.0'
     implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
@@ -83,21 +111,6 @@ dependencies {
     
     // Use the lib module directly instead of the published artifact
     implementation project(':lib')
-}
-
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
-}
-
-sourceSets {
-    main {
-        java {
-            srcDirs = ['src/main/java']
-        }
-    }
-
 }
 
 // JavaDoc configuration for Android app

@@ -1,5 +1,5 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
 package com.isfs.blekey.authenticator;
 
@@ -51,7 +51,7 @@ public class Fido2AuthenticatorTest {
     @Test
     public void testDefaultConstructor() {
         assertNotNull(authenticator.getKeyPair());
-        assertEquals("EC", authenticator.getKeyPair().getPublic().getAlgorithm());
+        assertEquals("ECDSA", authenticator.getKeyPair().getPublic().getAlgorithm());
     }
     
     /**
@@ -83,9 +83,8 @@ public class Fido2AuthenticatorTest {
         // Mock the Passkey behavior
         String symKeySeed = SymmetricKey.generateKey();
         
-        // Use doReturn().when() syntax instead of when().thenReturn() to avoid unfinished stubbing
+        // Create mock certificate directly without stubbing mockPasskey (which is unused)
         X509Certificate mockCert = mock(X509Certificate.class);
-        doReturn(mockCert).when(mockPasskey).getCertificate();
         
         Fido2Authenticator auth = new Fido2Authenticator();
         auth.setAuthnCert(mockCert);

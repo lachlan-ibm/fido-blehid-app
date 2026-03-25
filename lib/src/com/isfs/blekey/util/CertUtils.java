@@ -1,16 +1,11 @@
 /*
- * Copyright IBM 2025
+ * Copyright IBM 2025, 2026
  */
-/*IBM Confidential
-* OCO Source Materials
-* 5725-V89 5725-V90
-*
-* Copyright IBM Corp. 2019, 2025
-*
-* The source code for this program is not published or otherwise divested of its trade secrets,
-* irrespective of what has been deposited with the U.S. Copyright Office.
-*/
+
 package com.isfs.blekey.util;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
@@ -74,6 +69,7 @@ public class CertUtils implements java.io.Serializable {
      * 
      */
     private static final long serialVersionUID = 5384670213712592314L;
+    private static Logger logger = LoggerFactory.getLogger(CertUtils.class);
 
     private static String b64String(byte[] in) {
         return Base64.getEncoder().encodeToString(in);
@@ -283,7 +279,7 @@ public class CertUtils implements java.io.Serializable {
         JcaX509ExtensionUtils extUtils = new JcaX509ExtensionUtils();
         if (addSki) {
             SubjectKeyIdentifier ski = extUtils.createSubjectKeyIdentifier(keyPair.getPublic());
-            System.err.println("ski: " + b64String(ski.getKeyIdentifier()).toString());
+            logger.debug("ski: {}", b64String(ski.getKeyIdentifier()));
             certBuilder.addExtension(Extension.subjectKeyIdentifier, false, ski);
         }
         certBuilder.addExtension(Extension.basicConstraints, false, new BasicConstraints(true));
@@ -306,7 +302,7 @@ public class CertUtils implements java.io.Serializable {
         JcaX509ExtensionUtils extUtils = new JcaX509ExtensionUtils();
         if (addSki) {
             SubjectKeyIdentifier ski = extUtils.createSubjectKeyIdentifier(keyPair.getPublic());
-            System.err.println("ski: " + b64String(ski.getKeyIdentifier()).toString());
+            logger.debug("ski: {}", b64String(ski.getKeyIdentifier()));
             certBuilder.addExtension(Extension.subjectKeyIdentifier, false, ski);
         }
         certBuilder.addExtension(Extension.basicConstraints, false, new BasicConstraints(true));
@@ -342,8 +338,10 @@ public class CertUtils implements java.io.Serializable {
                     aaguid);
         }
 
+        String signingAlgorithm = signKeyPair.getPrivate() instanceof ECPrivateKey
+                                ? "SHA256withECDSA" : "SHA256withRSA";
         result = new JcaX509CertificateConverter()
-                .getCertificate(certBuilder.build(new JcaContentSignerBuilder("SHA256withRSA")
+                .getCertificate(certBuilder.build(new JcaContentSignerBuilder(signingAlgorithm)
                         .setProvider("BC").build(signKeyPair.getPrivate())));
         return result;
     }
@@ -458,55 +456,51 @@ public class CertUtils implements java.io.Serializable {
 
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.out.println("Usage: CertUtils pemfile");
+            logger.error("Usage: CertUtils pemfile");
             System.exit(1);
         }
         String pemFile = args[0];
         try {
             X509Certificate cert = (X509Certificate) CertUtils.readCert(pemFile, "X.509");
             PublicKey pk = cert.getPublicKey();
-            System.out.println("X509 Public Key:");
-            System.out.println(pk.getAlgorithm() + " " + pk.getFormat());
-            System.out.println(Base64.getEncoder().encodeToString(pk.getEncoded()));
+            logger.debug("X509 Public Key:");
+            logger.debug("{} {}", pk.getAlgorithm(), pk.getFormat());
+            logger.debug("{}", Base64.getEncoder().encodeToString(pk.getEncoded()));
             System.exit(0);
         } catch (Exception e) {
-            System.out.println("Failed to get X509 Public key");
-//            e.printStackTrace();
+            logger.debug("Failed to get X509 Public key");
         }
 
         try {
             ECPublicKey cert = (ECPublicKey) FileUtils.readPublicPEM(new File(pemFile));
-            System.out.println("EC Public Key:");
+            logger.debug("EC Public Key:");
             ECPoint point = cert.getW();
             String x = point.getAffineX().toString(16);
             String y = point.getAffineY().toString(16);
-            System.out.println("X = " + x + ", Y = " + y);
+            logger.debug("X = {}, Y = {}", x, y);
             System.exit(0);
         } catch (Exception e) {
-            System.out.println("Failed to get EC Public key");
-//            e.printStackTrace();
+            logger.debug("Failed to get EC Public key");
         }
 
         try {
             PrivateKey pk = FileUtils.readPrivatePEM(new File(pemFile));
-            System.out.println("RSA Private Key:");
-            System.out.println(pk.getAlgorithm() + " " + pk.getFormat());
-            System.out.println(Base64.getEncoder().encodeToString(pk.getEncoded()));
+            logger.debug("RSA Private Key:");
+            logger.debug("{} {}", pk.getAlgorithm(), pk.getFormat());
+            logger.debug("{}", Base64.getEncoder().encodeToString(pk.getEncoded()));
             System.exit(0);
         } catch (Exception e) {
-            System.out.println("Failed to get RSA private key");
-//            e.printStackTrace();
+            logger.debug("Failed to get RSA private key");
         }
 
         try {
             PrivateKey pk = FileUtils.readPrivatePEM(new File(pemFile));
-            System.out.println("EC Private Key:");
-            System.out.println(pk.getAlgorithm() + " " + pk.getFormat());
-            System.out.println(Base64.getEncoder().encodeToString(pk.getEncoded()));
+            logger.debug("EC Private Key:");
+            logger.debug("{} {}", pk.getAlgorithm(), pk.getFormat());
+            logger.debug("{}", Base64.getEncoder().encodeToString(pk.getEncoded()));
             System.exit(0);
         } catch (Exception e) {
-            System.out.println("Failed to get EC private key");
-            e.printStackTrace();
+            logger.debug("Failed to get EC private key", e);
         }
     }
 }

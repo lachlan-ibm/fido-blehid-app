@@ -30,6 +30,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.isfs.blekey.credential.VerifiableCredential;
 import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.CertUtils;
@@ -100,6 +101,12 @@ public class Passkey {
      * Each credential is a map from relying party ID to credential data.
      */
     private List<Map<String, byte[]>> resCreds;
+    
+    /**
+     * List of verifiable credentials associated with this passkey.
+     * This is optional and may be null for passkeys that don't have digital credentials.
+     */
+    private List<VerifiableCredential> verifiableCredentials;
 
     /**
      * The file name of this passkey (without path).
@@ -303,6 +310,7 @@ public class Passkey {
         this.pk = key;
         this.ca = cert;
         this.resCreds = creds;
+        this.verifiableCredentials = null;
         this.fileName = null;
     }
 
@@ -330,14 +338,28 @@ public class Passkey {
             }
             
             // Read and parse file data
-            byte[] fileData = FileUtils.readFileBytes(pkeyFile);
+            byte[] fileData;
+            try {
+                logger.debug("Attempting to read passkey file: {}", pkeyFile.getAbsolutePath());
+                logger.debug("File exists: {}, canRead: {}, length: {}",
+                    pkeyFile.exists(), pkeyFile.canRead(), pkeyFile.length());
+                fileData = FileUtils.readFileBytes(pkeyFile);
+                logger.debug("Read {} bytes from file", fileData != null ? fileData.length : "null");
+            } catch (java.io.IOException e) {
+                logger.error("IOException reading passkey file: {}", e.getMessage(), e);
+                return null;
+            } catch (Exception e) {
+                logger.error("Unexpected exception reading passkey file: {}", e.getMessage(), e);
+                return null;
+            }
+            
             if (!validateFileData(fileData)) {
                 return null;
             }
 
             logger.debug("File size: {} bytes", fileData.length);
             byte[] upperHashObf = Arrays.copyOfRange(fileData, 0, HEADER_SIZE);
-            byte[] cachedPinHash = keystoreManager.isKeystoreAvailable() ?
+            byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
                         KeyUtils.ksmDecrypt(upperHashObf, keystoreManager) : KeyUtils.ecdhDecrypt(upperHashObf, rootPrivateKey);
             
             byte[] passkeyData = Arrays.copyOfRange(fileData, HEADER_SIZE, fileData.length);
@@ -356,15 +378,59 @@ public class Passkey {
             }
             
             byte[] p12Bytes = Arrays.copyOfRange(passkeyData, 4, p12Len + 4);
-            byte[] encResCreds = Arrays.copyOfRange(passkeyData, p12Len + 4, passkeyData.length);
+            
+            int remainingDataStart = p12Len + 4;
+            byte[] remainingData = Arrays.copyOfRange(passkeyData, remainingDataStart, passkeyData.length);
+            
             // Reconstruct the full PIN hash
-            byte[] pinHash = (lowerHash.length == 32) ? lowerHash : getCachedPinHash(cachedPinHash, lowerHash);
+            byte[] pinHash = (lowerHash.length == 32) ? lowerHash : getCachedPinHash(upperHash, lowerHash);
             KeyStore pki = KeyUtils.readPKCS12(p12Bytes, pinHash);
             PrivateKey key = (PrivateKey) pki.getKey("1", null);
             X509Certificate cert = (X509Certificate) pki.getCertificate("1");
-            byte[] cborResCreds = KeyUtils.ecdhDecrypt(encResCreds, key);
-            List<Map<String, byte[]>> resCreds = (List<Map<String, byte[]>>) Cbor.decode(cborResCreds);
+            
+            // Parse remaining data: could be just resident credentials, or resident credentials + VC section
+            List<Map<String, byte[]>> resCreds;
+            List<VerifiableCredential> vcs = null;
+            
+            // Check if there's a VC section length marker (4 bytes before end)
+            if (remainingData.length >= 4) {
+                // Try to read VC section length from the last 4 bytes
+                int potentialVcSectionStart = remainingData.length - 4;
+                ByteBuffer vcLenBuffer = ByteBuffer.wrap(Arrays.copyOfRange(remainingData, potentialVcSectionStart, remainingData.length));
+                vcLenBuffer.order(ByteOrder.LITTLE_ENDIAN);
+                int vcSectionLen = vcLenBuffer.getInt();
+                
+                // Validate: VC section length should be reasonable and fit within remaining data
+                if (vcSectionLen > 0 && vcSectionLen < remainingData.length - 4) {
+                    // This looks like a file with VC section
+                    int vcDataStart = potentialVcSectionStart - vcSectionLen;
+                    if (vcDataStart >= 0) {
+                        // Extract resident credentials (everything before VC data)
+                        byte[] encResCreds = Arrays.copyOfRange(remainingData, 0, vcDataStart);
+                        byte[] cborResCreds = KeyUtils.ecdhDecrypt(encResCreds, key);
+                        resCreds = (List<Map<String, byte[]>>) Cbor.decode(cborResCreds);
+                        
+                        // Extract and decrypt VC section
+                        byte[] encVcData = Arrays.copyOfRange(remainingData, vcDataStart, potentialVcSectionStart);
+                        vcs = readVerifiableCredentials(encVcData, key);
+                    } else {
+                        // Invalid VC section, treat as old format
+                        byte[] cborResCreds = KeyUtils.ecdhDecrypt(remainingData, key);
+                        resCreds = (List<Map<String, byte[]>>) Cbor.decode(cborResCreds);
+                    }
+                } else {
+                    // No valid VC section, treat as old format
+                    byte[] cborResCreds = KeyUtils.ecdhDecrypt(remainingData, key);
+                    resCreds = (List<Map<String, byte[]>>) Cbor.decode(cborResCreds);
+                }
+            } else {
+                // Too small for VC section, treat as old format
+                byte[] cborResCreds = KeyUtils.ecdhDecrypt(remainingData, key);
+                resCreds = (List<Map<String, byte[]>>) Cbor.decode(cborResCreds);
+            }
+            
             Passkey passkey = new Passkey(key, cert, resCreds);
+            passkey.verifiableCredentials = vcs;
             passkey.fileName = pkeyFile.getName();
             return passkey;
         } catch (Exception e) {
@@ -418,9 +484,9 @@ public class Passkey {
      * @return The full PIN hash (32 bytes)
      */
     private static byte[] getCachedPinHash(byte[] upperHash, byte[] lowerHash) {
-        if (upperHash == null || upperHash.length != HEADER_SIZE ||
+        if (upperHash == null || upperHash.length != HALF_HASH ||
             lowerHash == null || lowerHash.length != HALF_HASH) {
-            throw new IllegalArgumentException("Encrypted upper hash must be " + HEADER_SIZE +
+            throw new IllegalArgumentException("Upper hash must be " + HALF_HASH +
                                               " bytes and lower hash must be " + HALF_HASH + " bytes");
         }
         byte[] pinHash = new byte[PIN_HASH_SIZE];
@@ -542,17 +608,137 @@ public class Passkey {
         outputStream.write(buffer.array());
         outputStream.write(p12_bytes);
         outputStream.write(encResCreds);
+        
+        // Add VC section if present
+        if (passkey.verifiableCredentials != null && !passkey.verifiableCredentials.isEmpty()) {
+            byte[] vcData = writeVerifiableCredentials(passkey.verifiableCredentials, pub);
+            outputStream.write(vcData);
+            
+            // Write VC section length (4 bytes, little-endian)
+            ByteBuffer vcLenBuffer = ByteBuffer.allocate(4);
+            vcLenBuffer.order(ByteOrder.LITTLE_ENDIAN);
+            vcLenBuffer.putInt(vcData.length);
+            outputStream.write(vcLenBuffer.array());
+        }
+        
         return outputStream.toByteArray();
+    }
+    
+    /**
+     * Reads and decrypts verifiable credentials from encrypted data.
+     *
+     * @param encryptedData Encrypted VC data
+     * @param privateKey Private key for ECDH decryption
+     * @return List of VerifiableCredential objects, or null if decryption fails
+     */
+    private static List<VerifiableCredential> readVerifiableCredentials(byte[] encryptedData, PrivateKey privateKey) {
+        try {
+            if (encryptedData == null || encryptedData.length == 0) {
+                return null;
+            }
+            
+            // Decrypt the VC data using ECDH with passkey's private key
+            byte[] cborVcData = KeyUtils.ecdhDecrypt(encryptedData, privateKey);
+            
+            // Decode CBOR array of credentials
+            @SuppressWarnings("unchecked")
+            List<byte[]> vcCborList = (List<byte[]>) Cbor.decode(cborVcData);
+            
+            // Deserialize each credential
+            List<VerifiableCredential> credentials = new ArrayList<>();
+            for (byte[] vcCbor : vcCborList) {
+                credentials.add(VerifiableCredential.fromCbor(vcCbor));
+            }
+            
+            logger.debug("Read {} verifiable credentials", credentials.size());
+            return credentials;
+        } catch (Exception e) {
+            logger.error("Failed to read verifiable credentials", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Encrypts and writes verifiable credentials.
+     *
+     * @param credentials List of VerifiableCredential objects
+     * @param publicKey Public key for ECDH encryption
+     * @return Encrypted VC data
+     */
+    private static byte[] writeVerifiableCredentials(List<VerifiableCredential> credentials, PublicKey publicKey)
+            throws Exception {
+        if (credentials == null || credentials.isEmpty()) {
+            return new byte[0];
+        }
+        
+        // Serialize each credential to CBOR
+        List<byte[]> vcCborList = new ArrayList<>();
+        for (VerifiableCredential vc : credentials) {
+            vcCborList.add(vc.toCbor());
+        }
+        
+        // Encode list as CBOR array
+        byte[] cborVcData = Cbor.encode(vcCborList);
+        
+        // Encrypt using ECDH with passkey's public key
+        byte[] encryptedData = KeyUtils.ecdhEncrypt(cborVcData, publicKey);
+        
+        logger.debug("Wrote {} verifiable credentials ({} bytes encrypted)",
+                    credentials.size(), encryptedData.length);
+        return encryptedData;
     }
 
     
     /**
      * Gets the resident credentials map.
-     * 
+     *
      * @return The map of resident credentials
      */
     public List<Map<String, byte[]>> getResCreds() {
         return resCreds;
+    }
+    
+    /**
+     * Gets the list of verifiable credentials associated with this passkey.
+     *
+     * @return List of verifiable credentials, or null if none exist
+     */
+    public List<VerifiableCredential> getVerifiableCredentials() {
+        return verifiableCredentials;
+    }
+    
+    /**
+     * Sets the list of verifiable credentials for this passkey.
+     *
+     * @param credentials List of verifiable credentials
+     */
+    public void setVerifiableCredentials(List<VerifiableCredential> credentials) {
+        this.verifiableCredentials = credentials;
+    }
+    
+    /**
+     * Adds a verifiable credential to this passkey.
+     *
+     * @param credential The verifiable credential to add
+     */
+    public void addVerifiableCredential(VerifiableCredential credential) {
+        if (this.verifiableCredentials == null) {
+            this.verifiableCredentials = new ArrayList<>();
+        }
+        this.verifiableCredentials.add(credential);
+    }
+    
+    /**
+     * Removes a verifiable credential from this passkey by ID.
+     *
+     * @param credentialId The ID of the credential to remove
+     * @return true if the credential was removed, false otherwise
+     */
+    public boolean removeVerifiableCredential(String credentialId) {
+        if (verifiableCredentials == null) {
+            return false;
+        }
+        return verifiableCredentials.removeIf(vc -> vc.getId().equals(credentialId));
     }
 
     /**
@@ -633,14 +819,17 @@ public class Passkey {
             return null;
         }
         
-        for(File maybePasskey: FileUtils.listPasskeys()) {
-            try {
-                Passkey passkey = readKey(maybePasskey, lowerHash);
-                if (passkey != null) {
-                    return passkey;
+        List<File> passkeyFiles = FileUtils.listPasskeys();
+        if (passkeyFiles != null) {
+            for(File maybePasskey: passkeyFiles) {
+                try {
+                    Passkey passkey = readKey(maybePasskey, lowerHash);
+                    if (passkey != null) {
+                        return passkey;
+                    }
+                } catch (Exception e) {
+                    logger.error("Error decrypting key", e);
                 }
-            } catch (Exception e) {
-                logger.error("Error decrypting key", e);
             }
         }
         return null;
@@ -728,7 +917,11 @@ public class Passkey {
         }
         
         // Create File object
-        return new File(FileUtils.getFido2Home() + File.separator + fileName);
+        String fido2Home = FileUtils.getFido2Home();
+        File passkeyFile = new File(fido2Home + File.separator + fileName);
+        logger.debug("collectPasskeyFileInfo: fido2Home={}, fileName={}, fullPath={}",
+            fido2Home, fileName, passkeyFile.getAbsolutePath());
+        return passkeyFile;
     }
 
     private static byte[] collectPinInfo(Scanner scanner) throws NoSuchAlgorithmException {
@@ -807,7 +1000,7 @@ public class Passkey {
             try {
                 String rpStr = new String(cred.get("rp.id"), "utf-8");
                 System.out.println(String.format("Credential relying party id: %s", rpStr));
-                if(confirmDelete()) {
+                if(confirmDelete(scanner)) {
                     credsToRemove.add(cred);
                 }
             } catch (UnsupportedEncodingException e) {
@@ -822,23 +1015,16 @@ public class Passkey {
      * Prompts the user to confirm deletion of a credential.
      * The default action is to preserve the credential.
      *
+     * @param scanner Scanner to read user input
      * @return true if the user confirms deletion, false otherwise
      */
-    private static boolean confirmDelete() {
-        Scanner scanner = null;
-        try {
-            scanner = new Scanner(System.in);
-            System.out.print("Delete this credential? (y/N): ");
-            String response = scanner.nextLine().trim().toLowerCase();
-            
-            // Default is to preserve (return false)
-            // Only return true if user explicitly confirms with 'y' or 'yes'
-            return response.equals("y") || response.equals("yes");
-        } finally {
-            if (scanner != null) {
-                scanner.close();
-            }
-        }
+    private static boolean confirmDelete(Scanner scanner) {
+        System.out.print("Delete this credential? (y/N): ");
+        String response = scanner.nextLine().trim().toLowerCase();
+        
+        // Default is to preserve (return false)
+        // Only return true if user explicitly confirms with 'y' or 'yes'
+        return response.equals("y") || response.equals("yes");
     }
 
     /**
