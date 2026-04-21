@@ -1,0 +1,57 @@
+# Copyright IBM 2025
+name: Lib Unit Tests
+
+on:
+  push:
+    branches: [ development, stable ]
+    paths:
+      - 'lib/**'
+      - '.github/workflows/lib-tests.yml'
+  pull_request:
+    branches: [ development, stable ]
+    paths:
+      - 'lib/**'
+      - '.github/workflows/lib-tests.yml'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+        
+    - name: Grant execute permission for gradlew
+      run: chmod +x ./gradlew
+      
+    - name: Run tests
+      run: ./gradlew :lib:test --info
+      
+    - name: Upload test results
+      if: always()  # Run even if tests fail
+      uses: actions/upload-artifact@v3
+      with:
+        name: lib-test-results
+        path: |
+          lib/build/reports/tests/test/
+          lib/build/test-results/test/
+        retention-days: 7
+        
+    - name: Publish Test Report
+      uses: mikepenz/action-junit-report@v3
+      if: always()  # Run even if tests fail
+      with:
+        report_paths: 'lib/build/test-results/test/TEST-*.xml'
+        fail_on_failure: true
+        require_tests: true
+        check_name: 'Lib Test Results'
+
+# Made with Bob

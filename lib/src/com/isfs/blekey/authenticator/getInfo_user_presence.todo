@@ -1,0 +1,226 @@
+# getInfo User Presence Check
+# Emulate USB authenticator "flashing button" user presence for authenticatorGetInfo.
+# When a getInfo request arrives, prompt the user (yes/no) before returning the response.
+# Timeout after 15 seconds. Bring app to foreground if it is not already there.
+
+---
+
+## Context
+
+Request flow:
+  BLE write
+    -> HIDPasskey.onOutputReport()          [app/src/main/java/com/isfs/blekey/hidsvc/HIDPasskey.java:77]
+    -> CtapHid.processMessage()             [lib/src/com/isfs/blekey/ctap/CtapHid.java:268]
+    -> CtapHid.cbor()                       [lib/src/com/isfs/blekey/ctap/CtapHid.java:394]
+    -> AuthenticatorAPI.process()           [lib/src/com/isfs/blekey/authenticator/AuthenticatorAPI.java:1025]
+    -> AuthenticatorAPI.getInfo()           [lib/src/com/isfs/blekey/authenticator/AuthenticatorAPI.java:904]
+
+The pipeline is currently synchronous. getInfo() builds and returns the response immediately.
+The response is queued back to the BLE host via HIDPasskey -> HIDService.addInputReport().
+
+Relevant CTAP2 status codes (Ctap2StatusCode.java):
+  USER_ACTION_TIMEOUT  0x2F  -- user did not respond within 15 seconds
+  OPERATION_DENIED     0x27  -- user tapped No
+  OPERATION_DENIED     0x27  -- no callback registered (fallback)
+
+Existing notification infrastructure:
+  ForegroundNotificationService.CHANNEL_ID = "FIDO2_NOTIFICATION_CHANNEL"  (IMPORTANCE_HIGH)
+  POST_NOTIFICATIONS permission already declared in AndroidManifest.xml
+
+---
+
+## Tasks
+
+### STEP 1 — AuthenticatorAPI: add UserPresenceCallback interface
+File: lib/src/com/isfs/blekey/authenticator/AuthenticatorAPI.java
+
+[ ] Add a public static inner interface UserPresenceCallback with three methods:
+      void onApproved(byte[] getInfoResponse);
+      void onDenied();
+      void onTimeout();
+
+[ ] Add a private static field:
+      private static UserPresenceCallback userPresenceCallback = null;
+
+[ ] Add a public static setter:
+      public static void setUserPresenceCallback(UserPresenceCallback cb)
+
+[ ] Modify getInfo() (line 904) to:
+    - Build the CBOR info map and call success(Cbor.encode(info)) as before, storing result in a local variable.
+    - If userPresenceCallback == null, return error(Ctap2StatusCode.OPERATION_DENIED).
+    - Otherwise call userPresenceCallback.onApproved(response) and return null.
+      (null signals to the caller that the response will be delivered asynchronously.)
+
+    NOTE: error() and success() are private static helpers already in this class (lines 275, 285).
+
+
+### STEP 2 — CtapHid: handle null (deferred) response from process()
+File: lib/src/com/isfs/blekey/ctap/CtapHid.java
+
+[ ] In cbor() (line 394), after calling AuthenticatorAPI.process():
+    - If the return value is null, do NOT call buildCborInitAndSequencePackets().
+    - Do NOT set this.responseReady = true.
+    - Store a reference to `this` CtapHid instance in a static pending map keyed by CID,
+      so the deferred response can be injected later.
+      Suggested: private static Map<byte[], CtapHid> pendingUserPresence = new HashMap<>();
+
+[ ] Add a public method to inject a deferred CBOR response:
+      public void injectDeferredResponse(byte[] cborResponse) throws IOException {
+          buildCborInitAndSequencePackets(cborResponse);
+          this.responseReady = true;
+      }
+
+[ ] Add a public static method to retrieve and remove a pending instance by CID:
+      public static CtapHid takePendingUserPresence(byte[] cid)
+
+
+### STEP 3 — HIDPasskey: add sendDeferredResponse helper
+File: app/src/main/java/com/isfs/blekey/hidsvc/HIDPasskey.java
+
+[ ] Add a method:
+      public void sendDeferredResponse(byte[] cid, byte[] cborResponse)
+    - Calls CtapHid.takePendingUserPresence(cid) to retrieve the pending CtapHid instance.
+    - Calls cmd.injectDeferredResponse(cborResponse) on it.
+    - Drains cmd.hasMoreResponses() / cmd.getResponseSegment() and calls
+      this._service.addInputReport(frame) for each segment, same as onOutputReport() does.
+
+[ ] Store the last seen CID so the deferred callback can pass it to sendDeferredResponse.
+    The CID is available in onOutputReport() from the parsed report bytes (bytes 0-3).
+    Add a field: private byte[] lastCid;
+    Set it in onOutputReport() after parsing the CID.
+
+
+### STEP 4 — ServerActivity: register callback and show user presence UI
+File: app/src/main/java/com/isfs/blekey/activity/ServerActivity.java
+
+[ ] Add a field:
+      private byte[] pendingGetInfoCid = null;
+      private byte[] pendingGetInfoResponse = null;
+      private Handler uiHandler = new Handler(Looper.getMainLooper());
+      private Runnable timeoutRunnable = null;
+      private AlertDialog userPresenceDialog = null;
+
+[ ] In setupPasskeyPeripheralProvider(), after creating passkeyService, register the callback:
+      AuthenticatorAPI.setUserPresenceCallback(new AuthenticatorAPI.UserPresenceCallback() {
+          public void onApproved(byte[] getInfoResponse) {
+              pendingGetInfoCid = passkeyService.getLastCid();   // see Step 3
+              pendingGetInfoResponse = getInfoResponse;
+              uiHandler.post(() -> showUserPresencePrompt());
+          }
+          public void onDenied() { /* not called from API, only from UI */ }
+          public void onTimeout() { /* not called from API, only from UI */ }
+      });
+
+[ ] Add showUserPresencePrompt():
+    - If the app is in the foreground (see foreground detection below), show an AlertDialog:
+        Title: "Authentication Request"
+        Message: "A device is requesting authenticator info. Allow?"
+        Positive button: "Allow"  -> calls deliverGetInfoApproved()
+        Negative button: "Deny"   -> calls deliverGetInfoDenied()
+    - If the app is NOT in the foreground, fire a notification (see Step 5) and store
+      the pending response; show the dialog in onResume() / onNewIntent().
+
+[ ] Add deliverGetInfoApproved():
+    - Cancel the timeout runnable.
+    - Call passkeyService.getHIDPasskey().sendDeferredResponse(pendingGetInfoCid, pendingGetInfoResponse).
+    - Clear pendingGetInfoCid and pendingGetInfoResponse.
+
+[ ] Add deliverGetInfoDenied():
+    - Cancel the timeout runnable.
+    - Call passkeyService.getHIDPasskey().sendDeferredResponse(
+          pendingGetInfoCid,
+          AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.OPERATION_DENIED)).
+      NOTE: buildErrorResponse() is a new public static helper to add to AuthenticatorAPI (see Step 1 note).
+    - Clear pending fields.
+
+[ ] Add 15-second timeout:
+    - Start a Handler.postDelayed(timeoutRunnable, 15_000) when showUserPresencePrompt() is called.
+    - timeoutRunnable dismisses the dialog (if showing) and calls deliverGetInfoTimeout().
+
+[ ] Add deliverGetInfoTimeout():
+    - Dismiss dialog if showing.
+    - Call passkeyService.getHIDPasskey().sendDeferredResponse(
+          pendingGetInfoCid,
+          AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.USER_ACTION_TIMEOUT)).
+    - Clear pending fields.
+
+[ ] Foreground detection:
+    - Add a boolean field: private boolean isInForeground = false;
+    - Set true in onResume(), false in onPause().
+
+[ ] Handle bring-to-front in onResume() / onNewIntent():
+    - If pendingGetInfoResponse != null and isInForeground, call showUserPresencePrompt().
+
+[ ] In onDestroy(), clear the AuthenticatorAPI callback:
+      AuthenticatorAPI.setUserPresenceCallback(null);
+    Also cancel any pending timeout runnable and dismiss any open dialog.
+
+
+### STEP 5 — ForegroundNotificationService / notification when app is in background
+File: app/src/main/java/com/isfs/blekey/ForegroundNotificationService.java
+      app/src/main/AndroidManifest.xml
+
+[ ] Add a static method or use a direct NotificationManager call from ServerActivity to post
+    a high-priority notification on CHANNEL_ID when the app is in the background:
+      Title: "Authentication Request"
+      Text:  "Tap to review"
+      PendingIntent: launches ServerActivity with FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP
+      Auto-cancel: true
+
+[ ] In AndroidManifest.xml, add launchMode="singleTop" to ServerActivity so onNewIntent() fires
+    when the notification brings it back to the front:
+      android:launchMode="singleTop"
+
+[ ] Cancel the notification in deliverGetInfoApproved(), deliverGetInfoDenied(), and
+    deliverGetInfoTimeout() using NotificationManager.cancel(GETINFO_NOTIFICATION_ID).
+    Define: private static final int GETINFO_NOTIFICATION_ID = 42;
+
+
+### STEP 6 — HIDService: expose getHIDPasskey() and getLastCid()
+File: app/src/main/java/com/isfs/blekey/hidsvc/HIDService.java
+
+[ ] Add a getter:
+      public HIDPasskey getHIDPasskey() { return this.passkey; }
+
+[ ] Add a getter that delegates to HIDPasskey:
+      public byte[] getLastCid() { return this.passkey.getLastCid(); }
+
+
+### STEP 7 — AuthenticatorAPI: add public buildErrorResponse helper
+File: lib/src/com/isfs/blekey/authenticator/AuthenticatorAPI.java
+
+[ ] Add:
+      public static byte[] buildErrorResponse(Ctap2StatusCode code) {
+          return new byte[] { (byte) code.getCode() };
+      }
+    (Exposes the private error() logic for use from the Android layer without coupling to internals.)
+
+
+### STEP 8 — strings.xml: add UI strings
+File: app/src/main/res/values/strings.xml
+
+[ ] Add:
+      <string name="user_presence_title">Authentication Request</string>
+      <string name="user_presence_message">A device is requesting authenticator info. Allow?</string>
+      <string name="user_presence_allow">Allow</string>
+      <string name="user_presence_deny">Deny</string>
+      <string name="user_presence_notification_text">Tap to review authentication request</string>
+      <string name="user_presence_timeout_toast">Authentication request timed out</string>
+
+---
+
+## Notes
+
+- The `error()` method in AuthenticatorAPI is currently private (line 275). It must remain
+  accessible to getInfo(). The new public buildErrorResponse() wrapper (Step 7) avoids
+  changing the visibility of the internal helper.
+
+- CtapHid.assignedCids uses byte[] as a Map key which relies on reference equality, not
+  content equality. The pendingUserPresence map in Step 2 must use the same reference that
+  was stored in assignedCids. Verify this is consistent before implementing.
+
+- The 15-second timeout Handler must be posted on the main (UI) thread.
+
+- If multiple getInfo requests arrive before the first is resolved, the second should be
+  rejected with CHANNEL_BUSY (0x06) or queued. For simplicity, reject with OPERATION_DENIED
+  if pendingGetInfoResponse is already set.

@@ -1,40 +1,53 @@
-/*IBM Confidential
-* OCO Source Materials
-* 5725-V89 5725-V90
-*
-* Copyright IBM Corp. 2025
-*
-* The source code for this program is not published or otherwise divested of its trade secrets,
-* irrespective of what has been deposited with the U.S. Copyright Office.
-*/
+/*
+ * Copyright IBM 2025
+ */
 
 package com.isfs.blekey.hidsvc;
 
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothGattCharacteristic;
-import android.bluetooth.BluetoothGattService;
-import android.bluetooth.BluetoothGattDescriptor;
-
 import com.isfs.blekey.ctap.CtapHid;
+import com.isfs.blekey.ctap.CtapTxn;
 
 import java.util.Arrays;
-import java.util.UUID;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-
+/**
+ * Implements the FIDO2 passkey functionality over the HID protocol.
+ * This class bridges between the BLE HID service and the CTAP protocol,
+ * handling HID reports and translating them to CTAP commands and responses.
+ */
 public class HIDPasskey {
 
-    private HIDService _s;
+    /**
+     * Reference to the HID transport layer (BLE or Classic BT).
+     */
+    private IHIDTransport _transport;
 
-    public HIDPasskey(HIDService service) {
-        this._s = service;
-    }
-
+    /**
+     * Logger for debugging and error reporting.
+     */
     private static final Logger logger = LoggerFactory.getLogger(HIDPasskey.class);
 
+    private final static String TAG = HIDPasskey.class.getCanonicalName();
+
+    /**
+     * Constructs a new HIDPasskey instance with a reference to the HID transport.
+     *
+     * @param transport The HID transport that will handle communication (BLE or Classic BT)
+     */
+    public HIDPasskey(IHIDTransport transport) {
+        this._transport = transport;
+    }
+
+    /**
+     * Returns the HID report descriptor map for a FIDO CTAP HID device.
+     * This descriptor defines the input and output report formats according to
+     * the FIDO CTAP HID specification.
+     *
+     * @return A byte array containing the HID report descriptor
+     */
     protected static byte[] getReportMap() {
+        logger.debug(TAG, "getReportMap");
         return new byte[]{
             (byte) 0x06, (byte) 0xD0, (byte) 0xF1,       // Usage Page (FIDO Alliance)
             (byte) 0x09, 0x01,                   // Usage (U2F HID Authenticator Device)
@@ -55,38 +68,101 @@ public class HIDPasskey {
         };
     }
 
+    /**
+     * Processes an output report received from the host device.
+     * Parses the report as a CTAP HID command or sequence, processes it,
+     * and queues any response back to the host.
+     *
+     * @param report The output report data received from the host
+     */
     public void onOutputReport(byte[] report) {
+        logger.debug(TAG, "onOutputReport");
+        // Log the complete received frame
+        logger.info("RECV FRAME ({}bytes): {}", report != null ? report.length : 0,
+            report != null ? java.util.Arrays.toString(report) : "null");
+        
+        // The kernel HID layer prepends a Report ID byte (0x00) to every write.
+        // Strip it so the CTAP HID frame starts at the correct offset.
+        if (report != null && report.length > 0 && report[0] == 0x00) {
+            report = Arrays.copyOfRange(report, 1, report.length);
+        }
         if(report != null && report.length > 5) { //cid + (cmd || seq) === 5 bytes min
             byte[] cid = Arrays.copyOfRange(report, 0, 4);
             // Parse the CTAPHID command
             byte cmdByte = report[4];
+            logger.debug("CID: {} CMD: {}", Arrays.toString(cid), cmdByte);
+            logger.info("After strip - CID: {} cmdByte: 0x{} ({})",
+                Arrays.toString(cid), String.format("%02X", cmdByte & 0xFF), cmdByte);
             CtapHid cmd = null;
+            boolean isNewCommand = false;
             if((cmdByte & 0x80) > 0) {
+                // New command frame - create new CtapHid instance
                 cmd = new CtapHid(report);
+                isNewCommand = true;
+                
+                // Update the assignedCids map with the new command
+                // This ensures continuation frames use the correct CtapHid instance
+                if (CtapHid.hasOpenCid(cid)) {
+                    logger.info("Updating existing CID {} with new command", Arrays.toString(cid));
+                    // Create a new transaction with the new command
+                    // updateCidTransaction will preserve PIN token and other state
+                    CtapHid.updateCidTransaction(cid,
+                                new CtapTxn(cid, cmd, null, null, null));
+                }
             } else {
                 cmd = CtapHid.getPendingByCid(cid);
-                if (cmd != null) { 
+                logger.info("=== SEQUENCE FRAME: Retrieved cmd from map: {}", cmd != null ? cmd.hashCode() : "NULL");
+                if (cmd != null) {
+                    logger.info("=== SEQUENCE FRAME: Calling processSequence on cmd {}", cmd.hashCode());
                     cmd.processSequence(report);
+                    logger.info("=== SEQUENCE FRAME: After processSequence, hasMoreResponses: {}", cmd.hasMoreResponses());
+                } else {
+                    logger.error("=== SEQUENCE FRAME: cmd is NULL! Cannot process sequence frame!");
                 }
             }
-            if(cmd != null && cmd.hasSufficientBytes()) {
+            // Only process message for new command frames if sufficient bytes already received
+            // Sequence frames will trigger processing via processSequence() -> processMessage()
+            if(cmd != null && isNewCommand && cmd.hasSufficientBytes()) {
                 try {
                     cmd.processMessage();
-                    // queue any response back
-                    while(cmd.hasMoreResponses()) {
-                        byte[] r_f = cmd.getResponseSegment();
-                        this._s.addInputReport(r_f);
-                    }
                 } catch (Exception e) {
-                    logger.error(HIDPasskey.class.getSimpleName() +  "onOutputReport", e);
+                    logger.error(TAG, e);
                 }
             }
-
+            
+            // Send any pending responses (must be outside isNewCommand check)
+            // Responses can be generated by either:
+            // 1. New command frames with sufficient bytes (processed above)
+            // 2. Sequence frames completing a multi-frame message (via processSequence)
+            logger.info("=== RESPONSE CHECK: cmd={}, hasMoreResponses={}",
+                        cmd != null ? cmd.hashCode() : "NULL",
+                        cmd != null ? cmd.hasMoreResponses() : "N/A");
+            if(cmd != null && cmd.hasMoreResponses()) {
+                logger.info("=== SENDING RESPONSES: Starting response transmission");
+                try {
+                    int frameCount = 0;
+                    byte[] rspFrame;
+                    // Get and send frames until getResponseSegment returns null
+                    while((rspFrame = cmd.getResponseSegment()) != null) {
+                        frameCount++;
+                        logger.info("=== SENDING RESPONSES: Frame #{}, length: {}", frameCount, rspFrame.length);
+                        if (_transport != null) {
+                            _transport.sendInputReport(rspFrame);
+                            logger.info("=== SENDING RESPONSES: Frame #{} sent successfully", frameCount);
+                        } else {
+                            logger.error("=== SENDING RESPONSES: _transport is NULL! Cannot send frame #{}", frameCount);
+                        }
+                    }
+                    logger.info("=== SENDING RESPONSES: Completed, sent {} frames", frameCount);
+                } catch (Exception e) {
+                    logger.error("=== SENDING RESPONSES: Exception occurred", e);
+                }
+            } else {
+                logger.warn("=== RESPONSE CHECK: No responses to send (cmd={}, hasMoreResponses={})",
+                           cmd != null ? "present" : "NULL",
+                           cmd != null ? cmd.hasMoreResponses() : "N/A");
+            }
         }
     }
 
-    protected void offerInputReport(byte[] report) {
-        this._s.addInputReport(report);
-    }
 }
-

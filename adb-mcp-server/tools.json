@@ -1,0 +1,1035 @@
+[
+  {
+    "name": "adb_devices",
+    "description": "List all connected Android devices with optional detailed information",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "long_output": {
+          "type": "boolean",
+          "description": "Include detailed device information",
+          "default": false
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_get_state",
+    "description": "Get the current state of a device (offline, bootloader, device)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_get_serialno",
+    "description": "Get the serial number of the connected device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_wait_for_device",
+    "description": "Wait for device to be in a specific state",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["device", "recovery", "rescue", "sideload", "bootloader", "disconnect"],
+          "description": "State to wait for",
+          "default": "device"
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["usb", "local", "any"],
+          "description": "Transport type",
+          "default": "any"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_connect",
+    "description": "Connect to a device via TCP/IP",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Host IP address or hostname"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port number",
+          "default": 5555
+        }
+      },
+      "required": ["host"]
+    }
+  },
+  {
+    "name": "adb_disconnect",
+    "description": "Disconnect from a TCP/IP device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Host IP address (optional, disconnects all if not specified)"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port number",
+          "default": 5555
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_tcpip",
+    "description": "Restart adbd listening on TCP on specified port",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "description": "Port number",
+          "default": 5555
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["port"]
+    }
+  },
+  {
+    "name": "adb_usb",
+    "description": "Restart adbd listening on USB",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_pair",
+    "description": "Pair with a device for secure TCP/IP communication",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Host IP address"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port number"
+        },
+        "pairing_code": {
+          "type": "string",
+          "description": "Pairing code"
+        }
+      },
+      "required": ["host", "port", "pairing_code"]
+    }
+  },
+  {
+    "name": "adb_forward",
+    "description": "Forward socket connections from local to remote",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "local": {
+          "type": "string",
+          "description": "Local socket specification (e.g., tcp:8080)"
+        },
+        "remote": {
+          "type": "string",
+          "description": "Remote socket specification (e.g., tcp:8080)"
+        },
+        "no_rebind": {
+          "type": "boolean",
+          "description": "Fail if already forwarded",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["local", "remote"]
+    }
+  },
+  {
+    "name": "adb_forward_list",
+    "description": "List all forward socket connections",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_forward_remove",
+    "description": "Remove a specific forward socket connection",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "local": {
+          "type": "string",
+          "description": "Local socket specification to remove"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["local"]
+    }
+  },
+  {
+    "name": "adb_forward_remove_all",
+    "description": "Remove all forward socket connections",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_reverse",
+    "description": "Reverse socket connections from remote to local",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "remote": {
+          "type": "string",
+          "description": "Remote socket specification (e.g., tcp:8080)"
+        },
+        "local": {
+          "type": "string",
+          "description": "Local socket specification (e.g., tcp:8080)"
+        },
+        "no_rebind": {
+          "type": "boolean",
+          "description": "Fail if already reversed",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["remote", "local"]
+    }
+  },
+  {
+    "name": "adb_reverse_list",
+    "description": "List all reverse socket connections",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_reverse_remove",
+    "description": "Remove a specific reverse socket connection",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "remote": {
+          "type": "string",
+          "description": "Remote socket specification to remove"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["remote"]
+    }
+  },
+  {
+    "name": "adb_reverse_remove_all",
+    "description": "Remove all reverse socket connections",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_push",
+    "description": "Copy local files/directories to device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "local_path": {
+          "type": "string",
+          "description": "Local file or directory path"
+        },
+        "remote_path": {
+          "type": "string",
+          "description": "Remote path on device"
+        },
+        "sync": {
+          "type": "boolean",
+          "description": "Only push files with different timestamps",
+          "default": false
+        },
+        "compression": {
+          "type": "string",
+          "enum": ["any", "none", "brotli", "lz4", "zstd"],
+          "description": "Compression algorithm"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["local_path", "remote_path"]
+    }
+  },
+  {
+    "name": "adb_pull",
+    "description": "Copy files/directories from device to local",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "remote_path": {
+          "type": "string",
+          "description": "Remote path on device"
+        },
+        "local_path": {
+          "type": "string",
+          "description": "Local destination path"
+        },
+        "preserve": {
+          "type": "boolean",
+          "description": "Preserve file timestamp and mode",
+          "default": false
+        },
+        "compression": {
+          "type": "string",
+          "enum": ["any", "none", "brotli", "lz4", "zstd"],
+          "description": "Compression algorithm"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["remote_path", "local_path"]
+    }
+  },
+  {
+    "name": "adb_install",
+    "description": "Install an APK on the device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "apk_path": {
+          "type": "string",
+          "description": "Path to APK file"
+        },
+        "replace": {
+          "type": "boolean",
+          "description": "Replace existing application",
+          "default": false
+        },
+        "grant_permissions": {
+          "type": "boolean",
+          "description": "Grant all runtime permissions",
+          "default": false
+        },
+        "allow_test": {
+          "type": "boolean",
+          "description": "Allow test packages",
+          "default": false
+        },
+        "allow_downgrade": {
+          "type": "boolean",
+          "description": "Allow version code downgrade",
+          "default": false
+        },
+        "instant": {
+          "type": "boolean",
+          "description": "Install as instant app",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["apk_path"]
+    }
+  },
+  {
+    "name": "adb_uninstall",
+    "description": "Uninstall an app package from device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name (e.g., com.example.app)"
+        },
+        "keep_data": {
+          "type": "boolean",
+          "description": "Keep data and cache directories",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["package"]
+    }
+  },
+  {
+    "name": "adb_shell",
+    "description": "Execute a shell command on the device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Command timeout in seconds",
+          "default": 30
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "adb_pm_list_packages",
+    "description": "List installed packages on device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "enum": ["all", "system", "third-party", "enabled", "disabled"],
+          "description": "Package filter type",
+          "default": "all"
+        },
+        "show_path": {
+          "type": "boolean",
+          "description": "Show package file paths",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_pm_path",
+    "description": "Get the path to an installed package",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["package"]
+    }
+  },
+  {
+    "name": "adb_pm_clear",
+    "description": "Clear app data and cache",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["package"]
+    }
+  },
+  {
+    "name": "adb_pm_grant",
+    "description": "Grant a runtime permission to an app",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "permission": {
+          "type": "string",
+          "description": "Permission name (e.g., android.permission.CAMERA)"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["package", "permission"]
+    }
+  },
+  {
+    "name": "adb_pm_revoke",
+    "description": "Revoke a runtime permission from an app",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "permission": {
+          "type": "string",
+          "description": "Permission name"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["package", "permission"]
+    }
+  },
+  {
+    "name": "adb_am_start",
+    "description": "Start an activity",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "description": "Component name (e.g., com.example.app/.MainActivity)"
+        },
+        "action": {
+          "type": "string",
+          "description": "Intent action (optional)"
+        },
+        "data_uri": {
+          "type": "string",
+          "description": "Data URI (optional)"
+        },
+        "wait": {
+          "type": "boolean",
+          "description": "Wait for launch to complete",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["component"]
+    }
+  },
+  {
+    "name": "adb_am_force_stop",
+    "description": "Force stop an application",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["package"]
+    }
+  },
+  {
+    "name": "adb_am_broadcast",
+    "description": "Send a broadcast intent",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Intent action"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["action"]
+    }
+  },
+  {
+    "name": "adb_input_text",
+    "description": "Send text input to device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text to input"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["text"]
+    }
+  },
+  {
+    "name": "adb_input_keyevent",
+    "description": "Send a key event to device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "keycode": {
+          "type": "string",
+          "description": "Key code (e.g., KEYCODE_HOME, KEYCODE_BACK, or numeric code)"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["keycode"]
+    }
+  },
+  {
+    "name": "adb_input_tap",
+    "description": "Tap at screen coordinates",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "description": "X coordinate"
+        },
+        "y": {
+          "type": "integer",
+          "description": "Y coordinate"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["x", "y"]
+    }
+  },
+  {
+    "name": "adb_input_swipe",
+    "description": "Perform a swipe gesture",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x1": {
+          "type": "integer",
+          "description": "Start X coordinate"
+        },
+        "y1": {
+          "type": "integer",
+          "description": "Start Y coordinate"
+        },
+        "x2": {
+          "type": "integer",
+          "description": "End X coordinate"
+        },
+        "y2": {
+          "type": "integer",
+          "description": "End Y coordinate"
+        },
+        "duration": {
+          "type": "integer",
+          "description": "Duration in milliseconds",
+          "default": 300
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["x1", "y1", "x2", "y2"]
+    }
+  },
+  {
+    "name": "adb_screencap",
+    "description": "Take a screenshot and save to device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "remote_path": {
+          "type": "string",
+          "description": "Path on device to save screenshot",
+          "default": "/sdcard/screenshot.png"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_screenrecord",
+    "description": "Record screen video",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "remote_path": {
+          "type": "string",
+          "description": "Path on device to save video",
+          "default": "/sdcard/screenrecord.mp4"
+        },
+        "time_limit": {
+          "type": "integer",
+          "description": "Time limit in seconds (max 180)",
+          "default": 180
+        },
+        "bit_rate": {
+          "type": "integer",
+          "description": "Bit rate in bits per second"
+        },
+        "size": {
+          "type": "string",
+          "description": "Video size (e.g., 1280x720)"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_getprop",
+    "description": "Get device property value",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "property": {
+          "type": "string",
+          "description": "Property name (e.g., ro.build.version.release). Leave empty to list all."
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_settings_get",
+    "description": "Get a system setting value",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "enum": ["system", "secure", "global"],
+          "description": "Settings namespace"
+        },
+        "key": {
+          "type": "string",
+          "description": "Setting key"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["namespace", "key"]
+    }
+  },
+  {
+    "name": "adb_settings_put",
+    "description": "Set a system setting value",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "enum": ["system", "secure", "global"],
+          "description": "Settings namespace"
+        },
+        "key": {
+          "type": "string",
+          "description": "Setting key"
+        },
+        "value": {
+          "type": "string",
+          "description": "Setting value"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      },
+      "required": ["namespace", "key", "value"]
+    }
+  },
+  {
+    "name": "adb_dumpsys",
+    "description": "Dump system service information",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "Service name (e.g., battery, wifi, package). Leave empty to list all."
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_logcat",
+    "description": "View device log output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "clear": {
+          "type": "boolean",
+          "description": "Clear log before viewing",
+          "default": false
+        },
+        "dump": {
+          "type": "boolean",
+          "description": "Dump log and exit",
+          "default": true
+        },
+        "filter": {
+          "type": "string",
+          "description": "Filter expression (e.g., *:E for errors only)"
+        },
+        "tag": {
+          "type": "string",
+          "description": "Filter by tag"
+        },
+        "max_lines": {
+          "type": "integer",
+          "description": "Maximum number of lines to return (uses logcat -t flag)",
+          "default": 1000
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Command timeout in seconds",
+          "default": 120
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_bugreport",
+    "description": "Generate a bug report",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Output path for bug report",
+          "default": "bugreport.zip"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_jdwp",
+    "description": "List PIDs of processes hosting a JDWP transport",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_reboot",
+    "description": "Reboot the device",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "enum": ["system", "bootloader", "recovery", "sideload", "sideload-auto-reboot"],
+          "description": "Reboot target",
+          "default": "system"
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_root",
+    "description": "Restart adbd with root permissions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_unroot",
+    "description": "Restart adbd without root permissions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_remount",
+    "description": "Remount partitions read-write",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "auto_reboot": {
+          "type": "boolean",
+          "description": "Automatically reboot if required",
+          "default": false
+        },
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_disable_verity",
+    "description": "Disable dm-verity checking on userdebug builds",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_enable_verity",
+    "description": "Re-enable dm-verity checking on userdebug builds",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "device_serial": {
+          "type": "string",
+          "description": "Device serial number (optional)"
+        }
+      }
+    }
+  },
+  {
+    "name": "adb_start_server",
+    "description": "Ensure that the ADB server is running",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "adb_kill_server",
+    "description": "Kill the ADB server if it is running",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "adb_version",
+    "description": "Show ADB version number",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

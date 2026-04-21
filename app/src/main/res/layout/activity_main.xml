@@ -1,22 +1,106 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright IBM 2025
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:background="@color/cool_gray_10">
 
+    <!-- Include the custom toolbar -->
+    <include
+        layout="@layout/toolbar_with_back"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+    <!-- App Name Header -->
     <TextView
-        android:id="@+id/textView"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="BLE HID FIDO2 Peripheral"
-        android:textSize="18sp" />
+        android:text="@string/app_name"
+        android:textStyle="bold"
+        android:textColor="@color/ibm_blue"
+        android:textSize="28sp"
+        android:gravity="center"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="32dp"
+        android:letterSpacing="0.02" />
 
-    <ToggleButton
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/cool_gray_30"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Connect to Devices -->
+    <Button
         android:id="@+id/serverButton"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Turn BLE HID Server On/Off"
-        android:layout_centerInParent="true"/>
+        android:minHeight="64dp"
+        android:text="@string/pair_device"
+        android:backgroundTint="@color/ibm_blue"
+        android:textColor="@color/ibm_white"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:layout_marginBottom="16dp"
+        android:drawableStart="@drawable/device_pairing"
+        android:drawablePadding="16dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
+        style="@android:style/Widget.Material.Button" />
 
+    <!-- Manage Passkeys -->
+    <Button
+        android:id="@+id/manageButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="64dp"
+        android:text="@string/manage_wallets"
+        android:backgroundTint="@color/cyan_30"
+        android:textColor="@color/ibm_black"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:layout_marginBottom="16dp"
+        android:drawableStart="@drawable/touch_id"
+        android:drawablePadding="16dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
+        style="@android:style/Widget.Material.Button" />
+
+    <!-- Scan QR Code -->
+    <Button
+        android:id="@+id/scanQrButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="64dp"
+        android:text="@string/scan_credential"
+        android:backgroundTint="@color/cyan_30"
+        android:textColor="@color/ibm_black"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:drawableStart="@drawable/ic_qr_code_scanner"
+        android:drawablePadding="16dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
+        style="@android:style/Widget.Material.Button" />
+
+    </LinearLayout>
 </LinearLayout>

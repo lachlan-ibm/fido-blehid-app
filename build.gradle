@@ -1,7 +1,12 @@
+/*
+ * Copyright IBM 2025
+ */
 apply plugin: 'java'
-apply plugin: 'maven-publish'
+// NOTE: Eclipse plugin disabled - .classpath is managed manually via app/regenrate_classpath.sh
+// The Gradle Buildship plugin automatically regenerates .classpath files, overwriting manual
+// configurations needed for Android projects in VS Code (JRE container, Android SDK, AAR deps)
+// apply plugin: 'eclipse'
 
-version = "0.00.10"
 
 repositories {
     mavenCentral()  
@@ -11,43 +16,10 @@ repositories {
     }
 }
 
-sourceSets {
-    main {
-        java {
-            srcDirs = ['lib']
-        }
-    }
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
-dependencies {
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.0'
-    implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.18.1'
-    implementation 'org.slf4j:slf4j-api:1.7.30'
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.79'
-    implementation 'org.bouncycastle:bcpkix-jdk18on:1.79'
-    implementation 'com.macasaet.fernet:fernet-java8:1.4.2'
-    implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.2'
-    implementation 'jakarta.json:jakarta.json-api:2.1.3'
-}
 
-jar {
-    manifest{
-        attributes ("Lib-Version" : "0.00.01")
-    }
-    archiveBaseName = 'com.isfs.blekey.common'
-}
-
-publishing {
-    publications {
-        mavenJava(MavenPublication) {
-            groupId = 'isfs'
-            artifactId = 'com.isfs.blekey.common'
-            version = '0.00.10'
-
-            from components.java
-        }
-    }
-    repositories {
-        mavenLocal()
-    }
-}
+// Made with Bob

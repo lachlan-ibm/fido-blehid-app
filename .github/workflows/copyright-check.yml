@@ -1,0 +1,63 @@
+# Copyright IBM 2025
+name: Copyright Header Check
+
+on:
+  push:
+    branches: [ development, stable ]
+  pull_request:
+    branches: [ development, stable ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  check-copyright:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+        
+    - name: Make check-copyright.sh executable
+      run: chmod +x ./check-copyright.sh
+      
+    - name: Run copyright check (dry run)
+      run: ./check-copyright.sh --dry-run
+      
+    - name: Check for missing copyright headers
+      id: check-missing
+      run: |
+        # Run the check and capture output
+        OUTPUT=$(./check-copyright.sh --dry-run)
+        
+        # Extract the number of missing copyright headers
+        MISSING=$(echo "$OUTPUT" | grep -o "Files missing copyright: [0-9]*" | grep -o "[0-9]*")
+        
+        # Set output variable
+        echo "missing=$MISSING" >> $GITHUB_OUTPUT
+        
+        # Print the result
+        echo "Found $MISSING files with missing copyright headers"
+        
+        # Save the full output to a file for artifact
+        echo "$OUTPUT" > copyright-check-results.txt
+        
+    - name: Upload check results
+      uses: actions/upload-artifact@v3
+      with:
+        name: copyright-check-results
+        path: copyright-check-results.txt
+        
+    - name: Fail if missing copyright headers
+      if: ${{ steps.check-missing.outputs.missing != '0' }}
+      run: |
+        echo "::error::Found ${{ steps.check-missing.outputs.missing }} files with missing copyright headers"
+        echo "Run './check-copyright.sh' locally to fix the issues"
+        exit 1
+
+# Made with Bob

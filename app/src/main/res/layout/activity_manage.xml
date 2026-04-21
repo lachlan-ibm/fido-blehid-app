@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright IBM 2025
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- Include the custom toolbar -->
+    <include
+        android:id="@+id/toolbar_layout"
+        layout="@layout/toolbar_with_back" />
+
+    <!-- Credential Offer Notification (Collapsible) -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/credentialOfferNotification"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="12dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/cyan_10"
+        app:cardElevation="2dp"
+        app:cardCornerRadius="8dp">
+        
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            
+            <!-- Collapsed Header (always visible when notification shown) -->
+            <LinearLayout
+                android:id="@+id/offerHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="12dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center_vertical">
+                
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🪪 Credential Offer"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/colorPrimary"/>
+                
+                <!-- Traffic light indicator in collapsed header -->
+                <TextView
+                    android:id="@+id/trafficLightCollapsed"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:text="●"
+                    android:textSize="16sp"
+                    android:layout_marginEnd="8dp"
+                    android:visibility="gone"/>
+                
+                <ImageButton
+                    android:id="@+id/expandButton"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@android:drawable/arrow_down_float"
+                    android:contentDescription="Expand details"/>
+            </LinearLayout>
+            
+            <!-- Expandable Details (initially hidden) -->
+            <LinearLayout
+                android:id="@+id/offerDetails"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp"
+                android:paddingTop="0dp"
+                android:visibility="gone">
+                
+                <TextView
+                    android:id="@+id/credentialTypeText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="4dp"/>
+                
+                <TextView
+                    android:id="@+id/issuerNameText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="@color/text_secondary"
+                    android:layout_marginBottom="8dp"/>
+                
+                <!-- Expiration indicator with traffic light -->
+                <LinearLayout
+                    android:id="@+id/expirationIndicator"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="8dp"
+                    android:visibility="gone">
+                    
+                    <TextView
+                        android:id="@+id/trafficLight"
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:text="●"
+                        android:textSize="16sp"
+                        android:layout_marginEnd="8dp"/>
+                    
+                    <TextView
+                        android:id="@+id/expirationText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:textSize="13sp"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+                
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Select a passkey below to store this credential"
+                    android:textSize="13sp"
+                    android:textStyle="italic"
+                    android:textColor="@color/text_secondary"/>
+            </LinearLayout>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/mainTitleText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/available_wallets"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Passkeys list section -->
+        <LinearLayout
+            android:id="@+id/passkeysListSection"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <ListView
+                android:id="@+id/passkeysListView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/noPasskeysText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/no_passkey_wallets_found"
+                android:gravity="center"
+                android:visibility="gone"
+                android:layout_marginTop="16dp" />
+        </LinearLayout>
+
+        <!-- Password protection section (initially hidden) -->
+        <LinearLayout
+            android:id="@+id/passwordSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="16dp"
+            android:visibility="gone">
+            
+            <TextView
+                android:id="@+id/credentialTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/unlock_wallet"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:id="@+id/credentialInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp" />
+                
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/prompt_for_password"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
+                
+            <EditText
+                android:id="@+id/passwordInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"
+                android:hint="Password"
+                android:layout_marginBottom="8dp" />
+                
+            <Button
+                android:id="@+id/unlockButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="64dp"
+                android:text="Unlock"
+                android:backgroundTint="@color/ibm_blue"
+                android:textColor="@color/ibm_white"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:paddingVertical="20dp"
+                android:paddingHorizontal="24dp"
+                android:letterSpacing="0.02"
+                android:elevation="4dp"
+                android:stateListAnimator="@null"
+                style="@android:style/Widget.Material.Button" />
+                
+            <TextView
+                android:id="@+id/passwordError"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#FF0000"
+                android:visibility="gone"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+
+        <!-- Credential options section (initially visible) -->
+        <LinearLayout
+            android:id="@+id/credentialOptionsSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
+
+                <Button
+                    android:id="@+id/deleteButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="64dp"
+                    android:layout_weight="1"
+                    android:text="@string/delete"
+                    android:backgroundTint="@color/cyan_30"
+                    android:textColor="@color/ibm_black"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:paddingVertical="20dp"
+                    android:paddingHorizontal="24dp"
+                    android:letterSpacing="0.02"
+                    android:elevation="4dp"
+                    android:stateListAnimator="@null"
+                    android:layout_marginEnd="4dp"
+                    style="@android:style/Widget.Material.Button" />
+
+                <Button
+                    android:id="@+id/manageButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="64dp"
+                    android:layout_weight="1"
+                    android:text="@string/manage"
+                    android:backgroundTint="@color/cyan_30"
+                    android:textColor="@color/ibm_black"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:paddingVertical="20dp"
+                    android:paddingHorizontal="24dp"
+                    android:letterSpacing="0.02"
+                    android:elevation="4dp"
+                    android:stateListAnimator="@null"
+                    android:layout_marginStart="4dp"
+                    style="@android:style/Widget.Material.Button" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/createCredential"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="64dp"
+                android:text="@string/create_passkey_wallet"
+                android:backgroundTint="@color/ibm_blue"
+                android:textColor="@color/ibm_white"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:paddingVertical="20dp"
+                android:paddingHorizontal="24dp"
+                android:letterSpacing="0.02"
+                android:elevation="4dp"
+                android:stateListAnimator="@null"
+                style="@android:style/Widget.Material.Button" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
+
+<!-- Made with Bob -->

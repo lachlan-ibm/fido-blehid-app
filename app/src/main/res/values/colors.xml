@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright IBM 2025
+-->
 <resources>
     <color name="ibm_blue">#0F62FE</color>
     <color name="ibm_black">#000000</color>
@@ -10,4 +13,17 @@
     <color name="cyan_10">#E5F6FF</color>
     <color name="cool_gray_10">#F2F4F8</color>
     <color name="cool_gray_30">#C1C7CD</color>
+    <color name="device_connected">#24A148</color>
+    <color name="device_error">#FF832B</color>
+    <color name="device_disconnected">#C1C7CD</color>
+    <color name="colorPrimary">#0F62FE</color>
+    <color name="colorPrimaryDark">#0043CE</color>
+    <color name="colorAccent">#82CFFF</color>
+    
+    <!-- UI Colors -->
+    <color name="background">#FFFFFF</color>
+    <color name="text_primary">#000000</color>
+    <color name="text_secondary">#525252</color>
+    <color name="button_primary">#0F62FE</color>
+    <color name="button_secondary">#E0E0E0</color>
 </resources>

@@ -1,7 +1,11 @@
+/*
+ * Copyright IBM 2025
+ */
 
 package com.isfs.blekey;
 
 import android.app.Notification;
+import android.content.Context;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -28,8 +32,10 @@ public class ForegroundNotificationService extends Service {
                 "FIDO2 Input Report Channel",
                 NotificationManager.IMPORTANCE_HIGH
             );
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(serviceChannel);
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.createNotificationChannel(serviceChannel);
+            }
         }
     }
 
