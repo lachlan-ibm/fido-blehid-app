@@ -25,13 +25,13 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/passkey_name_description"
+        android:text="@string/passkey_wallet_name_description"
         android:layout_marginBottom="16dp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/passkey_name"
+        android:text="@string/passkey_wallet_name"
         android:textStyle="bold"
         android:layout_marginBottom="8dp" />
 
@@ -93,9 +93,20 @@
         android:id="@+id/createPasskeyButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/create_passkey"
+        android:minHeight="64dp"
+        android:text="@string/create_passkey_wallet"
+        android:backgroundTint="@color/ibm_blue"
+        android:textColor="@color/ibm_white"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
         android:enabled="false"
-        android:layout_marginTop="16dp" />
+        android:layout_marginTop="16dp"
+        style="@android:style/Widget.Material.Button" />
 
     </LinearLayout>
 </LinearLayout>

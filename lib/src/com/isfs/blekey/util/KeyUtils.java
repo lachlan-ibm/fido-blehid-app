@@ -27,12 +27,14 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
+import java.security.Signature;
 import java.security.Provider;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPrivateCrtKey;
+import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECField;
 import java.security.spec.ECFieldFp;
@@ -734,10 +736,15 @@ public class KeyUtils {
             keyAgreement.doPhase(theirKey, true);
             byte[] sharedSecret = keyAgreement.generateSecret();
             
-            // Normalize to 32 bytes
-            byte[] normalized = normalizeCoordinate(sharedSecret, 32);
-            logger.debug("ECDH key agreement completed successfully");
-            return normalized;
+            // Normalize to 32 bytes (x-coordinate)
+            byte[] xCoordinate = normalizeCoordinate(sharedSecret, 32);
+            
+            // Per CTAP spec: shared secret = SHA-256(x-coordinate)
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashedSecret = digest.digest(xCoordinate);
+            
+            logger.debug("ECDH key agreement completed successfully, hashed shared secret");
+            return hashedSecret;
             
         } catch (IllegalArgumentException e) {
             logger.error("Invalid arguments for ECDH: {}", e.getMessage());
@@ -1417,14 +1424,18 @@ public class KeyUtils {
         
         try {
             java.security.Signature signature;
+            String algorithm = privateKey.getAlgorithm().toUpperCase();
             
-            if (privateKey instanceof java.security.interfaces.ECPrivateKey) {
-                signature = java.security.Signature.getInstance("SHA256withECDSA", "BC");
-            } else if (privateKey instanceof java.security.interfaces.RSAPrivateKey) {
-                signature = java.security.Signature.getInstance("SHA256withRSA", "BC");
+            // Check algorithm name to support both standard and Android Keystore keys
+            if ("EC".equals(algorithm) || privateKey instanceof ECPrivateKey) {
+                signature = Signature.getInstance("SHA256withECDSA");
+                
+            } else if ("RSA".equals(algorithm) || privateKey instanceof RSAPrivateKey) {
+                signature = Signature.getInstance("SHA256withRSA");
             } else {
-                throw new IllegalArgumentException("Unsupported private key type: " + 
-                                                 privateKey.getClass().getName());
+                throw new IllegalArgumentException("Unsupported private key type: " +
+                                                 privateKey.getClass().getName() +
+                                                 " with algorithm: " + algorithm);
             }
             
             signature.initSign(privateKey);

@@ -210,7 +210,7 @@ public class CertUtils implements java.io.Serializable {
         ASN1ObjectIdentifier oid = new ASN1ObjectIdentifier("1.3.6.1.4.1.45724.1.1.4");
         // value must be a double encoded octet stream
         ASN1OctetString value = new DEROctetString(aaguid);
-        certBuilder.addExtension(oid, false, value);
+        certBuilder.addExtension(oid, false, value.getEncoded());
         String javaAglName = "SHA256withRSA";
         if(signKeyPair.getPrivate() instanceof ECPrivateKey) {
                 javaAglName = "SHA256withECDSA";

@@ -7,17 +7,17 @@ import android.os.Bundle;
 import android.view.View;
 import android.content.Intent;
 import androidx.appcompat.app.AppCompatActivity;
-import android.view.View.OnClickListener;
-import androidx.appcompat.app.AppCompatDelegate;
+import androidx.appcompat.app.AlertDialog;
 import android.util.Log;
 import android.widget.Toast;
-
 import android.widget.Button;
 
 import com.isfs.blekey.activity.ManageActivity;
 import com.isfs.blekey.activity.ServerActivity;
+import com.isfs.blekey.activity.QRScannerActivity;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.AndroidKeystoreManager;
+import com.isfs.blekey.util.CameraPermissionHelper;
 
 
 /**
@@ -28,6 +28,7 @@ import com.isfs.blekey.util.AndroidKeystoreManager;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
+    private static final int CAMERA_PERMISSION_REQUEST_CODE = 1001;
 
     /**
      * Initializes the activity, sets up the UI and configures the toggle button
@@ -41,40 +42,38 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        // Hide the back button in the toolbar since this is the main activity
-        findViewById(R.id.backButton).setVisibility(View.GONE);
-        AppCompatDelegate.setCompatVectorFromResourcesEnabled(true);
         
-        // Initialize the root key pair for passkey encryption
+        setupToolbar();
         initializeRootKeyPair();
+        setupButtons();
+    }
+    
+    /**
+     * Configures the toolbar by hiding back and home buttons to center the logo.
+     */
+    private void setupToolbar() {
+        findViewById(R.id.backButton).setVisibility(View.GONE);
+        findViewById(R.id.homeButton).setVisibility(View.GONE);
+    }
+    
+    /**
+     * Sets up click listeners for all buttons using lambda expressions.
+     */
+    private void setupButtons() {
         Button serverButton = findViewById(R.id.serverButton);
-        serverButton.setOnClickListener(new OnClickListener() {
-            /**
-             * Called when the server button is clicked.
-             * Launches the ServerActivity to start the BLE HID service.
-             *
-             * @param view The view that was clicked (the button)
-             */
-            @Override
-            public void onClick(View view) {
-                startActivity(new Intent(getApplicationContext(), ServerActivity.class));
-            }
-        });
+        serverButton.setOnClickListener(v ->
+            startActivity(new Intent(this, ServerActivity.class)));
         
         Button manageButton = findViewById(R.id.manageButton);
-        manageButton.setOnClickListener(new OnClickListener() {
-            /**
-             * Called when the manage button is clicked.
-             * Launches the ManageActivity to manage Passkeys which are stored on this device.
-             *
-             * @param view The view that was clicked (the button)
-             */
-            @Override
-            public void onClick(View view) {
-                Intent intent = new Intent(getApplicationContext(), ManageActivity.class);
-                // Add any necessary flags to ensure proper activity launch
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
+        manageButton.setOnClickListener(v ->
+            startActivity(new Intent(this, ManageActivity.class)));
+        
+        Button scanQrButton = findViewById(R.id.scanQrButton);
+        scanQrButton.setOnClickListener(v -> {
+            if (hasCameraPermission()) {
+                startActivity(new Intent(this, QRScannerActivity.class));
+            } else {
+                requestCameraPermission();
             }
         });
     }
@@ -110,4 +109,76 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Failed to initialize platform key: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
+    
+    
+    /**
+     * Checks if camera permission is granted.
+     *
+     * @return true if camera permission is granted, false otherwise
+     */
+    private boolean hasCameraPermission() {
+        return CameraPermissionHelper.checkPermission(this);
+    }
+    
+    /**
+     * Requests camera permission from the user.
+     * Shows a rationale dialog first if the user has previously denied the permission.
+     */
+    private void requestCameraPermission() {
+        if (CameraPermissionHelper.shouldShowRationale(this)) {
+            // Show rationale dialog before requesting permission
+            showPermissionRationaleDialog();
+        } else {
+            // Request permission directly
+            CameraPermissionHelper.requestPermission(this, CAMERA_PERMISSION_REQUEST_CODE);
+        }
+    }
+    
+    /**
+     * Shows a dialog explaining why camera permission is needed.
+     * This is shown when the user has previously denied the permission.
+     */
+    private void showPermissionRationaleDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle("Camera Permission Required")
+            .setMessage(CameraPermissionHelper.getPermissionRationale())
+            .setPositiveButton("Grant Permission", (dialog, which) -> {
+                CameraPermissionHelper.requestPermission(this, CAMERA_PERMISSION_REQUEST_CODE);
+            })
+            .setNegativeButton("Cancel", (dialog, which) -> {
+                Toast.makeText(this, "Camera permission is required to scan QR codes", Toast.LENGTH_SHORT).show();
+            })
+            .show();
+    }
+    
+    /**
+     * Handles the result of permission requests.
+     * Called when the user responds to a permission request dialog.
+     */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            if (CameraPermissionHelper.isPermissionGranted(grantResults)) {
+                Log.i(TAG, "Camera permission granted");
+                Toast.makeText(this, "Camera permission granted", Toast.LENGTH_SHORT).show();
+                startActivity(new Intent(this, QRScannerActivity.class));
+            } else {
+                Log.w(TAG, "Camera permission denied");
+                // Check if user selected "Don't ask again"
+                if (!CameraPermissionHelper.shouldShowRationale(this)) {
+                    // User selected "Don't ask again" - show message about Settings
+                    new AlertDialog.Builder(this)
+                        .setTitle("Permission Denied")
+                        .setMessage(CameraPermissionHelper.getPermissionDeniedMessage())
+                        .setPositiveButton("OK", null)
+                        .show();
+                } else {
+                    Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
+    }
+    
 }

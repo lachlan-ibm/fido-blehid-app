@@ -1,8 +1,15 @@
-plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
-}/*
+/*
  * Copyright IBM 2025
  */
+
 rootProject.name = 'fido_blehid_app'
+
+// Include subprojects
 include ':app'
 include ':lib'
+
+// Optional: Define project directories if they're not in default locations
+// project(':app').projectDir = file('app')
+// project(':lib').projectDir = file('lib')
+
+// Made with Bob

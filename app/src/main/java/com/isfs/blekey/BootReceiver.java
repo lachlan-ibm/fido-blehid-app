@@ -4,6 +4,7 @@
 
 package com.isfs.blekey;
 
+import android.bluetooth.BluetoothAdapter;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -14,7 +15,8 @@ import android.util.Log;
 import com.isfs.blekey.hidsvc.HIDForegroundService;
 
 /**
- * BroadcastReceiver that starts the HID foreground service on device boot.
+ * BroadcastReceiver that starts the HID foreground service on device boot,
+ * package replacement, and when Bluetooth is re-enabled.
  * Also checks battery level to avoid starting when battery is low.
  */
 public class BootReceiver extends BroadcastReceiver {
@@ -37,6 +39,8 @@ public class BootReceiver extends BroadcastReceiver {
             handleBootCompleted(context);
         } else if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
             handlePackageReplaced(context);
+        } else if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
+            handleBluetoothStateChanged(context, intent);
         }
     }
 
@@ -76,6 +80,33 @@ public class BootReceiver extends BroadcastReceiver {
         }
 
         startHIDService(context);
+    }
+
+    /**
+     * Handles Bluetooth adapter state changes.
+     * Restarts the service when Bluetooth is turned back on.
+     */
+    private void handleBluetoothStateChanged(Context context, Intent intent) {
+        int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
+        Log.d(TAG, "Bluetooth state changed: " + state);
+        
+        if (state == BluetoothAdapter.STATE_ON) {
+            Log.d(TAG, "Bluetooth turned ON, checking if service should restart");
+            
+            if (!isAutoStartEnabled(context)) {
+                Log.d(TAG, "Auto-start not enabled, service will not start");
+                return;
+            }
+            
+            if (!isBatteryLevelSufficient(context)) {
+                Log.w(TAG, "Battery level too low, not starting service");
+                return;
+            }
+            
+            startHIDService(context);
+        } else if (state == BluetoothAdapter.STATE_OFF) {
+            Log.d(TAG, "Bluetooth turned OFF, service will stop automatically");
+        }
     }
 
     /**

@@ -41,11 +41,14 @@ public class CredentialOffer {
     private static final Logger logger = LoggerFactory.getLogger(CredentialOffer.class);
     private static final String SCHEME = "openid-credential-offer";
     private static final String PRE_AUTHORIZED_CODE_GRANT = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
+    private static final int DEFAULT_EXPIRATION_SECONDS = 300; // 5 minutes default
     
     private final String credentialIssuer;
     private final List<String> credentials;
     private final Map<String, Object> grants;
     private final Map<String, Object> rawOffer;
+    private final Long expiresIn; // seconds until expiration
+    private final long receivedAtMillis; // timestamp when offer was received
     
     /**
      * Creates a credential offer from parsed JSON.
@@ -54,11 +57,23 @@ public class CredentialOffer {
      * @throws OidcException if required fields are missing
      */
     public CredentialOffer(Map<String, Object> offerMap) throws OidcException {
+        this(offerMap, System.currentTimeMillis());
+    }
+    
+    /**
+     * Creates a credential offer from parsed JSON with a specific received timestamp.
+     *
+     * @param offerMap The parsed credential offer JSON
+     * @param receivedAtMillis The timestamp when the offer was received
+     * @throws OidcException if required fields are missing
+     */
+    public CredentialOffer(Map<String, Object> offerMap, long receivedAtMillis) throws OidcException {
         if (offerMap == null) {
             throw new OidcException("Credential offer cannot be null");
         }
         
         this.rawOffer = offerMap;
+        this.receivedAtMillis = receivedAtMillis;
         
         // Required: credential_issuer
         this.credentialIssuer = (String) offerMap.get("credential_issuer");
@@ -105,8 +120,16 @@ public class CredentialOffer {
             this.grants = new HashMap<>();
         }
         
-        logger.debug("Parsed credential offer: issuer={}, credentials={}, grants={}",
-                    credentialIssuer, credentials, grants.keySet());
+        // Optional: expires_in (seconds until expiration)
+        Object expiresInObj = offerMap.get("expires_in");
+        if (expiresInObj instanceof Number) {
+            this.expiresIn = ((Number) expiresInObj).longValue();
+        } else {
+            this.expiresIn = (long) DEFAULT_EXPIRATION_SECONDS;
+        }
+        
+        logger.debug("Parsed credential offer: issuer={}, credentials={}, grants={}, expiresIn={}s",
+                    credentialIssuer, credentials, grants.keySet(), expiresIn);
     }
     
     /**
@@ -255,6 +278,79 @@ public class CredentialOffer {
     }
     
     /**
+     * Gets the expiration time in seconds from when the offer was received.
+     * @return Expiration time in seconds, or null if not specified
+     */
+    public Long getExpiresIn() {
+        return expiresIn;
+    }
+    
+    /**
+     * Gets the timestamp when the offer was received.
+     * @return Timestamp in milliseconds
+     */
+    public long getReceivedAtMillis() {
+        return receivedAtMillis;
+    }
+    
+    /**
+     * Gets the expiration timestamp in milliseconds.
+     * @return Expiration timestamp, or null if no expiration
+     */
+    public Long getExpirationTimeMillis() {
+        if (expiresIn == null) {
+            return null;
+        }
+        return receivedAtMillis + (expiresIn * 1000);
+    }
+    
+    /**
+     * Checks if the credential offer has expired.
+     * @return true if the offer has expired
+     */
+    public boolean isExpired() {
+        return isExpired(System.currentTimeMillis());
+    }
+    
+    /**
+     * Checks if the credential offer has expired at a specific time.
+     * @param currentTimeMillis The current time in milliseconds
+     * @return true if the offer has expired
+     */
+    public boolean isExpired(long currentTimeMillis) {
+        Long expirationTime = getExpirationTimeMillis();
+        if (expirationTime == null) {
+            return false;
+        }
+        return currentTimeMillis >= expirationTime;
+    }
+    
+    /**
+     * Gets the remaining time until expiration in seconds.
+     * @return Remaining seconds, or null if no expiration, or 0 if already expired
+     */
+    public Long getRemainingSeconds() {
+        return getRemainingSeconds(System.currentTimeMillis());
+    }
+    
+    /**
+     * Gets the remaining time until expiration in seconds at a specific time.
+     * @param currentTimeMillis The current time in milliseconds
+     * @return Remaining seconds, or null if no expiration, or 0 if already expired
+     */
+    public Long getRemainingSeconds(long currentTimeMillis) {
+        Long expirationTime = getExpirationTimeMillis();
+        if (expirationTime == null) {
+            return null;
+        }
+        long remainingMillis = expirationTime - currentTimeMillis;
+        if (remainingMillis <= 0) {
+            return 0L;
+        }
+        return remainingMillis / 1000;
+    }
+    
+    /**
      * Parses a query string into a map of parameters.
      */
     private static Map<String, String> parseQueryString(String query) throws UnsupportedEncodingException {
@@ -280,6 +376,8 @@ public class CredentialOffer {
                ", credentials=" + credentials +
                ", hasPreAuthorizedCode=" + hasPreAuthorizedCodeGrant() +
                ", userPinRequired=" + isUserPinRequired() +
+               ", expiresIn=" + expiresIn + "s" +
+               ", isExpired=" + isExpired() +
                '}';
     }
 }

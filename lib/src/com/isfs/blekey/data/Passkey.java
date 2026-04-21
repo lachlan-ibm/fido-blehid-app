@@ -337,6 +337,11 @@ public class Passkey {
                 return null;
             }
             
+            logger.debug("=== readKey: Starting passkey decryption ===");
+            logger.debug("File: {}", pkeyFile.getAbsolutePath());
+            logger.debug("lowerHash length: {}", lowerHash.length);
+            logger.debug("lowerHash (hex): {}", bytesToHex(lowerHash));
+            
             // Read and parse file data
             byte[] fileData;
             try {
@@ -359,8 +364,14 @@ public class Passkey {
 
             logger.debug("File size: {} bytes", fileData.length);
             byte[] upperHashObf = Arrays.copyOfRange(fileData, 0, HEADER_SIZE);
+            
+            logger.debug("Decrypting upperHash from header...");
             byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
                         KeyUtils.ksmDecrypt(upperHashObf, keystoreManager) : KeyUtils.ecdhDecrypt(upperHashObf, rootPrivateKey);
+            logger.debug("upperHash decrypted, length: {}", upperHash != null ? upperHash.length : "null");
+            if (upperHash != null) {
+                logger.debug("upperHash (hex): {}", bytesToHex(upperHash));
+            }
             
             byte[] passkeyData = Arrays.copyOfRange(fileData, HEADER_SIZE, fileData.length);
             
@@ -383,8 +394,14 @@ public class Passkey {
             byte[] remainingData = Arrays.copyOfRange(passkeyData, remainingDataStart, passkeyData.length);
             
             // Reconstruct the full PIN hash
+            logger.info("Reconstructing full PIN hash...");
             byte[] pinHash = (lowerHash.length == 32) ? lowerHash : getCachedPinHash(upperHash, lowerHash);
+            logger.info("Full PIN hash length: {}", pinHash.length);
+            logger.info("Full PIN hash (hex): {}", bytesToHex(pinHash));
+            
+            logger.info("Attempting to decrypt PKCS12 with reconstructed PIN hash...");
             KeyStore pki = KeyUtils.readPKCS12(p12Bytes, pinHash);
+            logger.info("PKCS12 decryption successful!");
             PrivateKey key = (PrivateKey) pki.getKey("1", null);
             X509Certificate cert = (X509Certificate) pki.getCertificate("1");
             
@@ -434,9 +451,28 @@ public class Passkey {
             passkey.fileName = pkeyFile.getName();
             return passkey;
         } catch (Exception e) {
-            logger.error("Error decrypting passkey", e);
+            logger.error("Error decrypting passkey: {}", e.getMessage());
+            logger.error("Exception type: {}", e.getClass().getName());
+            logger.error("Stack trace:", e);
             return null;
         }
+    }
+
+    /**
+     * Converts a byte array to a hexadecimal string for logging.
+     *
+     * @param bytes The byte array to convert
+     * @return Hexadecimal string representation
+     */
+    private static String bytesToHex(byte[] bytes) {
+        if (bytes == null) {
+            return "null";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     /**
@@ -535,7 +571,36 @@ public class Passkey {
      */
     public static boolean writeKey(Passkey passkey, byte[] pinHash, File passkeyFile) {
         try {
-            // Validate inputs
+            // If we only have 16 bytes (lower hash), reconstruct the full 32-byte PIN hash
+            // by reading the cached upper hash from the existing file (same as readKey does)
+            if (pinHash != null && pinHash.length == 16) {
+                logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from file");
+                try {
+                    byte[] fileData = FileUtils.readFileBytes(passkeyFile);
+                    if (fileData != null && fileData.length >= HEADER_SIZE) {
+                        byte[] upperHashEnc = Arrays.copyOfRange(fileData, 0, HEADER_SIZE);
+                        byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
+                                    KeyUtils.ksmDecrypt(upperHashEnc, keystoreManager) :
+                                    KeyUtils.ecdhDecrypt(upperHashEnc, rootPrivateKey);
+                        
+                        if (upperHash != null && upperHash.length == HALF_HASH) {
+                            pinHash = getCachedPinHash(upperHash, pinHash);
+                            logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", pinHash.length);
+                        } else {
+                            logger.error("writeKey: Failed to decrypt upper hash from file");
+                            return false;
+                        }
+                    } else {
+                        logger.error("writeKey: File too small or unreadable for hash reconstruction");
+                        return false;
+                    }
+                } catch (Exception e) {
+                    logger.error("writeKey: Error reconstructing PIN hash from file", e);
+                    return false;
+                }
+            }
+            
+            // Validate inputs (now with potentially reconstructed 32-byte hash)
             if (!validateWriteInputs(passkey, pinHash)) {
                 return false;
             }

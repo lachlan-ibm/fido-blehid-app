@@ -238,35 +238,93 @@ public class VerifiableCredential {
     }
     
     /**
+     * Safely casts an object to the specified type with validation.
+     *
+     * @param obj The object to cast
+     * @param type The target class type
+     * @param fieldName The field name for error messages
+     * @return The cast object
+     * @throws IllegalArgumentException if the object is not of the expected type
+     */
+    private static <T> T castOrThrow(Object obj, Class<T> type, String fieldName) {
+        if (obj == null) {
+            return null;
+        }
+        if (!type.isInstance(obj)) {
+            throw new IllegalArgumentException(
+                fieldName + " must be a " + type.getSimpleName() + ", but was " + obj.getClass().getSimpleName()
+            );
+        }
+        return type.cast(obj);
+    }
+    
+    /**
+     * Retrieves and casts a required value from a map.
+     *
+     * @param map The source map
+     * @param key The key to retrieve
+     * @param type The expected type
+     * @param fieldName The field name for error messages
+     * @return The cast value
+     * @throws IllegalArgumentException if the key is missing or value has wrong type
+     */
+    private static <T> T getRequired(Map<Integer, Object> map, Integer key, Class<T> type, String fieldName) {
+        Object value = map.get(key);
+        if (value == null) {
+            throw new IllegalArgumentException("Required field " + fieldName + " is missing");
+        }
+        return castOrThrow(value, type, fieldName);
+    }
+    
+    /**
+     * Retrieves and casts an optional value from a map.
+     *
+     * @param map The source map
+     * @param key The key to retrieve
+     * @param type The expected type
+     * @param fieldName The field name for error messages
+     * @return The cast value or null if not present
+     * @throws IllegalArgumentException if value has wrong type
+     */
+    private static <T> T getOptional(Map<Integer, Object> map, Integer key, Class<T> type, String fieldName) {
+        if (!map.containsKey(key)) {
+            return null;
+        }
+        return castOrThrow(map.get(key), type, fieldName);
+    }
+    
+    /**
      * Deserializes a credential from CBOR format.
-     * 
+     *
      * @param cborData CBOR-encoded credential data
      * @return Deserialized VerifiableCredential
      * @throws IllegalArgumentException if CBOR data is invalid
      */
     public static VerifiableCredential fromCbor(byte[] cborData) {
         try {
-            Map<Integer, Object> cborMap = (Map<Integer, Object>) Cbor.decode(cborData);
+            Object decoded = Cbor.decode(cborData);
+            @SuppressWarnings("unchecked")
+            Map<Integer, Object> cborMap = castOrThrow(decoded, Map.class, "CBOR root");
             
             VerifiableCredential credential = new VerifiableCredential();
             
-            credential.id = (String) cborMap.get(1);
-            credential.format = DigitalCredentialFormat.fromIdentifier((String) cborMap.get(2));
-            credential.metadata = deserializeMetadata((Map<Integer, Object>) cborMap.get(3));
+            credential.id = getRequired(cborMap, 1, String.class, "credential ID");
             
-            if (cborMap.containsKey(4)) {
-                credential.holderBindingKeySeed = (byte[]) cborMap.get(4);
-            }
+            String formatId = getRequired(cborMap, 2, String.class, "credential format");
+            credential.format = DigitalCredentialFormat.fromIdentifier(formatId);
             
-            if (cborMap.containsKey(5)) {
-                credential.encryptedData = (byte[]) cborMap.get(5);
-            }
+            @SuppressWarnings("unchecked")
+            Map<Integer, Object> metadataMap = getOptional(cborMap, 3, Map.class, "metadata");
+            credential.metadata = deserializeMetadata(metadataMap);
             
-            if (cborMap.containsKey(6)) {
-                credential.salt = (byte[]) cborMap.get(6);
-            }
+            credential.holderBindingKeySeed = getOptional(cborMap, 4, byte[].class, "holder binding key seed");
+            credential.encryptedData = getOptional(cborMap, 5, byte[].class, "encrypted data");
+            credential.salt = getOptional(cborMap, 6, byte[].class, "salt");
             
             return credential;
+        } catch (ClassCastException e) {
+            logger.error("Type mismatch while deserializing credential from CBOR", e);
+            throw new IllegalArgumentException("Invalid CBOR credential data: type mismatch", e);
         } catch (Exception e) {
             logger.error("Failed to deserialize credential from CBOR", e);
             throw new IllegalArgumentException("Invalid CBOR credential data", e);
@@ -314,27 +372,39 @@ public class VerifiableCredential {
         
         DigitalCredentialMetadata metadata = new DigitalCredentialMetadata();
         
-        if (metaMap.containsKey(1)) {
-            metadata.setIssuerDid((String) metaMap.get(1));
+        String issuerDid = getOptional(metaMap, 1, String.class, "issuer DID");
+        if (issuerDid != null) {
+            metadata.setIssuerDid(issuerDid);
         }
-        if (metaMap.containsKey(2)) {
-            metadata.setIssuerUrl((String) metaMap.get(2));
+        
+        String issuerUrl = getOptional(metaMap, 2, String.class, "issuer URL");
+        if (issuerUrl != null) {
+            metadata.setIssuerUrl(issuerUrl);
         }
-        if (metaMap.containsKey(3)) {
-            metadata.setCredentialType((String) metaMap.get(3));
+        
+        String credentialType = getOptional(metaMap, 3, String.class, "credential type");
+        if (credentialType != null) {
+            metadata.setCredentialType(credentialType);
         }
-        if (metaMap.containsKey(4)) {
-            metadata.setIssuedAt(java.time.Instant.ofEpochSecond(((Number) metaMap.get(4)).longValue()));
+        
+        Number issuedAt = getOptional(metaMap, 4, Number.class, "issued at timestamp");
+        if (issuedAt != null) {
+            metadata.setIssuedAt(java.time.Instant.ofEpochSecond(issuedAt.longValue()));
         }
-        if (metaMap.containsKey(5)) {
-            metadata.setExpiresAt(java.time.Instant.ofEpochSecond(((Number) metaMap.get(5)).longValue()));
+        
+        Number expiresAt = getOptional(metaMap, 5, Number.class, "expires at timestamp");
+        if (expiresAt != null) {
+            metadata.setExpiresAt(java.time.Instant.ofEpochSecond(expiresAt.longValue()));
         }
-        if (metaMap.containsKey(6)) {
-            metadata.setStatusListUrl((String) metaMap.get(6));
+        
+        String statusListUrl = getOptional(metaMap, 6, String.class, "status list URL");
+        if (statusListUrl != null) {
+            metadata.setStatusListUrl(statusListUrl);
         }
-        if (metaMap.containsKey(7)) {
-            @SuppressWarnings("unchecked")
-            Map<String, String> displayProps = (Map<String, String>) metaMap.get(7);
+        
+        @SuppressWarnings("unchecked")
+        Map<String, String> displayProps = getOptional(metaMap, 7, Map.class, "display properties");
+        if (displayProps != null) {
             displayProps.forEach(metadata::setDisplayProperty);
         }
         

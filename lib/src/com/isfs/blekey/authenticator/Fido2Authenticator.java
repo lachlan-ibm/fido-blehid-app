@@ -35,6 +35,8 @@ import jakarta.json.JsonObject;
 import org.jose4j.jws.AlgorithmIdentifiers;
 import org.jose4j.jws.JsonWebSignature;
 import org.jose4j.jwt.JwtClaims;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.KeyUtils;
@@ -44,6 +46,8 @@ import com.isfs.blekey.data.SymmetricKey;
 
 @SuppressWarnings("unchecked")
 public class Fido2Authenticator implements java.io.Serializable {
+
+    private static final Logger logger = LoggerFactory.getLogger(Fido2Authenticator.class);
 
     /**
      * Serial version UID for serialization compatibility
@@ -119,7 +123,7 @@ public class Fido2Authenticator implements java.io.Serializable {
                 byte[] encoded = this.keyPair.getPrivate().getEncoded();
                 String cred = aesKey.encrypt(encoded); // b64url
                 this.credId = cred.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                System.err.println("getCredId() - aesKey: " + this.credId.length);
+                logger.debug("CredID generated: len={}, hash={}", this.credId.length, Integer.toHexString(cred.hashCode()));
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -128,7 +132,7 @@ public class Fido2Authenticator implements java.io.Serializable {
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 digest.update(this.keyPair.getPublic().getEncoded());
                 this.credId = digest.digest();
-                System.err.println("getCredId() - SHA-256 fallback: " + this.credId.length);
+                logger.debug("getCredId() - SHA-256 fallback: {}", this.credId.length);
             } catch (NoSuchAlgorithmException e) {
                 throw new RuntimeException(e);
             }
@@ -136,9 +140,26 @@ public class Fido2Authenticator implements java.io.Serializable {
         return this.credId;
     }
 
+    /**
+     * Initialize authenticator from a credential ID received during getAssertion.
+     *
+     * Clients sends credential IDs as UTF-8 bytes of base64url strings.
+     * We need to convert these bytes to a string for decryption.
+     *
+     * @param credId The credential ID as UTF-8 bytes of base64url string from Client
+     * @throws Exception if decryption or key initialization fails
+     */
     public void initFromCredId(byte[] credId) throws Exception {
         this.credId = credId;
+        // Convert UTF-8 bytes to base64url string
         String credIdStr = new String(credId, java.nio.charset.StandardCharsets.UTF_8);
+        
+        // Log credential ID details with hash for debugging
+        logger.debug("CredID init: len={}, strLen={}, hash={}, validB64url={}",
+                     credId.length, credIdStr.length(),
+                     Integer.toHexString(credIdStr.hashCode()),
+                     credIdStr.matches("[A-Za-z0-9_-]*"));
+        
         // Decrypt the token
         byte[] asn1Bytes = aesKey.decrypt(credIdStr, null);
         // Generate the key pair from the parameters
@@ -147,6 +168,7 @@ public class Fido2Authenticator implements java.io.Serializable {
     }
 
     public void setSymKeys(String seed) {
+        logger.debug("SymKeys set: seedLen={}, hash={}", seed.length(), Integer.toHexString(seed.hashCode()));
         this.aesKey = new SymmetricKey(seed);
         this.fKey = seed;
     }
@@ -430,7 +452,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         byte[] credIdBytes = getCredId();
 
         String rpId = null;
-        System.err.println(publicKey);
+        logger.debug("publicKey: {}", publicKey);
         if (performAttestation) {
             rpId = (String) ((Map<String, Object>) publicKey.get("rp")).get("id");
         } else {
@@ -931,7 +953,7 @@ public class Fido2Authenticator implements java.io.Serializable {
         // write clock Info, arbitrarily set to zero
         certInfoByteStream.write(new byte[17]); // uint64 clock, uint32 resetCount, uint32
                                                 // restartCount, safe
-        System.out.println("Vendor Id = " + Arrays.toString(TPM_VENDOR_ID_CONFORMANCE));
+        logger.debug("Vendor Id = {}", Arrays.toString(TPM_VENDOR_ID_CONFORMANCE));
         certInfoByteStream.write((new byte[8 - TPM_VENDOR_ID_CONFORMANCE.length])); // pad with
                                                                                     // correct
                                                                                     // number of
@@ -1117,7 +1139,7 @@ public class Fido2Authenticator implements java.io.Serializable {
                 if(this.authnCert == null) {
                     this.authnCert = CertUtils.generatePackedBatchCertificate(
                             "C=AU,O=IBM,OU=Authenticator Attestation,CN=packedBasic",
-                            attestKeyPair, 365, new BigInteger(this.TEST_AAGUID).toByteArray(), null, caKeyPair, null);
+                            attestKeyPair, 365, this.TEST_AAGUID, null, caKeyPair, null);
                 }
                 result.put("x5c", new byte[][] { this.authnCert.getEncoded() });
             } else {
@@ -1127,7 +1149,7 @@ public class Fido2Authenticator implements java.io.Serializable {
                         .gereatePackedAttCACertificate(akiCert,
                                 "C=AU,O=IBM,OU=Authenticator Attestation,CN=packedBasicLeaf",
                                 attestKeyPair, 365,
-                                new BigInteger(this.TEST_AAGUID).toByteArray(), caKeyPair)
+                                this.TEST_AAGUID, caKeyPair)
                         .getEncoded();
                 if(this.authnCert != null) {
                     attestnCert = this.authnCert.getEncoded();

@@ -2,7 +2,10 @@
  * Copyright IBM 2025
  */
 apply plugin: 'java'
-apply plugin: 'eclipse'
+// NOTE: Eclipse plugin disabled - .classpath is managed manually via app/regenrate_classpath.sh
+// The Gradle Buildship plugin automatically regenerates .classpath files, overwriting manual
+// configurations needed for Android projects in VS Code (JRE container, Android SDK, AAR deps)
+// apply plugin: 'eclipse'
 
 
 repositories {

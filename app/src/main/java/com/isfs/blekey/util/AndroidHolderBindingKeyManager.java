@@ -3,8 +3,10 @@
  */
 package com.isfs.blekey.util;
 
+import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.security.keystore.StrongBoxUnavailableException;
 import android.util.Log;
 
 import java.security.KeyPair;
@@ -102,20 +104,63 @@ public class AndroidHolderBindingKeyManager {
             );
         }
         
-        // Use StrongBox if available (Android 9+)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        // Detect if running on emulator (case-insensitive fuzzy matching)
+        String fingerprint = Build.FINGERPRINT.toLowerCase();
+        String model = Build.MODEL.toLowerCase();
+        String manufacturer = Build.MANUFACTURER.toLowerCase();
+        String product = Build.PRODUCT.toLowerCase();
+        String hardware = Build.HARDWARE.toLowerCase();
+        //TODO remove emulator weakening
+        boolean isEmulator = fingerprint.contains("generic") ||
+                            fingerprint.contains("unknown") ||
+                            model.contains("sdk") ||
+                            model.contains("emulator") ||
+                            manufacturer.contains("genymotion") ||
+                            product.contains("sdk") ||
+                            product.contains("vbox") ||
+                            hardware.contains("goldfish") ||
+                            hardware.contains("ranchu");
+        
+        // Only try StrongBox on real devices with Android 9+
+        boolean useStrongBox = !isEmulator &&
+                               android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P;
+        
+        if (useStrongBox) {
             try {
                 builder.setIsStrongBoxBacked(true);
-                Log.d(TAG, "Attempting to use StrongBox for master key");
+                keyPairGenerator.initialize(builder.build());
+                KeyPair keyPair = keyPairGenerator.generateKeyPair();
+                Log.i(TAG, "Master key generated successfully using StrongBox");
+                return keyPair.getPrivate();
+            } catch (StrongBoxUnavailableException e) {
+                Log.w(TAG, "StrongBox not available, falling back to TEE", e);
+                // Rebuild without StrongBox
+                builder = new KeyGenParameterSpec.Builder(
+                    MASTER_KEY_ALIAS,
+                    KeyProperties.PURPOSE_SIGN
+                )
+                .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setUserAuthenticationRequired(true);
+                
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    builder.setUserAuthenticationParameters(
+                        0,
+                        KeyProperties.AUTH_BIOMETRIC_STRONG
+                    );
+                }
             } catch (Exception e) {
-                Log.w(TAG, "StrongBox not available, using TEE", e);
+                throw new RuntimeException("Failed to generate master key with StrongBox", e);
             }
+        } else {
+            Log.d(TAG, "Using TEE for master key (debug build or StrongBox not requested)");
         }
         
+        // Generate key with TEE (or after StrongBox fallback)
         keyPairGenerator.initialize(builder.build());
         KeyPair keyPair = keyPairGenerator.generateKeyPair();
         
-        Log.i(TAG, "Master key generated successfully");
+        Log.i(TAG, "Master key generated successfully using TEE");
         return keyPair.getPrivate();
     }
     
@@ -191,6 +236,40 @@ public class AndroidHolderBindingKeyManager {
         } catch (Exception e) {
             Log.e(TAG, "Failed to get master key info", e);
             return "Error retrieving master key info: " + e.getMessage();
+        }
+    }
+    
+    /**
+     * Derives a holder binding key for a credential using the master key.
+     * This is a convenience wrapper around HolderBindingKeyManager.deriveBindingKey()
+     * that automatically retrieves the master key from Android Keystore.
+     *
+     * @param seed The credential seed (32 bytes)
+     * @param salt The salt for key derivation (32 bytes) - not used in current implementation
+     * @param issuerId The issuer identifier (DID or URL)
+     * @param credentialType The credential type
+     * @return Derived holder binding private key
+     * @throws RuntimeException if key derivation fails
+     */
+    public static PrivateKey deriveHolderBindingKey(byte[] seed, byte[] salt,
+                                                    String issuerId, String credentialType) {
+        try {
+            PrivateKey masterKey = getMasterKey();
+            
+            String credentialId = java.util.UUID.randomUUID().toString();
+            
+            KeyPair keyPair = HolderBindingKeyManager.deriveBindingKey(
+                seed,
+                credentialId,
+                issuerId,
+                credentialType,
+                masterKey
+            );
+            
+            return keyPair.getPrivate();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to derive holder binding key", e);
+            throw new RuntimeException("Failed to derive holder binding key", e);
         }
     }
 }

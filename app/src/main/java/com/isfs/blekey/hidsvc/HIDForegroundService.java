@@ -24,7 +24,7 @@ import com.isfs.blekey.MainActivity;
 import com.isfs.blekey.R;
 
 /**
- * Foreground service that keeps the HID GATT server running persistently.
+ * Foreground service that keeps the classic Bluetooth HID device service running persistently.
  * This ensures Bluetooth pairing and connections work reliably without
  * requiring the app to be in the foreground.
  */
@@ -32,11 +32,11 @@ public class HIDForegroundService extends Service {
 
     private static final String TAG = HIDForegroundService.class.getCanonicalName();
     private static final int NOTIFICATION_ID = 1001;
-    private static final String CHANNEL_ID = "fido_ble_hid_channel";
+    private static final String CHANNEL_ID = "bt_hid_channel";
     private static final int MIN_BATTERY_LEVEL = 15;
     private static final int LOW_BATTERY_LEVEL = 10;
 
-    private HIDService hidService;
+    private BTHIDService hidService;
     private final IBinder binder = new LocalBinder();
     private BroadcastReceiver batteryReceiver;
     private boolean lowBatteryMode = false;
@@ -67,28 +67,27 @@ public class HIDForegroundService extends Service {
 
         if (hidService == null) {
             try {
-                Log.d(TAG, "Creating HIDService...");
-                hidService = new HIDService(
-                    this,
-                    true,  // BLUETOOTH_CONNECT permission
-                    true   // BLUETOOTH_ADVERTISE permission
-                );
-                Log.d(TAG, "HIDService created successfully");
+                Log.d(TAG, "Creating BTHIDService...");
+                hidService = new BTHIDService(this);
+                Log.d(TAG, "BTHIDService created successfully");
                 hidService.setDeviceName(getString(R.string.ble_beekey));
-                Log.d(TAG, "Device name set, starting advertising...");
-                hidService.startAdvertising();
-                Log.d(TAG, "HIDService started and advertising");
+                if (!hidService.registerHidDevice()) {
+                    Log.e(TAG, "Failed to register classic Bluetooth HID device");
+                    stopSelf();
+                    return START_NOT_STICKY;
+                }
+                Log.d(TAG, "BTHIDService started and registered");
             } catch (UnsupportedOperationException e) {
-                Log.e(TAG, "Failed to start HIDService: " + e.getMessage(), e);
+                Log.e(TAG, "Failed to start BTHIDService: " + e.getMessage(), e);
                 stopSelf();
                 return START_NOT_STICKY;
             } catch (Exception e) {
-                Log.e(TAG, "Unexpected error starting HIDService: " + e.getMessage(), e);
+                Log.e(TAG, "Unexpected error starting BTHIDService: " + e.getMessage(), e);
                 stopSelf();
                 return START_NOT_STICKY;
             }
         } else {
-            Log.d(TAG, "HIDService already running");
+            Log.d(TAG, "BTHIDService already running");
         }
 
         return START_STICKY;
@@ -99,7 +98,7 @@ public class HIDForegroundService extends Service {
         Log.d(TAG, "onDestroy");
         unregisterBatteryReceiver();
         if (hidService != null) {
-            hidService.stopAdvertising();
+            hidService.unregisterHidDevice();
             hidService = null;
         }
         super.onDestroy();
@@ -118,13 +117,13 @@ public class HIDForegroundService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "FIDO BLE HID Service",
+                "FIDO Classic HID Service",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Keeps FIDO BLE HID service running");
+            channel.setDescription("Keeps FIDO classic Bluetooth HID service running");
             channel.setShowBadge(false);
 
-            NotificationManager manager = getSystemService(NotificationManager.class);
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) {
                 manager.createNotificationChannel(channel);
             }
@@ -144,8 +143,8 @@ public class HIDForegroundService extends Service {
         );
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("FIDO BLE HID Active")
-            .setContentText("Bluetooth HID service is running")
+            .setContentTitle("Passkey BT HID Active")
+            .setContentText("Classic Bluetooth HID service is running")
             .setSmallIcon(R.drawable.bee)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -155,15 +154,15 @@ public class HIDForegroundService extends Service {
     }
 
     /**
-     * Returns the HIDService instance, or null if not initialized.
+     * Returns the BTHIDService instance, or null if not initialized.
      */
     @Nullable
-    public HIDService getHidService() {
+    public BTHIDService getHidService() {
         return hidService;
     }
 
     /**
-     * Checks if the service is running with an active HIDService.
+     * Checks if the service is running with an active BTHIDService.
      */
     public boolean isRunning() {
         return hidService != null;
@@ -237,8 +236,8 @@ public class HIDForegroundService extends Service {
         );
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("FIDO BLE HID Active (Low Battery)")
-            .setContentText("Service running in low battery mode")
+            .setContentTitle("Passkey BT HID Active (Low Battery)")
+            .setContentText("Classic Bluetooth HID service running in low battery mode")
             .setSmallIcon(R.drawable.bee)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -246,7 +245,7 @@ public class HIDForegroundService extends Service {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build();
 
-        NotificationManager manager = getSystemService(NotificationManager.class);
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
             manager.notify(NOTIFICATION_ID, notification);
         }
@@ -257,7 +256,7 @@ public class HIDForegroundService extends Service {
      */
     private void updateNotification() {
         Notification notification = createNotification();
-        NotificationManager manager = getSystemService(NotificationManager.class);
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
             manager.notify(NOTIFICATION_ID, notification);
         }

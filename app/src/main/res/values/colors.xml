@@ -16,4 +16,14 @@
     <color name="device_connected">#24A148</color>
     <color name="device_error">#FF832B</color>
     <color name="device_disconnected">#C1C7CD</color>
+    <color name="colorPrimary">#0F62FE</color>
+    <color name="colorPrimaryDark">#0043CE</color>
+    <color name="colorAccent">#82CFFF</color>
+    
+    <!-- UI Colors -->
+    <color name="background">#FFFFFF</color>
+    <color name="text_primary">#000000</color>
+    <color name="text_secondary">#525252</color>
+    <color name="button_primary">#0F62FE</color>
+    <color name="button_secondary">#E0E0E0</color>
 </resources>

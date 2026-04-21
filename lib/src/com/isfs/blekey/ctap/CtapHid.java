@@ -152,6 +152,54 @@ public class CtapHid {
     }
 
     /**
+     * Updates the transaction for an existing channel ID.
+     * This is used when a new command arrives on an existing CID.
+     * Preserves PIN token, passkey, and other authentication state from the existing transaction.
+     *
+     * @param cid The channel ID to update
+     * @param txn The new transaction to associate with the CID
+     */
+    public static void updateCidTransaction(byte[] cid, CtapTxn txn) {
+        // Get existing transaction to preserve authentication state
+        CtapTxn existingTxn = CtapHid.assignedCids.get(cidKey(cid));
+        logger.info("=== PIN HASH TRACKING: updateCidTransaction called, CID: {}, existing txn: {}, new txn: {}",
+                    cid != null ? java.util.Arrays.toString(cid) : "null",
+                    existingTxn != null ? existingTxn.hashCode() : "null",
+                    txn != null ? txn.hashCode() : "null");
+        
+        if (existingTxn != null) {
+            // Preserve PIN token, passkey, PIN hash, and passkey filename
+            if (existingTxn.getPinAuthTkn() != null) {
+                txn.setPinAuthTkn(existingTxn.getPinAuthTkn());
+                logger.debug("Preserved PIN token ({} bytes) when updating CID transaction",
+                    existingTxn.getPinAuthTkn().length);
+            }
+            if (existingTxn.getPasskey() != null) {
+                txn.setPasskey(existingTxn.getPasskey());
+            }
+            if (existingTxn.getPinHash() != null) {
+                txn.setPinHash(existingTxn.getPinHash());
+                logger.info("=== PIN HASH TRACKING: Preserved PIN hash from existing txn, size: {} bytes",
+                            existingTxn.getPinHash().length);
+            } else {
+                logger.warn("=== PIN HASH TRACKING: Existing txn has NULL PIN hash!");
+            }
+            if (existingTxn.getPasskeyFileName() != null) {
+                txn.setPasskeyFileName(existingTxn.getPasskeyFileName());
+            }
+        } else {
+            logger.warn("=== PIN HASH TRACKING: No existing transaction found for CID!");
+        }
+        CtapHid.assignedCids.put(cidKey(cid), txn);
+        
+        // Verify what was stored
+        CtapTxn storedTxn = CtapHid.assignedCids.get(cidKey(cid));
+        logger.info("=== PIN HASH TRACKING: After put, stored txn: {}, has PIN hash: {}",
+                    storedTxn != null ? storedTxn.hashCode() : "null",
+                    storedTxn != null && storedTxn.getPinHash() != null);
+    }
+
+    /**
      * Processes a sequence frame for an ongoing CTAP HID transaction.
      * Adds the frame to the list of sequence frames and attempts to process
      * the complete message if enough bytes have been received.
@@ -238,6 +286,10 @@ public class CtapHid {
      * @return true if there are more response segments, false otherwise
      */
     private boolean hasMoreResponse() {
+        // Only return true if response is actually ready
+        if(!this.responseReady) {
+            return false;
+        }
         if(this.responseSegment < 0) {
             return true;
         } else if (this.responseSegments != null) {
@@ -279,6 +331,15 @@ public class CtapHid {
      */
     public void processMessage() throws Exception {
         logger.debug("CMD :: " + this.messageType);
+        logger.debug("=== processMessage: messageType={}, byteCount={}", this.messageType, this.byteCount);
+        try {
+            byte[] payload = this.getCtapHidData();
+            logger.debug("Assembled payload ({} bytes): {}", payload.length,
+                payload.length <= 200 ? java.util.Arrays.toString(payload) :
+                java.util.Arrays.toString(java.util.Arrays.copyOf(payload, 200)) + "...");
+        } catch (Exception e) {
+            logger.error("Failed to get payload for logging: {}", e.getMessage());
+        }
         switch(this.messageType)
         {
             case MSG:
@@ -404,11 +465,28 @@ public class CtapHid {
      */
     @SuppressWarnings({ "unchecked" })
     private void cbor(byte[] data) throws IOException {
+        // Calculate hash for duplicate detection
+        int dataHash = java.util.Arrays.hashCode(data);
+        
+        logger.info("=== CBOR REQUEST RECEIVED ===");
+        logger.info("Data size: {} bytes", data.length);
+        logger.info("Data hash: {}", dataHash);
+        logger.info("Full data: {}", java.util.Arrays.toString(data));
+        logger.info("CID: {}", java.util.Arrays.toString(this.cid));
+        
         if(data.length < 1) {
+            logger.error("CBOR data too short");
             this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
         } else {
             int api = (int) data[0];
+            logger.info("API command: {} ({})", api,
+                api == 1 ? "makeCredential" :
+                api == 2 ? "getAssertion" :
+                api == 4 ? "getInfo" :
+                api == 6 ? "clientPIN" :
+                "unknown");
             logger.debug("api : : " + api);
+            
             try {
                 Map<Integer, Object> cbor = null;
                 if (data.length > 1) {
@@ -416,11 +494,14 @@ public class CtapHid {
                     System.arraycopy(data, 1, cborBytes, 0, cborBytes.length);
                     Object cborObj = Cbor.decode(cborBytes);
                     if (!(cborObj instanceof Map)) {
+                        logger.error("CBOR decode failed - not a map");
                         this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
                         return;
                     }
                     cbor = (Map<Integer, Object>) cborObj;
+                    logger.info("CBOR: {}", cbor.toString());
                 }
+                logger.info("=== END CBOR REQUEST ===");
                 buildCborInitAndSequencePackets(
                     AuthenticatorAPI.process(CtapHid.assignedCids.get(cidKey(this.cid)), api, cbor));
             } catch (Exception e) {

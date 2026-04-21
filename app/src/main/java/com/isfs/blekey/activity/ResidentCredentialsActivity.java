@@ -1,258 +1,494 @@
 package com.isfs.blekey.activity;
 
-import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.View.OnClickListener;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.ListView;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import android.widget.Toast;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentActivity;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+import androidx.viewpager2.adapter.FragmentStateAdapter;
+import androidx.viewpager2.widget.ViewPager2;
 
+import com.google.android.material.tabs.TabLayout;
+import com.google.android.material.tabs.TabLayoutMediator;
 import com.isfs.blekey.R;
+import com.isfs.blekey.credential.VerifiableCredential;
 import com.isfs.blekey.data.Passkey;
+
+import android.widget.Toast;
+import android.widget.ImageView;
+
 import java.io.File;
-import java.io.UnsupportedEncodingException;
-import java.util.ArrayList;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Activity for managing resident credentials stored on the device.
- * This activity displays a list of available credentials and allows the user
- * to select and manage them.
+ * Activity for managing resident credentials and digital credentials stored on the device.
+ * This activity displays tabs for switching between FIDO2 passkeys and digital credentials.
  */
 public class ResidentCredentialsActivity extends AppCompatActivity {
     
     private static final String TAG = ResidentCredentialsActivity.class.getCanonicalName();
     
-    // Passkey related fields
     private byte[] passwordHash;
     private String fileName;
     private Passkey passkey;
     
-    /**
-     * Inner class to represent a credential with both display string and raw data
-     */
-    private static class Credential {
-        private final String displayName;
-        private final byte[] rpId;
-        
-        public Credential(String displayName, byte[] rpId) {
-            this.displayName = displayName;
-            this.rpId = rpId;
-        }
-        
-        public String getDisplayName() {
-            return displayName;
-        }
-        
-        public byte[] getRpId() {
-            return rpId;
-        }
-        
-        @Override
-        public String toString() {
-            // This is what will be displayed in the ListView
-            return displayName;
-        }
-    }
-
-    /**
-     * Custom adapter for displaying credentials in the ListView
-     */
-    private class CredentialAdapter extends ArrayAdapter<Credential> {
-        
-        public CredentialAdapter(Context context, List<Credential> credentials) {
-            super(context, android.R.layout.simple_list_item_activated_1, credentials);
-        }
-
-        @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
-            // Get the credential item for this position
-            Credential credential = getItem(position);
-            
-            // Check if an existing view is being reused, otherwise inflate the view
-            if (convertView == null) {
-                convertView = LayoutInflater.from(getContext()).inflate(
-                    android.R.layout.simple_list_item_activated_1, parent, false);
-            }
-            
-            // Lookup view for data population
-            TextView text = (TextView) convertView.findViewById(android.R.id.text1);
-            
-            // Populate the data into the template view using the credential object
-            text.setText(credential.getDisplayName());
-            
-            // Return the completed view to render on screen
-            return convertView;
-        }
-    }
-    
-    private ListView credentialsList;
-    private Button deleteButton;
-    private TextView noCredentialsText;
-    
-    private List<Credential> credentials = new ArrayList<>();
-    private int selectedPosition = -1;
+    private TabLayout tabLayout;
+    private ViewPager2 viewPager;
     
     @Override
-    protected void onCreate(final Bundle savedInstanceState) {
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_resident_credentials);
         
-        // Get passkey file path and password hash from intent
         Intent intent = getIntent();
         if (intent != null) {
             passwordHash = intent.getByteArrayExtra("passkey");
             fileName = intent.getStringExtra("file");
         }
         
-        // Set up back button in toolbar
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
         
-        // Change title to "Manage Credentials"
+        // Set up home button to navigate to MainActivity
+        findViewById(R.id.homeButton).setOnClickListener(view -> {
+            Intent homeIntent = new Intent(this, com.isfs.blekey.MainActivity.class);
+            homeIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(homeIntent);
+            finish();
+        });
+        
         TextView credentialsDescription = findViewById(R.id.credentialsDescription);
         credentialsDescription.setText(R.string.manage_credentials);
         
-        // Initialize UI components
-        credentialsList = findViewById(R.id.credentialsList);
-        deleteButton = findViewById(R.id.deleteButton);
-        noCredentialsText = findViewById(R.id.noCredentialsText);
+        loadPasskey();
         
-        // Show manage button and rename it to "Delete"
-        deleteButton.setText(R.string.delete);
-        deleteButton.setVisibility(View.VISIBLE);
+        tabLayout = findViewById(R.id.tabLayout);
+        viewPager = findViewById(R.id.viewPager);
         
-        // Set up the credentials list
-        loadCredentials();
-        
-        // Set up list item selection listener
-        credentialsList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                selectedPosition = position;
-                deleteButton.setEnabled(true);
-            }
-        });
-        
-        // Set up delete button click listener (previously manage button)
-        deleteButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (selectedPosition >= 0 && selectedPosition < credentials.size()) {
-                    deleteCredential(credentials.get(selectedPosition).getRpId());
-                }
-            }
-        });
+        setupTabs();
     }
-
-    private void updateCredentialsFromPasskeyFile() {
-        credentials.clear();
+    
+    private void loadPasskey() {
         try {
-            // Get the passkey file from the file name
             if (fileName != null && passwordHash != null) {
-                // In Android, we should use the app's data directory
                 File appDataDir = getFilesDir();
                 System.setProperty("FIDO2_HOME", appDataDir.getAbsolutePath());
                 
-                // Find the passkey file
                 File passkeyFile = new File(appDataDir, fileName);
-                
-                // Open the passkey with the password hash
                 passkey = Passkey.openKey(passwordHash, passkeyFile);
                 
-                if (passkey != null) {
-                    // Get resident credentials from the passkey
-                    List<Map<String, byte[]>> resCreds = passkey.getResCreds();
-                    
-                    if (resCreds != null && !resCreds.isEmpty()) {
-                        for (Map<String, byte[]> cred : resCreds) {
-                            try {
-                                String rpIdStr = new String(cred.get("rp.id"), "UTF-8");
-                                credentials.add(new Credential("Credential: " + rpIdStr, cred.get("rp.id")));
-                            } catch (UnsupportedEncodingException e) {
-                                credentials.add(new Credential("Credential: [Encoding Error]", cred.get("rp.id")));
-                            }
-                        }
-                    } else {
-                        Log.i(TAG, "No resident credentials found in passkey");
-                    }
-                } else {
+                if (passkey == null) {
                     Log.e(TAG, "Failed to open passkey");
                     Toast.makeText(this, "Failed to open passkey", Toast.LENGTH_SHORT).show();
                 }
-            } else {
-                Log.e(TAG, "Missing fileName or passwordHash");
-                Toast.makeText(this, "Missing passkey information", Toast.LENGTH_SHORT).show();
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error loading credentials", e);
-            Toast.makeText(this, "Error loading credentials: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            Log.e(TAG, "Error loading passkey", e);
+            Toast.makeText(this, "Error loading passkey: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
-
+    
+    private void setupTabs() {
+        CredentialsPagerAdapter pagerAdapter = new CredentialsPagerAdapter(this);
+        viewPager.setAdapter(pagerAdapter);
+        
+        new TabLayoutMediator(tabLayout, viewPager, (tab, position) -> {
+            switch (position) {
+                case 0:
+                    tab.setText(R.string.tab_passkeys);
+                    break;
+                case 1:
+                    tab.setText(R.string.tab_digital_credentials);
+                    break;
+            }
+        }).attach();
+    }
+    
     /**
-     * Loads the list of credentials from the passkey storage.
+     * ViewPager adapter for managing tabs
      */
-    private void loadCredentials() {
-
-        updateCredentialsFromPasskeyFile();
-
-        // Update the UI based on whether credentials were found
-        if (credentials.isEmpty()) {
-            credentialsList.setVisibility(View.GONE);
-            noCredentialsText.setVisibility(View.VISIBLE);
-            noCredentialsText.setText("No credentials found");
-            deleteButton.setEnabled(false);
-        } else {
-            // Use our custom adapter instead of the standard ArrayAdapter
-            CredentialAdapter adapter = new CredentialAdapter(this, credentials);
-            credentialsList.setAdapter(adapter);
-            credentialsList.setVisibility(View.VISIBLE);
-            noCredentialsText.setVisibility(View.GONE);
-            deleteButton.setEnabled(selectedPosition >= 0);
+    private class CredentialsPagerAdapter extends FragmentStateAdapter {
+        
+        public CredentialsPagerAdapter(@NonNull FragmentActivity fragmentActivity) {
+            super(fragmentActivity);
+        }
+        
+        @NonNull
+        @Override
+        public Fragment createFragment(int position) {
+            switch (position) {
+                case 0:
+                    return new PasskeysFragment();
+                case 1:
+                    return new DigitalCredentialsFragment();
+                default:
+                    return new PasskeysFragment();
+            }
+        }
+        
+        @Override
+        public int getItemCount() {
+            return 2;
         }
     }
     
     /**
-     * Deletes the selected credential from the passkey.
-     *
-     * @param rpId The relying party ID of the credential to delete
+     * Fragment for displaying FIDO2 passkeys
      */
-    private void deleteCredential(byte[] rpId) {
-        if (passkey != null) {
-            try {
-                boolean removed = passkey.removeResidentCredential(rpId);
-                if (removed) {
-                    // Save the passkey back to the file using writeKey method
-                    File appDataDir = getFilesDir();
-                    File passkeyFile = new File(appDataDir, fileName);
-                    Passkey.writeKey(passkey, passwordHash, passkeyFile);
-                    
-                    // Show success message
-                    String rpIdStr = new String(rpId, "UTF-8");
-                    Toast.makeText(this, "Credential deleted: " + rpIdStr, Toast.LENGTH_SHORT).show();
-                    
-                    // Reload the credentials list
-                    loadCredentials();
-                } else {
-                    Toast.makeText(this, "Failed to delete credential", Toast.LENGTH_SHORT).show();
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Error deleting credential", e);
-                Toast.makeText(this, "Error deleting credential: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+    public static class PasskeysFragment extends Fragment {
+        
+        private RecyclerView recyclerView;
+        private View emptyStateView;
+        private PasskeyAdapter adapter;
+        
+        @Override
+        public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+            View view = inflater.inflate(R.layout.passkeys_tab, container, false);
+            
+            recyclerView = view.findViewById(R.id.digitalCredentialsRecyclerView);
+            emptyStateView = view.findViewById(R.id.emptyStateView);
+            SwipeRefreshLayout swipeRefresh = view.findViewById(R.id.swipeRefreshLayout);
+            swipeRefresh.setEnabled(false);
+            
+            recyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
+            
+            loadPasskeys();
+            
+            return view;
+        }
+        
+        private void loadPasskeys() {
+            ResidentCredentialsActivity activity = (ResidentCredentialsActivity) getActivity();
+            if (activity == null || activity.passkey == null) {
+                showEmptyState();
+                return;
             }
-        } else {
-            Toast.makeText(this, "Passkey not available", Toast.LENGTH_SHORT).show();
+            
+            List<Map<String, byte[]>> resCreds = activity.passkey.getResCreds();
+            if (resCreds == null || resCreds.isEmpty()) {
+                showEmptyState();
+                return;
+            }
+            
+            adapter = new PasskeyAdapter(resCreds, activity);
+            recyclerView.setAdapter(adapter);
+            recyclerView.setVisibility(View.VISIBLE);
+            emptyStateView.setVisibility(View.GONE);
+        }
+        
+        private void showEmptyState() {
+            recyclerView.setVisibility(View.GONE);
+            emptyStateView.setVisibility(View.VISIBLE);
+        }
+    }
+    
+    /**
+     * Fragment for displaying digital credentials
+     */
+    public static class DigitalCredentialsFragment extends Fragment {
+        
+        private RecyclerView recyclerView;
+        private View emptyStateView;
+        private DigitalCredentialAdapter adapter;
+        private SwipeRefreshLayout swipeRefresh;
+        
+        @Override
+        public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+            View view = inflater.inflate(R.layout.digital_credentials_tab, container, false);
+            
+            recyclerView = view.findViewById(R.id.digitalCredentialsRecyclerView);
+            emptyStateView = view.findViewById(R.id.emptyStateView);
+            swipeRefresh = view.findViewById(R.id.swipeRefreshLayout);
+            
+            recyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
+            
+            swipeRefresh.setOnRefreshListener(this::refreshCredentials);
+            
+            loadDigitalCredentials();
+            
+            return view;
+        }
+        
+        private void loadDigitalCredentials() {
+            ResidentCredentialsActivity activity = (ResidentCredentialsActivity) getActivity();
+            if (activity == null || activity.passkey == null) {
+                showEmptyState();
+                return;
+            }
+            
+            List<VerifiableCredential> vcs = activity.passkey.getVerifiableCredentials();
+            if (vcs == null || vcs.isEmpty()) {
+                showEmptyState();
+                return;
+            }
+            
+            adapter = new DigitalCredentialAdapter(vcs, activity);
+            recyclerView.setAdapter(adapter);
+            recyclerView.setVisibility(View.VISIBLE);
+            emptyStateView.setVisibility(View.GONE);
+        }
+        
+        private void refreshCredentials() {
+            swipeRefresh.setRefreshing(false);
+            Toast.makeText(getContext(), "Status refresh not yet implemented", Toast.LENGTH_SHORT).show();
+        }
+        
+        private void showEmptyState() {
+            recyclerView.setVisibility(View.GONE);
+            emptyStateView.setVisibility(View.VISIBLE);
+        }
+    }
+    
+    /**
+     * Adapter for FIDO2 passkeys
+     */
+    private static class PasskeyAdapter extends RecyclerView.Adapter<PasskeyAdapter.ViewHolder> {
+        
+        private final List<Map<String, byte[]>> passkeys;
+        private final ResidentCredentialsActivity activity;
+        
+        PasskeyAdapter(List<Map<String, byte[]>> passkeys, ResidentCredentialsActivity activity) {
+            this.passkeys = passkeys;
+            this.activity = activity;
+        }
+        
+        @NonNull
+        @Override
+        public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View view = LayoutInflater.from(parent.getContext())
+                    .inflate(android.R.layout.simple_list_item_2, parent, false);
+            return new ViewHolder(view);
+        }
+        
+        @Override
+        public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
+            Map<String, byte[]> cred = passkeys.get(position);
+            try {
+                String rpId = new String(cred.get("rp.id"), "UTF-8");
+                holder.text1.setText("Credential: " + rpId);
+                holder.text2.setText("Tap to delete");
+                
+                holder.itemView.setOnClickListener(v -> showDeleteDialog(cred.get("rp.id"), rpId));
+            } catch (Exception e) {
+                holder.text1.setText("Credential: [Encoding Error]");
+                holder.text2.setText("");
+            }
+        }
+        
+        @Override
+        public int getItemCount() {
+            return passkeys.size();
+        }
+        
+        private void showDeleteDialog(byte[] rpId, String rpIdStr) {
+            new AlertDialog.Builder(activity)
+                    .setTitle("Delete Credential")
+                    .setMessage("Delete credential for " + rpIdStr + "?")
+                    .setPositiveButton("Delete", (dialog, which) -> deletePasskey(rpId, rpIdStr))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
+        
+        private void deletePasskey(byte[] rpId, String rpIdStr) {
+            if (activity.passkey != null) {
+                try {
+                    boolean removed = activity.passkey.removeResidentCredential(rpId);
+                    if (removed) {
+                        File appDataDir = activity.getFilesDir();
+                        File passkeyFile = new File(appDataDir, activity.fileName);
+                        Passkey.writeKey(activity.passkey, activity.passwordHash, passkeyFile);
+                        
+                        Toast.makeText(activity, "Credential deleted: " + rpIdStr, Toast.LENGTH_SHORT).show();
+                        activity.recreate();
+                    } else {
+                        Toast.makeText(activity, "Failed to delete credential", Toast.LENGTH_SHORT).show();
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error deleting credential", e);
+                    Toast.makeText(activity, "Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
+        
+        static class ViewHolder extends RecyclerView.ViewHolder {
+            TextView text1;
+            TextView text2;
+            
+            ViewHolder(View view) {
+                super(view);
+                text1 = view.findViewById(android.R.id.text1);
+                text2 = view.findViewById(android.R.id.text2);
+            }
+        }
+    }
+    
+    /**
+     * Adapter for digital credentials
+     */
+    private static class DigitalCredentialAdapter extends RecyclerView.Adapter<DigitalCredentialAdapter.ViewHolder> {
+        
+        private final List<VerifiableCredential> credentials;
+        private final ResidentCredentialsActivity activity;
+        private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+                .withZone(ZoneId.systemDefault());
+        
+        DigitalCredentialAdapter(List<VerifiableCredential> credentials, ResidentCredentialsActivity activity) {
+            this.credentials = credentials;
+            this.activity = activity;
+        }
+        
+        @NonNull
+        @Override
+        public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View view = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.digital_credential_list_item, parent, false);
+            return new ViewHolder(view);
+        }
+        
+        @Override
+        public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
+            VerifiableCredential vc = credentials.get(position);
+            
+            String credType = vc.getMetadata().getCredentialType();
+            holder.credentialIcon.setImageResource(getIconForCredentialType(credType));
+            holder.credentialType.setText(credType != null ? credType : "Digital Credential");
+            
+            String issuer = vc.getMetadata().getIssuerDid();
+            if (issuer == null) {
+                issuer = vc.getMetadata().getIssuerUrl();
+            }
+            holder.issuerName.setText(issuer != null ? issuer : "Unknown Issuer");
+            
+            Instant expiresAt = vc.getMetadata().getExpiresAt();
+            if (expiresAt != null) {
+                holder.expirationDate.setText(activity.getString(R.string.expires_format, 
+                        dateFormatter.format(expiresAt)));
+            } else {
+                holder.expirationDate.setText(R.string.never_expires);
+            }
+            
+            holder.statusIndicator.setText(R.string.credential_valid);
+            holder.statusIndicator.setTextColor(0xFF4CAF50);
+            
+            holder.associatedPasskey.setText(activity.getString(R.string.passkey_association, 
+                    activity.fileName != null ? activity.fileName : "Unknown"));
+            
+            holder.itemView.setOnClickListener(v -> showCredentialDetails(vc));
+            holder.itemView.setOnLongClickListener(v -> {
+                showDeleteDialog(vc);
+                return true;
+            });
+        }
+        
+        @Override
+        public int getItemCount() {
+            return credentials.size();
+        }
+        
+        /**
+         * Maps credential type to appropriate icon resource.
+         * @param credentialType The type of credential (e.g., "DriverLicense", "UniversityDegree")
+         * @return Resource ID for the appropriate icon drawable
+         */
+        private int getIconForCredentialType(String credentialType) {
+            if (credentialType == null) {
+                return R.drawable.data_privacy_key;
+            }
+            
+            String type = credentialType.toLowerCase();
+            
+            // Map common credential types to icons
+            if (type.contains("driver") || type.contains("license") || type.contains("dl")) {
+                return R.drawable.data_privacy_key; // TODO: Replace with driver's license icon
+            } else if (type.contains("degree") || type.contains("diploma") || type.contains("education")) {
+                return R.drawable.data_privacy_key; // TODO: Replace with education icon
+            } else if (type.contains("passport")) {
+                return R.drawable.data_privacy_key; // TODO: Replace with passport icon
+            } else if (type.contains("health") || type.contains("medical")) {
+                return R.drawable.data_privacy_key; // TODO: Replace with health icon
+            } else if (type.contains("employee") || type.contains("work")) {
+                return R.drawable.data_privacy_key; // TODO: Replace with employee badge icon
+            } else {
+                // Default icon for unknown credential types
+                return R.drawable.data_privacy_key;
+            }
+        }
+
+        private void showCredentialDetails(VerifiableCredential vc) {
+            StringBuilder details = new StringBuilder();
+            details.append("ID: ").append(vc.getId()).append("\n\n");
+            details.append("Type: ").append(vc.getMetadata().getCredentialType()).append("\n\n");
+            details.append("Issuer: ").append(vc.getMetadata().getIssuerDid()).append("\n\n");
+            details.append("Format: ").append(vc.getFormat().getIdentifier());
+            
+            new AlertDialog.Builder(activity)
+                    .setTitle("Credential Details")
+                    .setMessage(details.toString())
+                    .setPositiveButton("OK", null)
+                    .show();
+        }
+        
+        private void showDeleteDialog(VerifiableCredential vc) {
+            new AlertDialog.Builder(activity)
+                    .setTitle(R.string.delete_credential)
+                    .setMessage("Delete " + vc.getMetadata().getCredentialType() + "?")
+                    .setPositiveButton("Delete", (dialog, which) -> deleteCredential(vc))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
+        
+        private void deleteCredential(VerifiableCredential vc) {
+            if (activity.passkey != null) {
+                try {
+                    boolean removed = activity.passkey.removeVerifiableCredential(vc.getId());
+                    if (removed) {
+                        File appDataDir = activity.getFilesDir();
+                        File passkeyFile = new File(appDataDir, activity.fileName);
+                        Passkey.writeKey(activity.passkey, activity.passwordHash, passkeyFile);
+                        
+                        Toast.makeText(activity, R.string.credential_deleted, Toast.LENGTH_SHORT).show();
+                        activity.recreate();
+                    } else {
+                        Toast.makeText(activity, R.string.credential_delete_failed, Toast.LENGTH_SHORT).show();
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error deleting credential", e);
+                    Toast.makeText(activity, "Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
+        
+        static class ViewHolder extends RecyclerView.ViewHolder {
+            ImageView credentialIcon;
+            TextView credentialType;
+            TextView issuerName;
+            TextView expirationDate;
+            TextView statusIndicator;
+            TextView associatedPasskey;
+            
+            ViewHolder(View view) {
+                super(view);
+                credentialIcon = view.findViewById(R.id.credentialIcon);
+                credentialType = view.findViewById(R.id.credentialType);
+                issuerName = view.findViewById(R.id.issuerName);
+                expirationDate = view.findViewById(R.id.expirationDate);
+                statusIndicator = view.findViewById(R.id.statusIndicator);
+                associatedPasskey = view.findViewById(R.id.associatedPasskey);
+            }
         }
     }
 }

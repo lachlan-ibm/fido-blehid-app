@@ -31,14 +31,33 @@
         android:padding="12dp"
         android:layout_marginBottom="16dp">
 
-        <TextView
-            android:id="@+id/serverStatusTitle"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/ble_server_status"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:id="@+id/serverStatusTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/ble_server_status"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/restartServiceButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_refresh"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Restart HID Service"
+                android:scaleType="fitCenter"
+                android:padding="8dp"
+                android:tint="#FF9800" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/serverStatusText"

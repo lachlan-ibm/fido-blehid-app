@@ -4,9 +4,9 @@
 <resources>
     <string name="app_name">Aye Ble Key</string>
     <string name="requires_bl_enabled">This app requires bluetooth to be enabled.</string>
-    <string name="ble_perip_not_supported">Bluetooth LE Peripheral is not supported on this device. Aye Bee Key will exit.</string>
+    <string name="device_not_supported">%1$s is not supported on this device. Aye Bee Key will exit.</string>
     <string name="not_supported">Not supported</string>
-    <string name="ble_not_permitted">Bluetooth access is not permitted on this device.</string>
+    <string name="bluetooth_not_permitted">Bluetooth %1$s access is not permitted on this device.</string>
     <string name="ok">OK</string>
     <string name="ble_hid">BLE HID</string>
     <string name="ble_beekey">BleKey</string>
@@ -15,7 +15,7 @@
     <string name="update">Update</string>
     <string name="delete">Delete</string>
     <string name="back">Back</string>
-    <string name="resident_credentials">Resident Credentials</string>" 
+    <string name="resident_credentials">Resident Credentials</string>
     <string name="server_start">Start BLE Server</string>
     <string name="server_stop">Stop BLE Server</string>
     <string name="local_devices">Local Devices</string>
@@ -24,19 +24,16 @@
     <string name="device_status_disconnected">Disconnected</string>
     <string name="device_active">HID Active</string>
     <string name="device_discovered">HID Discovered</string>
-    <string name="available_passkeys">Available Passkeys</string>
+    <string name="available_wallets">Available Wallets</string>
     <string name="ble_server_status">BLE Server Status</string>
     <string name="ble_server_status_text">Server is advertising...</string>
     <string name="auto_start_on_boot">Auto-start BLE Advertise</string>
-
     <string name="no_devices_connected">No devices connected</string>
-
-
-    <string name="connect_to_devices">Connect to devices</string>
+    <string name="pair_device">Pair Device (BT/BLE)</string>
     <string name="passkey_connectivity_controls">Passkey Connectivity Controls</string>
     <string name="passkey_data_mgmt">Passkey Data Management</string>
-    <string name="manage_passkeys">Manage Passkeys</string>
-    <string name="unlock_passkey">Unlock Passkey</string>
+    <string name="manage_wallets">Manage Wallets</string>
+    <string name="unlock_wallet">Unlock Wallet</string>
     <string name="prompt_for_password">Enter Secret to Unlock</string>
     <string name="select_a_credential">Select a credential to manage</string>
     <string name="delete_selected_credential">Delete selected credential</string>
@@ -44,42 +41,43 @@
 
     
     <!-- CreatePasskeyActivity strings -->
-    <string name="create_new_passkey">Create New Passkey</string>
-    <string name="passkey_name_description">Enter a name for your passkey. This must only contain letters and numbers.</string>
-    <string name="passkey_name">Passkey Name:</string>
-    <string name="enter_passkey_name">Enter passkey name (alphanumeric only)</string>
+    <string name="passkey_wallet_name_description">Enter a name for your passkey wallet. This must only contain letters and numbers.</string>
+    <string name="passkey_wallet_name">Passkey Wallet Name:</string>
+    <string name="enter_passkey_name">Enter passkey wallet name</string>
     <string name="password">Password:</string>
-    <string name="enter_password">Enter password (minimum 8 characters)</string>
+    <string name="enter_password">Enter password</string>
     <string name="confirm_password">Confirm Password:</string>
     <string name="confirm_password_hint">Confirm password</string>
-    <string name="create_passkey">Create Passkey</string>
-    <string name="passkey_exists_error">A passkey with this name already exists.</string>
+    <string name="create_passkey_wallet">Create Passkey Wallet</string>
+    <string name="passkey_wallet_exists_error">A passkey wallet with this name already exists.</string>
     
     <!-- Validation messages -->
-    <string name="prompt_passkey_name">Passkey name is required</string>
-    <string name="prompt_passkey_help">Passkey name must contain only letters and numbers</string>
+    <string name="prompt_passkey_wallet_name">Passkey wallet name is required</string>
+    <string name="prompt_passkey_wallet_alphanumeric">Passkey wallet name must contain only letters and numbers</string>
     <string name="require_password">Password is required</string>
     <string name="password_length_policy">Password must be at least 8 characters</string>
     <string name="password_verify_policy">Passwords do not match</string>
-    <string name="create_passkey_success">Passkey created successfully</string>
-    <string name="create_passkey_fail">Failed to create passkey</string>
+    <string name="passkey_wallet_created">Passkey wallet created successfully</string>
+    <string name="passkey_wallet_create_failed">Failed to create passkey wallet</string>
     
+    <!-- Unlock messages -->
+    <string name="wallet_selected">Unlocking wallet: </string>
+
     <!-- Delete passkey messages -->
-    <string name="no_passkey_selected">No passkey selected</string>
-    <string name="passkey_deleted_success">Passkey \'%1$s\' deleted successfully</string>
-    <string name="passkey_delete_failed">Failed to delete passkey data</string>
-    <string name="passkey_file_not_found">Passkey data not found</string>
-    <string name="passkey_delete_error">Error deleting passkey: %1$s</string>
-    <string name="credential_unlocked">Credential unlocked</string>
+    <string name="no_passkey_wallet_selected">No passkey wallet selected</string>
+    <string name="passkey_deleted_success">Passkey Wallet \'%1$s\' deleted successfully</string>
+    <string name="passkey_delete_failed">Failed to delete passkey wallet data</string>
+    <string name="passkey_file_not_found">Passkey wallet data not found</string>
+    <string name="passkey_delete_error">Error deleting passkey wallet: %1$s</string>
+    <string name="wallet_unlocked">Wallet unlocked</string>
     <string name="incorrect_password">Incorrect password. Please try again.</string>
     
     <!-- Passkey requirement messages -->
-    <string name="no_passkeys">No Passkeys Found</string>
-    <string name="no_passkeys_on_device">No passkeys found on this device.</string>
-    <string name="create_passkey_first">You need to create a passkey before you can connect to devices.</string>
+    <string name="no_passkey_wallets">No Passkey Wallets</string>
+    <string name="no_passkey_wallets_found">No passkey wallets found on this device</string>
+    <string name="create_passkey_wallet_first">You need to create a passkey wallet before you can connect to devices.</string>
     <string name="cancel">Cancel</string>
     <string name="manage_credentials">Manage Credentials</string>
-    <string name="selected_passkey_indicator">Selected passkey indicator</string>
 
     <!-- ServerActivity UI labels -->
     <string name="device_name_label">Device Name: %1$s</string>
@@ -91,4 +89,48 @@
     <string name="log_hid_enumerated">%1$s: HID service discovered</string>
     <string name="log_hid_active">%1$s: HID ready for input</string>
     <string name="log_device_reconciled">Reconciled %1$s: %2$s</string>
+    
+    <!-- Digital Credentials strings -->
+    <string name="tab_passkeys">Passkeys</string>
+    <string name="tab_digital_credentials">Digital Credentials</string>
+    <string name="no_digital_credentials">No Digital Credentials</string>
+    <string name="digital_credentials_empty_message">Digital credentials will appear here once issued</string>
+    <string name="credential_valid">Valid</string>
+    <string name="credential_expired">Expired</string>
+    <string name="credential_revoked">Revoked</string>
+    <string name="credential_status_unknown">Status Unknown</string>
+    <string name="expires_format">Expires: %1$s</string>
+    <string name="never_expires">Never expires</string>
+    <string name="passkey_association">Passkey: %1$s</string>
+    <string name="refresh_status">Refresh Status</string>
+    <string name="delete_credential">Delete Credential</string>
+    <string name="credential_deleted">Credential deleted successfully</string>
+    <string name="credential_delete_failed">Failed to delete credential</string>
+    
+    <!-- Credential Presentation strings -->
+    <string name="presentation_request">Credential Presentation Request</string>
+    <string name="verifier_label">Verifier</string>
+    <string name="requested_claims_label">Requested Claims</string>
+    <string name="matched_credentials_label">Matched Credentials</string>
+    <string name="no_matching_credentials">No matching credentials found</string>
+    <string name="selective_disclosure_label">Select claims to share</string>
+    <string name="share_credential">Share Credential</string>
+    <string name="presentation_success">Credential shared successfully</string>
+    <string name="presentation_failed">Failed to share credential</string>
+    <string name="authentication_required">Authentication required to share credential</string>
+    
+    <!-- QR Scanner strings -->
+    <string name="scan_credential">Scan Credential</string>
+    <string name="qr_scanner_title">Scan Credential Offer</string>
+    <string name="qr_scanner_instructions">Point camera at QR code</string>
+    <string name="qr_scanner_invalid">Invalid QR code format</string>
+    <string name="qr_scanner_permission_required">Camera permission required</string>
+    <string name="flashlight_on">Flashlight On</string>
+    <string name="flashlight_off">Flashlight Off</string>
+    
+    <!-- Bluetooth Permission Strings -->
+    <string name="bluetooth_permission_required">Bluetooth Permission Required</string>
+    <string name="bluetooth_permission_rationale">This app needs Bluetooth permission to connect to paired devices and provide passkey functionality. Without this permission, the app cannot function.</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="open_settings">Open Settings</string>
 </resources>

@@ -53,9 +53,9 @@ import com.isfs.blekey.activity.ServerActivity;
 import com.isfs.blekey.util.BleUtils;
 
 
-public class HIDService {
+public class BLEHIDService implements IHIDTransport {
 
-    private static final String TAG = HIDService.class.getCanonicalName();
+    private static final String TAG = BLEHIDService.class.getCanonicalName();
 
     /**
      * HID service enumeration state for a device.
@@ -150,13 +150,13 @@ public class HIDService {
     // Dispatch table: maps each characteristic UUID to a function that returns the response bytes
     private Map<UUID, Function<Integer, byte[]>> readHandlers;
 
-    public HIDService(final Context context, boolean bToothConnect, boolean bToothAdvertise) throws UnsupportedOperationException {
+    public BLEHIDService(final Context context, boolean bToothConnect, boolean bToothAdvertise) throws UnsupportedOperationException {
         applicationContext = context.getApplicationContext();
         if(!bToothConnect || !bToothAdvertise) {
             Log.e(TAG, "Bluetooth is not available/permitted");
             if (context instanceof ServerActivity) {
                 ServerActivity sa = (ServerActivity) context;
-                Toast.makeText(sa, sa.getString(R.string.ble_perip_not_supported), Toast.LENGTH_SHORT).show();
+                Toast.makeText(sa, sa.getString(R.string.device_not_supported, "Bluetooth LE Peripheral"), Toast.LENGTH_SHORT).show();
                 sa.finish();
             }
             throw new UnsupportedOperationException("Bluetooth permissions not granted");
@@ -215,6 +215,7 @@ public class HIDService {
                         public void run() {
                             final Set<BluetoothDevice> devices = getDevices();
                             Log.d(TAG, "notifyCharacteristicChanged devices=" + devices.size() + " data=" + Arrays.toString(polled));
+                            Log.i(TAG, "SEND FRAME (" + polled.length + "bytes): " + Arrays.toString(polled));
                             for (final BluetoothDevice device : devices) {
                                 try {
                                     if (gattServer != null && isPermitBToothConnect()) {
@@ -232,7 +233,7 @@ public class HIDService {
         }, 0, 50);
 
         //create the passkey object
-        this.passkey = new HIDPasskey(this);
+        this.passkey = new HIDPasskey((IHIDTransport) this);
         buildReadHandlers();
     }
 
@@ -1014,5 +1015,15 @@ public class HIDService {
         return bluetoothAdapter.isEnabled();
     }
 
+    // IHIDTransport interface implementation
+    @Override
+    public void sendInputReport(byte[] report) {
+        addInputReport(report);
+    }
+
+    @Override
+    public boolean isReady() {
+        return gattServer != null && !bluetoothDevicesMap.isEmpty();
+    }
 
 }

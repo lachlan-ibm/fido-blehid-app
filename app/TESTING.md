@@ -64,6 +64,169 @@ The BleHidTest emulator is suitable for:
 
 For detailed setup instructions, refer to the [Bumble Android documentation](https://google.github.io/bumble/platforms/android.html).
 
+## 3. Classic Bluetooth HID Testing with Python Script
+
+The app now uses **Classic Bluetooth HID profile** (BR/EDR) instead of BLE GATT. This provides better desktop compatibility and eliminates the random address issues that made BLE scanning difficult.
+
+### Key Advantages of Classic BT HID
+
+- **Fixed MAC Address**: No more Resolvable Private Addresses (RPA) that change every 15 minutes
+- **Standard Discovery**: Uses SDP (Service Discovery Protocol) instead of GATT
+- **Easier Terminal Scanning**: Works with standard tools like `hcitool` and `sdptool`
+- **No Pairing Required for Discovery**: Can scan and query services without pairing first
+
+### Prerequisites
+
+1. Linux host with BlueZ
+2. Python 3.7+ installed
+3. Standard Bluetooth tools:
+   - `hcitool` (from bluez package)
+   - `sdptool` (from bluez package)
+   - `bluetoothctl` (from bluez package)
+
+### Permission Setup (Linux)
+
+```bash
+# Add user to bluetooth and input groups (one-time setup)
+sudo usermod -a -G bluetooth,input $USER
+
+# Logout and login for changes to take effect
+# Then verify:
+groups | grep -E 'bluetooth|input'
+```
+
+### Using the Classic BT HID Test Script
+
+The [`test_bt_hid.py`](test_bt_hid.py) script provides comprehensive testing for Classic Bluetooth HID:
+
+```bash
+# Scan for Classic BT devices
+python test_bt_hid.py --scan
+
+# Test specific device by MAC address
+python test_bt_hid.py --mac A8:88:CE:7F:89:32
+
+# Test device by name
+python test_bt_hid.py --name "OPPO CPH2735"
+
+# Test and monitor HID reports
+python test_bt_hid.py --mac A8:88:CE:7F:89:32 --monitor
+
+# Enable debug logging
+python test_bt_hid.py --mac A8:88:CE:7F:89:32 --debug
+```
+
+### What the Script Tests
+
+1. **Device Discovery**: Scans for Classic BT devices using `hcitool scan`
+2. **SDP Service Query**: Queries device services using `sdptool browse`
+3. **HID Service Verification**: Confirms device advertises HID service (0x1124)
+4. **Pairing**: Pairs with device if not already paired
+5. **Connection**: Connects to the HID device
+6. **HID Device Detection**: Finds corresponding `/dev/hidraw*` device
+7. **Descriptor Reading**: Reads and verifies HID report descriptor
+8. **Report Monitoring**: Optionally monitors HID reports (with `--monitor`)
+
+### Expected Output
+
+```
+============================================================
+Classic Bluetooth HID Test Starting
+============================================================
+Scanning for Classic Bluetooth devices...
+This may take 10-15 seconds...
+Found device: OPPO CPH2735 (A8:88:CE:7F:89:32)
+Querying SDP services for A8:88:CE:7F:89:32...
+✓ HID service found on A8:88:CE:7F:89:32
+  Service Name: FIDO HID Device
+Device A8:88:CE:7F:89:32 is already paired
+Connecting to A8:88:CE:7F:89:32...
+✓ Connected successfully
+Looking for HID device in /dev/hidraw*...
+✓ Found HID device: /dev/hidraw2
+Reading HID descriptor from /dev/hidraw2...
+HID descriptor size: 29 bytes
+✓ HID descriptor read successfully (29 bytes)
+✓ SUCCESS: HID descriptor matches expected FIDO CTAP HID descriptor!
+
+============================================================
+TEST RESULT: PASSED ✓
+Classic Bluetooth HID is working correctly!
+============================================================
+```
+
+### Manual Terminal Testing
+
+You can also test Classic BT HID manually using standard Linux tools:
+
+```bash
+# 1. Scan for Classic BT devices (shows fixed MAC addresses)
+hcitool scan
+
+# 2. Query SDP services (no pairing needed)
+sdptool browse A8:88:CE:7F:89:32
+
+# 3. Look for HID service (0x1124)
+sdptool search HID
+
+# 4. Pair and connect using bluetoothctl
+bluetoothctl
+> pair A8:88:CE:7F:89:32
+> trust A8:88:CE:7F:89:32
+> connect A8:88:CE:7F:89:32
+
+# 5. Verify HID device appeared
+ls /dev/hidraw*
+ls /sys/bus/hid/devices/
+
+# 6. Check device info
+cat /sys/class/hidraw/hidraw*/device/uevent
+```
+
+### Troubleshooting Classic BT HID
+
+#### Device Not Found During Scan
+
+**Problem**: `hcitool scan` doesn't find the device
+
+**Solutions**:
+1. Ensure Android app is running and shows "HID Service Active"
+2. Check Bluetooth is enabled on Android device
+3. Try scanning multiple times (Classic BT discovery can take 10-15 seconds)
+4. Verify device is not already connected to another host
+
+#### No HID Service in SDP
+
+**Problem**: `sdptool browse` doesn't show HID service
+
+**Solutions**:
+1. Restart the Android app
+2. Check Android logs: `adb logcat -s BTHIDService:D`
+3. Verify app is using Classic BT mode (not BLE)
+4. Ensure device supports Classic Bluetooth (not BLE-only)
+
+#### Permission Denied
+
+**Problem**: Cannot access `/dev/hidraw*` or Bluetooth adapter
+
+**Solutions**:
+1. Add user to required groups:
+   ```bash
+   sudo usermod -a -G bluetooth,input $USER
+   ```
+2. Logout and login for changes to take effect
+3. Verify group membership: `groups`
+
+#### HID Device Not Appearing
+
+**Problem**: Device connects but no `/dev/hidraw*` appears
+
+**Solutions**:
+1. Check kernel module is loaded: `lsmod | grep uhid`
+2. Verify `/dev/uhid` exists: `ls -la /dev/uhid`
+3. Check BlueZ input.conf: `cat /etc/bluetooth/input.conf`
+4. Look for errors in system logs: `journalctl -xe | grep -i bluetooth`
+
 ## 3. FIDO BLE HID Testing with Python Scripts
 
 This repository includes a comprehensive Python test script for testing the FIDO BLE HID functionality, specifically the authenticatorMakeCredential (HID_CREATE2) command.
@@ -501,6 +664,164 @@ Key fields relevant to BLE HID:
 - [Bumble Bluetooth Library](https://google.github.io/bumble/)
 - [CBOR2 Library](https://pypi.org/project/cbor2/)
 - [BlueZ HOGP plugin source — profiles/input/hog.c](https://git.kernel.org/pub/scm/bluetooth/bluez.git/tree/profiles/input/hog.c)
+
+## 10. Understanding BLE HID Auto-Reconnection Behavior
+
+### Overview: Why Auto-Reconnection Doesn't Work by Default
+
+**The Issue:**
+BLE HID devices (like this app) work perfectly during initial pairing, but fail to automatically reconnect after:
+- Bluetooth radio sleep/wake cycles  
+- Device reboots
+- Connection loss
+
+**This is NOT a bug in the app** - it's a deliberate policy decision by operating system Bluetooth stacks.
+
+### Why Audio Devices Auto-Reconnect But HID Devices Don't
+
+**Key Discovery:** Operating systems maintain a **whitelist of Bluetooth profiles** that should auto-reconnect. Audio profiles (A2DP, HFP, HSP) are in this whitelist by default, but **HID over GATT (HOGP) is NOT**.
+
+From BlueZ (Linux Bluetooth stack) `/etc/bluetooth/main.conf`:
+```conf
+[Policy]
+# Default reconnect whitelist includes audio profiles:
+ReconnectUUIDs=00001112-0000-1000-8000-00805f9b34fb,  # Headset Audio
+               0000111f-0000-1000-8000-00805f9b34fb,  # Handsfree Audio  
+               0000110a-0000-1000-8000-00805f9b34fb,  # Audio Source (A2DP)
+               0000110b-0000-1000-8000-00805f9b34fb   # Audio Sink (A2DP)
+# Notice: 00001812 (HID over GATT) is MISSING
+```
+
+**Why HID is excluded:**
+1. **Security**: HID devices (keyboards) can inject keystrokes - auto-reconnection without user awareness could be a security risk
+2. **User Experience**: Audio devices are expected to "just work", while input devices may be more intentionally managed  
+3. **Historical Reasons**: Classic Bluetooth HID had different reconnection behavior than BLE HOGP
+
+### Solution: Enable Auto-Reconnection (Linux/BlueZ)
+
+#### Automated Setup (Recommended)
+
+Use the provided script:
+
+```bash
+cd app/host-utils
+chmod +x linux-auto-reconnect-bt-hogp.sh
+./linux-auto-reconnect-bt-hogp.sh
+```
+
+This configures BlueZ to auto-reconnect to HID devices with 7 attempts at increasing intervals (1s, 2s, 4s, 8s, 16s, 32s, 64s).
+
+#### Manual Configuration
+
+1. Edit BlueZ configuration:
+   ```bash
+   sudo nano /etc/bluetooth/main.conf
+   ```
+
+2. Add HID UUID (0x1812) to ReconnectUUIDs:
+   ```conf
+   [Policy]
+   ReconnectUUIDs=00001112-0000-1000-8000-00805f9b34fb,0000111f-0000-1000-8000-00805f9b34fb,0000110a-0000-1000-8000-00805f9b34fb,0000110b-0000-1000-8000-00805f9b34fb,00001812-0000-1000-8000-00805f9b34fb
+   ReconnectAttempts=7
+   ReconnectIntervals=1,2,4,8,16,32,64
+   ```
+
+3. Restart Bluetooth:
+   ```bash
+   sudo systemctl restart bluetooth
+   ```
+
+#### Verification
+
+Test auto-reconnection:
+
+```bash
+# Watch logs
+journalctl -u bluetooth -f
+
+# In another terminal: turn Bluetooth off, wait 10s, turn back on
+# You should see reconnection attempts in logs
+```
+
+Ensure device is trusted:
+```bash
+bluetoothctl info XX:XX:XX:XX:XX:XX  # Check "Trusted: yes"
+bluetoothctl trust XX:XX:XX:XX:XX:XX  # If not trusted
+```
+
+### Platform-Specific Behavior
+
+#### Linux (BlueZ)
+- **Status**: ✅ Fully solvable with configuration
+- **Solution**: Use `linux-auto-reconnect-bt-hogp.sh` script  
+- **Result**: Auto-reconnects within 1-64 seconds
+
+#### Windows  
+- **Status**: ⚠️ Requires manual reconnection
+- **Reason**: Microsoft security policy - HID devices don't auto-reconnect
+- **Workaround**: Settings → Bluetooth → Click device → Connect
+
+#### macOS
+- **Status**: ⚠️ Generally works but inconsistent
+- **Note**: Better than Windows but not guaranteed
+
+### Technical Details
+
+#### Why Your App Code Is Correct
+
+Your Android app does everything correctly:
+- ✅ Continuous advertising via [`HIDBTAdvertiser`](../app/src/main/java/com/isfs/blekey/hidsvc/HIDBTAdvertiser.java:57)
+- ✅ Proper HID service (UUID 0x1812) setup
+- ✅ `gattServer.connect(device, true)` whitelists bonded devices
+- ✅ Foreground service keeps it running
+- ✅ Boot receiver restarts on Bluetooth enable
+
+**BLE Architecture Constraint**: Peripherals (your app) CANNOT initiate connections - only centrals (laptops) can. The `autoConnect=true` parameter means "accept connections when central initiates", NOT "initiate connection to central".
+
+The limitation is on the host (laptop) side, not your app.
+
+#### Alternative: "Dummy" Audio Profile?
+
+**Question**: Can you add an audio profile so it auto-reconnects?
+
+**Answer**: Not recommended because:
+- Profile conflicts (OS tries to use as audio device)
+- Resource overhead (full A2DP implementation)
+- User confusion (appears as both HID and audio)
+- Violates Bluetooth SIG guidelines
+- Won't guarantee reconnection anyway
+
+**Better**: Add Battery Service (0x180F) - legitimate for HID devices, though also won't guarantee auto-reconnect without OS configuration.
+
+### Troubleshooting
+
+#### Device Not Auto-Reconnecting
+
+1. Verify configuration:
+   ```bash
+   grep -A 3 "\[Policy\]" /etc/bluetooth/main.conf
+   ```
+
+2. Check bonded and trusted:
+   ```bash
+   bluetoothctl info XX:XX:XX:XX:XX:XX
+   ```
+
+3. Mark as trusted:
+   ```bash
+   bluetoothctl trust XX:XX:XX:XX:XX:XX
+   ```
+
+4. Check BlueZ version (needs 5.x+):
+   ```bash
+   bluetoothd --version
+   ```
+
+For detailed technical analysis, see [`docs/BLE_HID_RECONNECTION_SOLUTION.md`](../docs/BLE_HID_RECONNECTION_SOLUTION.md).
+
+## 11. Troubleshooting HID Device Service Cache Issues
+
+### Problem: HID Device Not Appearing After App Restart
 
 ## 10. Troubleshooting HID Device Reconnection Issues
 
@@ -1164,4 +1485,716 @@ Ensure app is configured correctly:
    - TX Power: `ADVERTISE_TX_POWER_HIGH`
    - Connectable: `true`
    - Service UUID: `0x1812` (HID over GATT)
+
+## 12. Mock OIDC Test Harness for Digital Credentials
+
+The [`test-utils/`](test-utils/) directory contains mock OIDC4VCI issuer and OpenID4VP verifier servers for end-to-end testing of the digital credentials feature without requiring real issuer/verifier infrastructure.
+
+### Overview
+
+The mock servers implement simplified versions of the OIDC4VCI and OpenID4VP protocols, allowing the app to test the complete credential lifecycle:
+
+1. Credential issuance from mock OIDC4VCI issuer
+2. Credential storage in passkey files
+3. Credential presentation to mock OpenID4VP verifier
+
+### Components
+
+#### Mock OIDC4VCI Issuer ([`mock-oidc4vci-issuer.sh`](test-utils/mock-oidc4vci-issuer.sh))
+
+A Python-based HTTP server implementing:
+- **Metadata endpoint**: `/.well-known/openid-credential-issuer`
+- **Token endpoint**: `/token` (pre-authorized code flow)
+- **Credential endpoint**: `/credential` (JWT VC issuance)
+
+**Default Port**: 8080
+
+**Features**:
+- Issues JWT-format verifiable credentials
+- Supports pre-authorized code grant type
+- Generates mock University Degree credentials
+- Returns c_nonce for proof-of-possession
+
+#### Mock OpenID4VP Verifier ([`mock-openid4vp-verifier.sh`](test-utils/mock-openid4vp-verifier.sh))
+
+A Python-based HTTP server implementing:
+- **Request endpoint**: `/request/<session-id>` (presentation request)
+- **Response endpoint**: `/response` (presentation submission)
+
+**Default Port**: 8081
+
+**Features**:
+- Generates presentation requests with presentation definitions
+- Accepts VP token submissions
+- Validates presentation format
+- Tracks session state
+
+### Management Scripts
+
+#### Start Mock Issuer
+
+```bash
+./test-utils/start-mock-issuer.sh [port]
+```
+
+- Creates PID file at `/tmp/mock-issuer.pid`
+- Logs output to `/tmp/mock-issuer.log`
+- Waits for server to be ready before returning
+
+#### Start Mock Verifier
+
+```bash
+./test-utils/start-mock-verifier.sh [port]
+```
+
+- Creates PID file at `/tmp/mock-verifier.pid`
+- Logs output to `/tmp/mock-verifier.log`
+- Waits for server to be ready before returning
+
+#### Stop All Mock Servers
+
+```bash
+./test-utils/stop-mock-servers.sh
+```
+
+- Kills processes listed in PID files
+- Removes PID files
+- Safe to run even if servers aren't running
+
+### Usage in End-to-End Tests
+
+The mock servers are automatically managed by [`test-e2e-complete-flow.sh`](test-e2e-complete-flow.sh):
+
+```bash
+# Run complete E2E test with mock servers
+./test-e2e-complete-flow.sh [device-id]
+
+# Example with specific device
+./test-e2e-complete-flow.sh emulator-5554
+```
+
+The test script:
+1. Starts mock issuer on port 8080
+2. Starts mock verifier on port 8081
+3. Runs complete credential lifecycle tests
+4. Automatically stops servers on exit (via trap)
+
+### Android Emulator Access
+
+Mock servers run on `localhost` but are accessible to Android emulator via `10.0.2.2`:
+
+- **Issuer URL**: `http://10.0.2.2:8080`
+- **Verifier URL**: `http://10.0.2.2:8081`
+
+### Manual Testing
+
+Start servers manually for interactive testing:
+
+```bash
+# Terminal 1: Start issuer
+cd app
+./test-utils/mock-oidc4vci-issuer.sh 8080
+
+# Terminal 2: Start verifier
+cd app
+./test-utils/mock-openid4vp-verifier.sh 8081
+
+# Terminal 3: Test endpoints
+curl http://localhost:8080/.well-known/openid-credential-issuer
+curl http://localhost:8081/request/test-session
+```
+
+### Dependencies
+
+Mock servers require:
+- **Python 3.7+**
+- Standard library modules only (no external packages)
+
+### Credential Format
+
+Mock issuer generates JWT credentials:
+
+```json
+{
+  "iss": "http://localhost:8080",
+  "sub": "did:example:holder123",
+  "iat": 1234567890,
+  "exp": 1266103890,
+  "vc": {
+    "@context": ["https://www.w3.org/2018/credentials/v1"],
+    "type": ["VerifiableCredential", "UniversityDegree"],
+    "credentialSubject": {
+      "id": "did:example:holder123",
+      "degree": {
+        "type": "BachelorDegree",
+        "name": "Bachelor of Science",
+        "university": "Example University"
+      },
+      "name": "Alice Smith",
+      "graduationDate": "2023-06-15"
+    }
+  }
+}
+```
+
+### Troubleshooting
+
+#### Server won't start
+
+Check if port is already in use:
+```bash
+lsof -i :8080
+lsof -i :8081
+```
+
+#### App can't reach server
+
+1. Verify server is running: `curl http://localhost:8080/.well-known/openid-credential-issuer`
+2. Ensure using `10.0.2.2` for emulator (not `localhost`)
+3. Check firewall settings
+
+#### View server logs
+
+```bash
+tail -f /tmp/mock-issuer.log
+tail -f /tmp/mock-verifier.log
+```
+
+### Limitations
+
+These are **test-only** mock servers:
+
+- ❌ No real cryptographic signing (mock signatures only)
+- ❌ No signature verification
+- ❌ No DID resolution
+- ❌ No credential status checking
+- ❌ No selective disclosure support
+- ❌ No authorization code flow (only pre-authorized)
+- ❌ No HTTPS/TLS
+- ❌ No authentication/authorization
+
+**Never use these servers in production!**
+
+### References
+
+- [OpenID4VCI Specification](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
+- [OpenID4VP Specification](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html)
+- [W3C Verifiable Credentials](https://www.w3.org/TR/vc-data-model/)
+- [Presentation Exchange](https://identity.foundation/presentation-exchange/)
+
+## 13. Android Emulator Biometric Authentication Setup
+
+This section explains how to set up and use biometric authentication (fingerprint) in the Android emulator for testing the digital credentials feature.
+
+### Overview
+
+The Android emulator supports biometric authentication simulation, allowing you to test biometric-protected features without needing physical hardware. This is the **recommended approach** for development and testing, as it maintains the security model while enabling testing on emulated devices.
+
+### Prerequisites
+
+- Android Emulator with API level 23 (Android 6.0) or higher
+- ADB (Android Debug Bridge) installed and accessible from command line
+- Emulator with fingerprint sensor support (most modern emulator images)
+
+### Quick Start
+
+#### One-Time Setup
+```bash
+# On emulator: Settings → Security → Screen lock → Set PIN/Pattern
+# On emulator: Settings → Security → Fingerprint → Add fingerprint
+# In terminal, run 5 times:
+adb -e emu finger touch 1
+```
+
+#### Daily Usage
+```bash
+# When biometric prompt appears in your app:
+adb -e emu finger touch 1
+
+# Or use the helper script:
+./app/host-utils/emulator-fingerprint-touch.sh 1
+```
+
+### Step-by-Step Setup
+
+#### 1. Create or Start an Emulator with Fingerprint Support
+
+When creating a new emulator in Android Studio:
+- Choose a device definition that supports fingerprint (e.g., Pixel 3, Pixel 4, Pixel 5)
+- Select API level 30 (Android 11) or higher for best compatibility
+- Ensure "Hardware - Fingerprint" is enabled in the AVD configuration
+
+**Recommended Emulator Configuration:**
+- Device: Pixel 3 or newer
+- API Level: 30+ (Android R/11+)
+- Target: Google APIs (includes Play Store)
+
+#### 2. Enable Screen Lock on the Emulator
+
+Before you can add fingerprints, you must set up a screen lock:
+
+1. Open the emulator
+2. Go to **Settings** → **Security** (or **Settings** → **Security & location**)
+3. Tap **Screen lock**
+4. Choose one of the following options:
+   - **Pattern** (recommended for testing)
+   - **PIN**
+   - **Password**
+5. Follow the prompts to set up your chosen screen lock method
+
+#### 3. Enroll a Fingerprint
+
+1. In Settings, go to **Security** → **Fingerprint**
+2. Enter your screen lock credentials (pattern/PIN/password)
+3. Tap **Add fingerprint** or **+ Add fingerprint**
+4. When prompted to "Place your finger on the sensor", **DO NOT touch the emulator**
+5. Instead, use the ADB command (see next step)
+
+#### 4. Simulate Fingerprint Touch via ADB
+
+Open a terminal/command prompt and run:
+
+```bash
+adb -e emu finger touch <finger_id>
+```
+
+Where `<finger_id>` is a number from 1 to 10.
+
+**Example:**
+```bash
+adb -e emu finger touch 1
+```
+
+**Important Notes:**
+- You may need to run this command **multiple times** (typically 3-5 times) to complete the fingerprint enrollment
+- The emulator will show progress as you "scan" the fingerprint
+- Use the same finger ID consistently during enrollment
+- After enrollment is complete, you'll see "Fingerprint added" message
+
+#### 5. Test Fingerprint Authentication
+
+Once enrolled, you can test fingerprint authentication in your app:
+
+1. Launch the app and trigger a biometric authentication prompt
+2. When the biometric prompt appears, run the ADB command:
+   ```bash
+   adb -e emu finger touch 1
+   ```
+3. The authentication should succeed immediately
+
+### Usage in Development
+
+#### For Testing Digital Credentials Master Key Creation
+
+When creating a master key for issued credentials:
+
+1. Start the credential issuance flow in the app
+2. When the biometric prompt appears, run:
+   ```bash
+   adb -e emu finger touch 1
+   ```
+3. The master key will be created with biometric protection
+
+#### For Testing Credential Presentation
+
+When presenting credentials that require biometric authentication:
+
+1. Initiate the credential presentation
+2. When prompted for biometric authentication, run:
+   ```bash
+   adb -e emu finger touch 1
+   ```
+3. The credential will be unlocked and presented
+
+### Helper Script
+
+A helper script is provided at `app/host-utils/emulator-fingerprint-touch.sh`:
+
+```bash
+# Single touch (default finger ID 1)
+./app/host-utils/emulator-fingerprint-touch.sh
+
+# Specific finger ID
+./app/host-utils/emulator-fingerprint-touch.sh 2
+
+# Multiple touches for enrollment
+./app/host-utils/emulator-fingerprint-touch.sh 1 5
+```
+
+### Troubleshooting
+
+#### Issue: "adb: command not found"
+
+**Solution:** Add Android SDK platform-tools to your PATH:
+```bash
+export PATH=$PATH:$ANDROID_HOME/platform-tools
+```
+
+#### Issue: Fingerprint enrollment not progressing
+
+**Solution:** 
+- Run the `adb -e emu finger touch 1` command multiple times (3-5 times)
+- Ensure you're using `-e` flag for emulator (not `-d` for device)
+- Check that the emulator is running and visible to ADB: `adb devices`
+
+#### Issue: "Fingerprint not recognized" during authentication
+
+**Solution:**
+- Use the same finger ID that you used during enrollment
+- Ensure the emulator has focus when running the command
+- Try re-enrolling the fingerprint
+
+#### Issue: Biometric prompt doesn't appear
+
+**Solution:**
+- Verify that a fingerprint is enrolled in Settings → Security → Fingerprint
+- Check that screen lock is enabled
+- Ensure your app has the correct biometric permissions in AndroidManifest.xml
+- Verify API level is 23 or higher
+
+### Advanced Usage
+
+#### Multiple Fingerprints
+
+You can enroll multiple fingerprints using different finger IDs:
+
+```bash
+# Enroll first fingerprint (run 3-5 times)
+adb -e emu finger touch 1
+
+# Enroll second fingerprint (run 3-5 times)
+adb -e emu finger touch 2
+```
+
+During authentication, you can use any enrolled finger ID:
+```bash
+adb -e emu finger touch 1  # or
+adb -e emu finger touch 2
+```
+
+#### Testing Biometric Failure Scenarios
+
+To test authentication failures:
+
+1. Use an unenrolled finger ID:
+   ```bash
+   adb -e emu finger touch 9  # If only finger 1 is enrolled
+   ```
+
+2. Cancel the biometric prompt by pressing the back button or tapping outside the dialog
+
+3. Test lockout scenarios by failing authentication multiple times
+
+### Best Practices
+
+1. **Always use emulator biometric simulation** instead of disabling biometric requirements in debug builds
+2. **Document the finger ID** you use for testing (e.g., always use finger ID 1)
+3. **Create helper scripts** for common biometric operations
+4. **Test both success and failure scenarios** to ensure proper error handling
+5. **Keep biometric requirements enabled** even in debug builds to catch integration issues early
+
+### References
+
+- [Android Biometric Authentication Documentation](https://developer.android.com/identity/sign-in/biometric-auth)
+- [Android Emulator Console Commands](https://developer.android.com/studio/run/emulator-console)
+- [Testing Biometric Authentication](https://developer.android.com/training/sign-in/biometric-auth#test)
    - Device name in scan response
+
+## 14. QR Scanner Testing
+
+### Overview
+
+The QR Scanner feature allows users to scan QR codes containing credential offers (`openid-credential-offer://`) or presentation requests (`openid4vp://`) directly within the app, eliminating the need for third-party QR scanner apps.
+
+### Test Components
+
+1. **Unit Tests**: `app/src/test/java/com/isfs/blekey/activity/QRScannerActivityTest.java`
+   - URI validation logic
+   - Result code constants
+   - Intent extra keys
+
+2. **Integration Tests**: `app/test-qr-scanner.sh`
+   - Automated tests for scanner functionality
+   - Manual test instructions
+
+### Running Unit Tests
+
+```bash
+# Run QR Scanner unit tests
+cd lib
+./run_tests.sh com.isfs.blekey.activity.QRScannerActivityTest
+
+# Or run all app tests
+cd app
+./gradlew test
+```
+
+### Running Integration Tests
+
+```bash
+# Run automated integration tests
+cd app
+./test-qr-scanner.sh
+```
+
+The integration test script will:
+- Check prerequisites (ADB, device connection, app installation)
+- Grant camera permission
+- Run 10 automated tests covering:
+  - Scanner launch
+  - Valid/invalid URI handling
+  - Camera permission checks
+  - Navigation (back button)
+  - Activity lifecycle
+  - Debounce behavior
+  - Long URI handling
+  - Flashlight toggle
+- Display manual test instructions
+
+### Manual Testing Procedures
+
+#### 1. Basic QR Code Scanning
+
+**Prerequisites:**
+- Physical Android device with camera
+- QR code generator (e.g., `qrencode`)
+
+**Steps:**
+1. Generate a test QR code:
+   ```bash
+   echo 'openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.com%22%7D' | qrencode -t UTF8
+   ```
+
+2. Launch the app and tap "Scan QR Code" button
+
+3. Point camera at the QR code
+
+4. **Expected Results:**
+   - QR code is detected within 2 seconds
+   - Vibration feedback occurs
+   - Beep sound plays
+   - Scanner closes
+   - Credential offer flow begins
+
+#### 2. Invalid QR Code Handling
+
+**Steps:**
+1. Generate an invalid QR code (HTTP URL):
+   ```bash
+   echo 'http://example.com/credential' | qrencode -t UTF8
+   ```
+
+2. Launch scanner and scan the invalid QR code
+
+3. **Expected Results:**
+   - Error toast displayed: "Invalid QR code format"
+   - Double vibration (error feedback)
+   - Scanner remains active for retry
+
+#### 3. Flashlight Toggle
+
+**Steps:**
+1. Launch QR scanner
+2. Tap the flashlight button (bottom-right corner)
+3. Verify flashlight turns on
+4. Tap again
+5. Verify flashlight turns off
+
+**Expected Results:**
+- Flashlight toggles on/off smoothly
+- Button content description updates
+- Works in low-light conditions
+
+#### 4. Camera Permission Flow
+
+**Steps:**
+1. Uninstall and reinstall the app
+2. Tap "Scan QR Code" button
+3. **Expected Results:**
+   - Permission dialog appears
+   - After granting, scanner launches immediately
+   - After denying, toast message explains permission is required
+
+#### 5. Navigation and Lifecycle
+
+**Test Back Button:**
+1. Launch scanner
+2. Press back button
+3. **Expected**: Returns to MainActivity
+
+**Test Home Button:**
+1. Launch scanner
+2. Press home button
+3. Return to app
+4. **Expected**: Scanner resumes with camera active
+
+**Test App Switching:**
+1. Launch scanner
+2. Switch to another app
+3. Return to scanner
+4. **Expected**: Camera resumes, flashlight state preserved
+
+#### 6. Low Light Performance
+
+**Steps:**
+1. Test scanning in various lighting conditions:
+   - Bright indoor light
+   - Dim indoor light
+   - Outdoor daylight
+   - Near darkness (with flashlight)
+
+2. **Expected Results:**
+   - Scanner works in all conditions
+   - Flashlight improves detection in low light
+   - QR codes detected within 2-3 seconds
+
+#### 7. Multiple Scan Debounce
+
+**Steps:**
+1. Launch scanner
+2. Quickly scan the same QR code multiple times
+3. **Expected**: Only first scan is processed, subsequent scans ignored
+
+#### 8. Long URI Handling
+
+**Steps:**
+1. Generate a QR code with very long URI (>1000 characters)
+2. Scan the QR code
+3. **Expected**: 
+   - URI is processed without crash
+   - Flow continues normally
+
+### Testing with Real Credential Offers
+
+#### Using Mock Issuer
+
+1. Start the mock issuer:
+   ```bash
+   cd app/test-utils
+   ./test-real-device-issuance.sh
+   ```
+
+2. The script will:
+   - Start a mock OIDC4VCI issuer
+   - Generate a credential offer
+   - Display a QR code
+
+3. Use the QR scanner in the app to scan the displayed QR code
+
+4. Complete the credential issuance flow
+
+#### Using Mock Verifier
+
+1. Start the mock verifier:
+   ```bash
+   cd app/test-utils
+   ./start-mock-verifier.sh
+   ```
+
+2. Generate a presentation request QR code
+
+3. Scan with the app's QR scanner
+
+4. Complete the credential presentation flow
+
+### Troubleshooting
+
+#### Scanner Won't Launch
+
+**Symptoms:**
+- Tapping "Scan QR Code" button does nothing
+- App crashes when launching scanner
+
+**Solutions:**
+1. Check camera permission:
+   ```bash
+   adb shell dumpsys package com.isfs.blekey | grep android.permission.CAMERA
+   ```
+
+2. Grant permission manually:
+   ```bash
+   adb shell pm grant com.isfs.blekey android.permission.CAMERA
+   ```
+
+3. Check logcat for errors:
+   ```bash
+   adb logcat | grep -E '(QRScannerActivity|CameraPermission)'
+   ```
+
+#### QR Code Not Detected
+
+**Symptoms:**
+- Camera preview shows but QR code not detected
+- Scanner times out
+
+**Solutions:**
+1. Ensure QR code is clear and well-lit
+2. Try using flashlight
+3. Check QR code format (must be QR_CODE, not other barcode types)
+4. Verify URI scheme is correct (`openid-credential-offer://` or `openid4vp://`)
+
+#### Camera Preview Black/Frozen
+
+**Symptoms:**
+- Camera preview is black or frozen
+- Scanner appears to hang
+
+**Solutions:**
+1. Close and reopen scanner
+2. Restart app
+3. Check if another app is using camera
+4. Verify camera hardware works in other apps
+
+#### Invalid QR Code Not Showing Error
+
+**Symptoms:**
+- Scanning invalid QR code doesn't show error
+- Scanner closes unexpectedly
+
+**Solutions:**
+1. Check logcat for validation errors
+2. Verify URI validation logic in QRScannerActivity
+3. Test with known valid URI first
+
+### Performance Benchmarks
+
+Expected performance metrics:
+
+| Metric | Target | Acceptable |
+|--------|--------|------------|
+| Scanner launch time | < 1 second | < 2 seconds |
+| QR detection time | < 2 seconds | < 3 seconds |
+| Camera preview FPS | 30 FPS | 24 FPS |
+| Battery usage | < 5% per minute | < 10% per minute |
+| Memory usage | < 50 MB | < 100 MB |
+
+### Test Coverage
+
+The QR Scanner tests cover:
+
+- ✅ URI validation (valid/invalid schemes)
+- ✅ Camera permission handling
+- ✅ Activity lifecycle (onCreate, onResume, onPause, onDestroy)
+- ✅ Navigation (back button, toolbar back)
+- ✅ Flashlight toggle
+- ✅ Success/error feedback (vibration, sound, toast)
+- ✅ Debounce behavior
+- ✅ Long URI handling
+- ✅ Edge cases (null, empty, malformed URIs)
+
+### Known Limitations
+
+1. **Automated Camera Testing**: Camera functionality requires physical device testing; automated tests use deep links to simulate scans
+
+2. **QR Code Generation**: Integration tests don't generate actual QR code images; manual testing required for end-to-end validation
+
+3. **Lighting Conditions**: Automated tests can't verify performance in various lighting conditions
+
+4. **Flashlight Hardware**: Tests assume flashlight is available; gracefully degrades if not present
+
+### References
+
+- ZXing Library: https://github.com/zxing/zxing
+- ZXing Android Embedded: https://github.com/journeyapps/zxing-android-embedded
+- OpenID4VCI Specification: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html
+- Android Camera Permissions: https://developer.android.com/training/permissions/requesting

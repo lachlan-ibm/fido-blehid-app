@@ -7,3 +7,4 @@ gradle*
 gradlew*
 .vscode
 local.properties
+.bob

@@ -21,55 +21,85 @@
         android:orientation="vertical"
         android:padding="24dp">
 
+    <!-- App Name Header -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/app_name"
+        android:textStyle="bold"
+        android:textColor="@color/ibm_blue"
+        android:textSize="28sp"
+        android:gravity="center"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="32dp"
+        android:letterSpacing="0.02" />
+
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="@color/cool_gray_30"
-        android:layout_marginBottom="16dp" />
+        android:layout_marginBottom="24dp" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/passkey_connectivity_controls"
-        android:textStyle="bold"
-        android:textColor="@color/ibm_black"
-        android:textSize="16sp"
-        android:layout_marginBottom="12dp" />
-
+    <!-- Connect to Devices -->
     <Button
         android:id="@+id/serverButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/connect_to_devices"
+        android:minHeight="64dp"
+        android:text="@string/pair_device"
         android:backgroundTint="@color/ibm_blue"
         android:textColor="@color/ibm_white"
-        android:paddingVertical="12dp"
-        android:paddingHorizontal="16dp"
-        android:layout_marginBottom="32dp"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:layout_marginBottom="16dp"
         android:drawableStart="@drawable/device_pairing"
-        android:drawablePadding="12dp"
+        android:drawablePadding="16dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
         style="@android:style/Widget.Material.Button" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/passkey_data_mgmt"
-        android:textStyle="bold"
-        android:textColor="@color/ibm_black"
-        android:textSize="16sp"
-        android:layout_marginBottom="12dp" />
-
+    <!-- Manage Passkeys -->
     <Button
         android:id="@+id/manageButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/manage_passkeys"
+        android:minHeight="64dp"
+        android:text="@string/manage_wallets"
         android:backgroundTint="@color/cyan_30"
         android:textColor="@color/ibm_black"
-        android:paddingVertical="12dp"
-        android:paddingHorizontal="16dp"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:layout_marginBottom="16dp"
         android:drawableStart="@drawable/touch_id"
-        android:drawablePadding="12dp"
+        android:drawablePadding="16dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
+        style="@android:style/Widget.Material.Button" />
+
+    <!-- Scan QR Code -->
+    <Button
+        android:id="@+id/scanQrButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="64dp"
+        android:text="@string/scan_credential"
+        android:backgroundTint="@color/cyan_30"
+        android:textColor="@color/ibm_black"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:paddingVertical="20dp"
+        android:paddingHorizontal="24dp"
+        android:drawableStart="@drawable/ic_qr_code_scanner"
+        android:drawablePadding="16dp"
+        android:letterSpacing="0.02"
+        android:elevation="4dp"
+        android:stateListAnimator="@null"
         style="@android:style/Widget.Material.Button" />
 
     </LinearLayout>

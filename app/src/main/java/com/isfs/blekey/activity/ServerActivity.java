@@ -4,7 +4,7 @@
 package com.isfs.blekey.activity;
 
 import com.isfs.blekey.BootReceiver;
-import com.isfs.blekey.hidsvc.HIDService;
+import com.isfs.blekey.hidsvc.BTHIDService;
 import com.isfs.blekey.hidsvc.HIDForegroundService;
 
 import androidx.appcompat.widget.SwitchCompat;
@@ -24,7 +24,6 @@ import java.util.HashSet;
 
 import com.isfs.blekey.R;
 
-import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
@@ -36,9 +35,11 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.content.DialogInterface.OnDismissListener;
 import android.content.ServiceConnection;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.util.Log;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -55,7 +56,6 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AlertDialog.Builder;
 
@@ -64,10 +64,10 @@ import com.isfs.blekey.hidsvc.DeviceStateManager;
 import com.isfs.blekey.MainActivity;
 
 /**
- * Activity responsible for managing the BLE HID passkey service.
+ * Activity responsible for managing the Bluetooth HID passkey service.
  * This activity checks for Bluetooth availability and compatibility,
- * then initializes and manages the HIDService GATT server for
- * BLE passkey functionality.
+ * then initializes and manages the classic Bluetooth HID service for
+ * passkey functionality.
  */
 public class ServerActivity extends AppCompatActivity {
 
@@ -153,23 +153,40 @@ public class ServerActivity extends AppCompatActivity {
     }
 
     /** ConnectionListener implementation as a named inner class. */
-    private class PasskeyConnectionListener implements HIDService.ConnectionListener {
+    private class PasskeyConnectionListener implements BTHIDService.ConnectionListener {
 
         @Override
-        @SuppressLint("MissingPermission")
         public void onDeviceConnected(BluetoothDevice device) {
+            if (!hasBluetoothConnectPermission()) {
+                Log.w(TAG, "BLUETOOTH_CONNECT permission not granted in onDeviceConnected");
+                return;
+            }
+            
             final String addr = device.getAddress();
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
                 upsertDevice(addr, name, DeviceStatus.CONNECTED);
                 saveDeviceState(addr, name, DeviceStatus.CONNECTED);
                 appendLog(getString(R.string.log_device_connected, name));
+                
+                // Initiate HID connection after Bluetooth profile connection
+                if (passkeyService != null) {
+                    appendLog("Requesting HID connection to " + name);
+                    boolean success = passkeyService.connect(device);
+                    if (!success) {
+                        appendLog("Failed to request HID connection to " + name);
+                    }
+                }
             });
         }
 
         @Override
-        @SuppressLint("MissingPermission")
         public void onDeviceDisconnected(BluetoothDevice device) {
+            if (!hasBluetoothConnectPermission()) {
+                Log.w(TAG, "BLUETOOTH_CONNECT permission not granted in onDeviceDisconnected");
+                return;
+            }
+            
             final String addr = device.getAddress();
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
@@ -180,8 +197,12 @@ public class ServerActivity extends AppCompatActivity {
         }
 
         @Override
-        @SuppressLint("MissingPermission")
         public void onDeviceError(BluetoothDevice device) {
+            if (!hasBluetoothConnectPermission()) {
+                Log.w(TAG, "BLUETOOTH_CONNECT permission not granted in onDeviceError");
+                return;
+            }
+            
             final String addr = device.getAddress();
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
@@ -192,8 +213,12 @@ public class ServerActivity extends AppCompatActivity {
         }
 
         @Override
-        @SuppressLint("MissingPermission")
         public void onHidServiceEnumerated(BluetoothDevice device) {
+            if (!hasBluetoothConnectPermission()) {
+                Log.w(TAG, "BLUETOOTH_CONNECT permission not granted in onHidServiceEnumerated");
+                return;
+            }
+            
             final String addr = device.getAddress();
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
@@ -204,8 +229,12 @@ public class ServerActivity extends AppCompatActivity {
         }
 
         @Override
-        @SuppressLint("MissingPermission")
         public void onHidServiceActive(BluetoothDevice device) {
+            if (!hasBluetoothConnectPermission()) {
+                Log.w(TAG, "BLUETOOTH_CONNECT permission not granted in onHidServiceActive");
+                return;
+            }
+            
             final String addr = device.getAddress();
             final String name = getDisplayName(device);
             runOnUiThread(() -> {
@@ -217,9 +246,9 @@ public class ServerActivity extends AppCompatActivity {
     }
 
     /**
-     * The HID service instance that provides passkey functionality over BLE.
+     * The HID service instance that provides passkey functionality over classic Bluetooth.
      */
-    private HIDService passkeyService;
+    private BTHIDService passkeyService;
     
     /**
      * Reference to the bound foreground service.
@@ -235,57 +264,112 @@ public class ServerActivity extends AppCompatActivity {
     /**
      * Reconciles device states by comparing persisted state with current BT state.
      * This ensures UI shows accurate state even after app/service restarts.
+     * Also removes devices that are no longer bonded at the OS level.
      */
-    @SuppressLint("MissingPermission")
     private void reconcileDeviceStates() {
         if (passkeyService == null || stateManager == null) return;
         
-        // Load persisted states
-        Map<String, DeviceStateManager.DeviceState> persistedStates = stateManager.loadAllDeviceStates();
-        
-        // Get currently connected devices
-        final BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
-        final List<BluetoothDevice> connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
-        Set<String> connectedAddresses = new HashSet<>();
-        
-        // Update connected devices with their HID state
-        for (BluetoothDevice device : connectedDevices) {
-            String addr = device.getAddress();
-            connectedAddresses.add(addr);
-            String name = getDisplayName(device);
-            
-            // Check HID state from service
-            HIDService.HidEnumerationState hidState = passkeyService.getHidState(addr);
-            DeviceStatus status = mapHidStateToDeviceStatus(hidState);
-            
-            upsertDevice(addr, name, status);
-            saveDeviceState(addr, name, status);
-            appendLog("Reconciled " + name + ": " + status);
+        if (!hasBluetoothConnectPermission()) {
+            Log.w(TAG, "BLUETOOTH_CONNECT permission not granted, cannot reconcile device states");
+            return;
         }
         
-        // Mark disconnected devices
-        for (Map.Entry<String, DeviceStateManager.DeviceState> entry : persistedStates.entrySet()) {
-            if (!connectedAddresses.contains(entry.getKey())) {
-                DeviceStateManager.DeviceState state = entry.getValue();
-                upsertDevice(state.address, state.name, DeviceStatus.DISCONNECTED);
-                state.btState = DeviceStateManager.BtState.DISCONNECTED;
-                state.hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
-                stateManager.saveDeviceState(state.address, state);
-                appendLog("Reconciled " + state.name + ": DISCONNECTED");
+        try {
+            // Load persisted states
+            Map<String, DeviceStateManager.DeviceState> persistedStates = stateManager.loadAllDeviceStates();
+            
+            // Get currently bonded Bluetooth devices at OS level
+            final BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+            final Set<BluetoothDevice> bondedDevices = passkeyService.getBondedDevices();
+            Set<String> bondedAddresses = new HashSet<>();
+            for (BluetoothDevice device : bondedDevices) {
+                bondedAddresses.add(device.getAddress());
             }
+            
+            // Get currently connected devices
+            List<BluetoothDevice> connectedDevices = new ArrayList<>();
+            boolean canQueryHidProfile = true;
+            try {
+                connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.HID_DEVICE);
+            } catch (IllegalArgumentException e) {
+                Log.w(TAG, "HID_DEVICE profile query not supported on this device", e);
+                canQueryHidProfile = false;
+            }
+            Set<String> connectedAddresses = new HashSet<>();
+            
+            // Update connected devices with their HID state
+            for (BluetoothDevice device : connectedDevices) {
+                String addr = device.getAddress();
+                connectedAddresses.add(addr);
+                String name = getDisplayName(device);
+                
+                BTHIDService.HidDeviceState hidState = passkeyService.getDeviceState(addr);
+                DeviceStatus status = mapHidStateToDeviceStatus(hidState);
+                
+                upsertDevice(addr, name, status);
+                saveDeviceState(addr, name, status);
+                appendLog("Reconciled " + name + ": " + status);
+            }
+            
+            // If we can't query the HID profile, check bonded devices via service state
+            if (!canQueryHidProfile) {
+                for (BluetoothDevice device : bondedDevices) {
+                    String addr = device.getAddress();
+                    if (connectedAddresses.contains(addr)) {
+                        continue;
+                    }
+                    
+                    BTHIDService.HidDeviceState hidState = passkeyService.getDeviceState(addr);
+                    if (hidState != BTHIDService.HidDeviceState.DISCONNECTED) {
+                        connectedAddresses.add(addr);
+                        String name = getDisplayName(device);
+                        DeviceStatus status = mapHidStateToDeviceStatus(hidState);
+                        
+                        upsertDevice(addr, name, status);
+                        saveDeviceState(addr, name, status);
+                        appendLog("Reconciled (via service) " + name + ": " + status);
+                    }
+                }
+            }
+            
+            // Process persisted devices
+            for (Map.Entry<String, DeviceStateManager.DeviceState> entry : persistedStates.entrySet()) {
+                String addr = entry.getKey();
+                DeviceStateManager.DeviceState state = entry.getValue();
+                
+                if (!bondedAddresses.contains(addr)) {
+                    removeDevice(addr);
+                    stateManager.clearDeviceState(addr);
+                    appendLog("Removed unbonded device: " + state.name);
+                    continue;
+                }
+                
+                if (!connectedAddresses.contains(addr)) {
+                    upsertDevice(state.address, state.name, DeviceStatus.DISCONNECTED);
+                    state.btState = DeviceStateManager.BtState.DISCONNECTED;
+                    state.hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
+                    stateManager.saveDeviceState(state.address, state);
+                    appendLog("Reconciled " + state.name + ": DISCONNECTED");
+                }
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "SecurityException in reconcileDeviceStates", e);
+            appendLog("Error: Permission denied while reconciling device states");
         }
     }
     
     /**
-     * Maps HID enumeration state to DeviceStatus.
+     * Maps HID device state to DeviceStatus.
      */
-    private DeviceStatus mapHidStateToDeviceStatus(HIDService.HidEnumerationState hidState) {
+    private DeviceStatus mapHidStateToDeviceStatus(BTHIDService.HidDeviceState hidState) {
         switch (hidState) {
             case ACTIVE:
                 return DeviceStatus.HID_ACTIVE;
-            case ENUMERATED:
+            case REGISTERED:
                 return DeviceStatus.HID_ENUMERATED;
-            case NOT_ENUMERATED:
+            case CONNECTED:
+            case CONNECTING:
+            case DISCONNECTED:
             default:
                 return DeviceStatus.CONNECTED;
         }
@@ -360,16 +444,32 @@ public class ServerActivity extends AppCompatActivity {
     private final ActivityResultLauncher<Intent> enableBtLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
-                if (!HIDService.isBluetoothEnabled(this)) {
+                if (!BTHIDService.isBluetoothEnabled(this)) {
                     Toast.makeText(this, R.string.requires_bl_enabled, Toast.LENGTH_LONG).show();
                     return;
                 }
-                if (!HIDService.isBleSupported(this) || !HIDService.isBlePeripheralSupported(this)) {
+                if (!BTHIDService.isClassicBTHIDSupported()) {
                     showUXForNotPermitted();
                 } else {
                     setupPasskeyPeripheralProvider();
                 }
             });
+
+    private final ActivityResultLauncher<String> requestBluetoothConnectLauncher =
+        registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(),
+            isGranted -> {
+                if (isGranted) {
+                    Log.d(TAG, "BLUETOOTH_CONNECT permission granted");
+                    CONNECT_GRANTED = true;
+                    checkBluetoothAndStart();
+                } else {
+                    Log.d(TAG, "BLUETOOTH_CONNECT permission denied");
+                    CONNECT_GRANTED = false;
+                    showPermissionDeniedDialog();
+                }
+            }
+        );
 
     /** Flag to track if the Create Passkey button was clicked */
     private boolean createPasskeyClicked = false;
@@ -412,15 +512,24 @@ public class ServerActivity extends AppCompatActivity {
         stateManager = new DeviceStateManager(this);
 
         setupAutoStartSwitch();
+        setupRestartButton();
 
         findViewById(R.id.backButton).setOnClickListener(view -> {
             unbindFromService();
             finish();
         });
+        
+        // Set up home button to navigate to MainActivity
+        findViewById(R.id.homeButton).setOnClickListener(view -> {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            finish();
+        });
 
         updatePermissionFlags();
-        if (CONNECT_GRANTED == true && ADVERTISE_GRANTED == true) {
-            Log.d(TAG, "Already have all required permissions, checking BT state");
+        if (CONNECT_GRANTED == true) {
+            Log.d(TAG, "Already have required permissions, checking BT state");
             checkBluetoothAndStart();
         } else {
             Log.d(TAG, "Need to request permissions first");
@@ -429,17 +538,17 @@ public class ServerActivity extends AppCompatActivity {
     }
 
     /**
-     * Checks Bluetooth state and BLE peripheral support, then starts the service.
+     * Checks Bluetooth state and classic HID support, then starts the service.
      */
     private void checkBluetoothAndStart() {
-        if (!HIDService.isBluetoothEnabled(this)) {
+        if (!BTHIDService.isBluetoothEnabled(this)) {
             Log.d(TAG, "Bluetooth is not enabled, requesting user to enable it");
             enableBtLauncher.launch(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE));
             return;
         }
 
-        if (!HIDService.isBleSupported(this) || !HIDService.isBlePeripheralSupported(this)) {
-            Log.d(TAG, "BLE peripheral mode not supported");
+        if (!BTHIDService.isClassicBTHIDSupported()) {
+            Log.d(TAG, "Classic Bluetooth HID device mode not supported");
             showUXForNotPermitted();
             return;
         }
@@ -450,7 +559,7 @@ public class ServerActivity extends AppCompatActivity {
     private void showUXForNotPermitted() {
         final AlertDialog alertDialog = new Builder(this).create();
         alertDialog.setTitle(getString(R.string.not_supported));
-        alertDialog.setMessage(getString(R.string.ble_perip_not_supported));
+        alertDialog.setMessage(getString(R.string.device_not_supported, "Classic Bluetooth HID device mode"));
         alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, getString(R.string.ok),
                 new OnClickListener() {
                     @Override
@@ -496,6 +605,36 @@ public class ServerActivity extends AppCompatActivity {
     }
     
     /**
+     * Sets up the restart service button click handler.
+     */
+    private void setupRestartButton() {
+        View restartButton = findViewById(R.id.restartServiceButton);
+        if (restartButton != null) {
+            restartButton.setOnClickListener(view -> {
+                appendLog("Restarting HID service...");
+                restartHIDService();
+            });
+        }
+    }
+
+    /**
+     * Restarts the HID service by stopping and starting it.
+     */
+    private void restartHIDService() {
+        // Stop the service
+        unbindFromService();
+        Intent serviceIntent = new Intent(this, HIDForegroundService.class);
+        stopService(serviceIntent);
+        
+        // Wait a moment then restart
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            startHIDForegroundService();
+            appendLog("HID service restarted");
+            Toast.makeText(this, "HID Service Restarted", Toast.LENGTH_SHORT).show();
+        }, 500);
+    }
+
+    /**
      * Stops the HID foreground service.
      */
     private void stopHIDForegroundService() {
@@ -519,35 +658,50 @@ public class ServerActivity extends AppCompatActivity {
     }
     
     /**
-     * Populates the device list from OS-bonded BLE devices.
+     * Populates the device list from OS-bonded Bluetooth devices.
      */
-    @SuppressLint("MissingPermission")
     private void populateBondedDevices() {
         if (passkeyService == null) return;
         
-        final BluetoothManager bluetoothManager = 
-                (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
-        final BluetoothAdapter adapter = bluetoothManager.getAdapter();
+        if (!hasBluetoothConnectPermission()) {
+            Log.w(TAG, "BLUETOOTH_CONNECT permission not granted, cannot populate bonded devices");
+            return;
+        }
         
-        // Get currently connected GATT devices
-        final List<BluetoothDevice> connectedDevices = 
-                bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
-        
-        for (BluetoothDevice device : passkeyService.getBondedBleDevices(adapter)) {
-            // Check if device is currently connected
-            DeviceStatus status = connectedDevices.contains(device) 
-                    ? DeviceStatus.CONNECTED 
-                    : DeviceStatus.DISCONNECTED;
-            upsertDevice(device.getAddress(), getDisplayName(device), status);
+        try {
+            final BluetoothManager bluetoothManager =
+                    (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+            
+            List<BluetoothDevice> connectedDevices = new ArrayList<>();
+            try {
+                connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.HID_DEVICE);
+            } catch (IllegalArgumentException e) {
+                Log.w(TAG, "HID_DEVICE profile query not supported on this device", e);
+            }
+            
+            for (BluetoothDevice device : passkeyService.getBondedDevices()) {
+                DeviceStatus status = connectedDevices.contains(device)
+                        ? mapHidStateToDeviceStatus(passkeyService.getDeviceState(device.getAddress()))
+                        : DeviceStatus.DISCONNECTED;
+                upsertDevice(device.getAddress(), getDisplayName(device), status);
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "SecurityException in populateBondedDevices", e);
+            appendLog("Error: Permission denied while loading bonded devices");
         }
     }
 
     /**
      * Populates the device name TextView with the Bluetooth adapter's advertised name.
      */
-    @SuppressLint("MissingPermission")
     private void updateBleDeviceNameDisplay() {
         if (bleDeviceNameText == null) return;
+        
+        if (!hasBluetoothConnectPermission()) {
+            bleDeviceNameText.setText(getString(R.string.ble_beekey));
+            return;
+        }
+        
         try {
             final android.bluetooth.BluetoothAdapter adapter =
                     ((android.bluetooth.BluetoothManager) getSystemService(BLUETOOTH_SERVICE)).getAdapter();
@@ -555,17 +709,28 @@ public class ServerActivity extends AppCompatActivity {
             if (name == null || name.isEmpty()) name = getString(R.string.ble_beekey);
             bleDeviceNameText.setText(getString(R.string.device_name_label, name));
         } catch (SecurityException e) {
+            Log.e(TAG, "SecurityException getting adapter name", e);
             bleDeviceNameText.setText(getString(R.string.ble_beekey));
         }
     }
 
     /**
      * Resolves a human-readable display name for a BT device.
+     * Returns the device address if permission is not granted or name is unavailable.
      */
-    @SuppressLint("MissingPermission")
     private String getDisplayName(BluetoothDevice device) {
-        String name = device.getName();
-        return (name != null && !name.isEmpty()) ? name : device.getAddress();
+        if (!hasBluetoothConnectPermission()) {
+            Log.w(TAG, "BLUETOOTH_CONNECT permission not granted, using address");
+            return device.getAddress();
+        }
+        
+        try {
+            String name = device.getName();
+            return (name != null && !name.isEmpty()) ? name : device.getAddress();
+        } catch (SecurityException e) {
+            Log.e(TAG, "SecurityException getting device name", e);
+            return device.getAddress();
+        }
     }
 
     /**
@@ -582,6 +747,18 @@ public class ServerActivity extends AppCompatActivity {
         }
         devicesAdapter.notifyDataSetChanged();
         updateDeviceVisibility();
+    }
+
+    /**
+     * Removes a device from the UI list.
+     */
+    private void removeDevice(String address) {
+        DeviceItem item = deviceMap.remove(address);
+        if (item != null) {
+            deviceItems.remove(item);
+            devicesAdapter.notifyDataSetChanged();
+            updateDeviceVisibility();
+        }
     }
 
     /**
@@ -629,9 +806,9 @@ public class ServerActivity extends AppCompatActivity {
 
     private void showNoPasskeysDialog() {
         final AlertDialog alertDialog = new Builder(this).create();
-        alertDialog.setTitle(getString(R.string.no_passkeys));
-        alertDialog.setMessage(getString(R.string.create_passkey_first));
-        alertDialog.setButton(AlertDialog.BUTTON_POSITIVE, getString(R.string.create_passkey),
+        alertDialog.setTitle(getString(R.string.no_passkey_wallets));
+        alertDialog.setMessage(getString(R.string.create_passkey_wallet_first));
+        alertDialog.setButton(AlertDialog.BUTTON_POSITIVE, getString(R.string.create_passkey_wallet),
                 (dialog, which) -> onCreatePasskeyClicked(dialog));
         alertDialog.setButton(AlertDialog.BUTTON_NEGATIVE, getString(R.string.cancel),
                 (dialog, which) -> onCancelClicked(dialog));
@@ -639,95 +816,81 @@ public class ServerActivity extends AppCompatActivity {
         alertDialog.show();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        Log.d(TAG, "onRequestPermissionsResult");
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
-        if (requestCode == REQUEST_CODE_BLUETOOTH_CONNECT) {
-            processPermissionsResults(permissions, grantResults);
-
-            if (CONNECT_GRANTED == true && ADVERTISE_GRANTED == true) {
-                Log.d(TAG, "Got all required permissions, checking BT state");
-                checkBluetoothAndStart();
-            } else {
-                Log.d(TAG, "Permission denied: CONNECT=" + CONNECT_GRANTED + ", ADVERTISE=" + ADVERTISE_GRANTED);
-                final AlertDialog alertDialog = new Builder(this).create();
-                alertDialog.setTitle(getString(R.string.not_supported));
-                alertDialog.setMessage(getString(R.string.ble_not_permitted));
-                alertDialog.setButton(AlertDialog.BUTTON_NEUTRAL, getString(R.string.ok),
-                        new OnClickListener() {
-                            @Override
-                            public void onClick(final DialogInterface dialog, final int which) {
-                                dialog.dismiss();
-                            }
-                        });
-                alertDialog.setOnDismissListener(new OnDismissListener() {
-                    @Override
-                    public void onDismiss(final DialogInterface dialog) {
-                        finish();
-                    }
-                });
-                alertDialog.show();
-            }
+    /**
+     * Checks if BLUETOOTH_CONNECT permission is granted.
+     * This should be called before any Bluetooth operation that requires the permission.
+     *
+     * @return true if permission is granted, false otherwise
+     */
+    private boolean hasBluetoothConnectPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return ContextCompat.checkSelfPermission(this,
+                Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
         }
+        // On Android 11 and below, BLUETOOTH permission is sufficient
+        return true;
     }
 
-    public static final int REQUEST_CODE_BLUETOOTH_CONNECT = 0xb1e;
+    private void showPermissionRationale() {
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.bluetooth_permission_required)
+            .setMessage(R.string.bluetooth_permission_rationale)
+            .setPositiveButton(R.string.grant_permission, (dialog, which) -> {
+                requestBluetoothConnectLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT);
+            })
+            .setNegativeButton(R.string.cancel, (dialog, which) -> {
+                dialog.dismiss();
+                finish();
+            })
+            .show();
+    }
+
+    private void showPermissionDeniedDialog() {
+        new AlertDialog.Builder(this)
+            .setTitle(getString(R.string.not_supported))
+            .setMessage(getString(R.string.bluetooth_not_permitted, "HID"))
+            .setPositiveButton(R.string.open_settings, (dialog, which) -> {
+                // Open app settings
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                Uri uri = Uri.fromParts("package", getPackageName(), null);
+                intent.setData(uri);
+                startActivity(intent);
+                finish();
+            })
+            .setNegativeButton(getString(R.string.ok), (dialog, which) -> {
+                dialog.dismiss();
+                finish();
+            })
+            .show();
+    }
 
     private static Boolean CONNECT_GRANTED = null;
-    private static Boolean ADVERTISE_GRANTED = null;
-
-    private void processPermissionsResults(String[] permissions, int[] grantResults) {
-        for (int i = 0; i < permissions.length; i++) {
-            if (permissions[i].equals(Manifest.permission.BLUETOOTH_CONNECT)) {
-                CONNECT_GRANTED = (grantResults[i] == PackageManager.PERMISSION_GRANTED);
-                if (CONNECT_GRANTED) Log.d(TAG, "Have BLUETOOTH_CONNECT permission");
-            } else if (permissions[i].equals(Manifest.permission.BLUETOOTH_ADVERTISE)) {
-                ADVERTISE_GRANTED = (grantResults[i] == PackageManager.PERMISSION_GRANTED);
-                if (ADVERTISE_GRANTED) Log.d(TAG, "Have BLUETOOTH_ADVERTISE permission");
-            }
-        }
-    }
 
     private void updatePermissionFlags() {
         CONNECT_GRANTED = ContextCompat.checkSelfPermission(this,
                 Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
         if (CONNECT_GRANTED) Log.d(TAG, "Have BLUETOOTH_CONNECT permission");
-
-        ADVERTISE_GRANTED = ContextCompat.checkSelfPermission(this,
-                Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED;
-        if (ADVERTISE_GRANTED) Log.d(TAG, "Have BLUETOOTH_ADVERTISE permission");
     }
 
     private void askForPermissions() {
         updatePermissionFlags();
 
-        if (CONNECT_GRANTED == true && ADVERTISE_GRANTED == true) {
-            Log.d(TAG, "Have all required Bluetooth permissions, start it up!");
+        if (CONNECT_GRANTED == true) {
+            Log.d(TAG, "Have required Bluetooth permissions, start it up!");
             return;
         }
 
         if (!CONNECT_GRANTED &&
-                ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.BLUETOOTH_CONNECT)) {
-            Log.d(TAG, "Can't do anything without BLUETOOTH_CONNECT permission");
-            Toast.makeText(this, getString(R.string.ble_not_permitted), Toast.LENGTH_SHORT).show();
-            finish();
+                ActivityCompat.shouldShowRequestPermissionRationale(this,
+                    Manifest.permission.BLUETOOTH_CONNECT)) {
+            // Show rationale before requesting
+            showPermissionRationale();
             return;
         }
 
-        try {
-            Log.d(TAG, "Asking for Bluetooth permissions");
-            List<String> permissionsToRequest = new ArrayList<>();
-            if (!CONNECT_GRANTED) permissionsToRequest.add(Manifest.permission.BLUETOOTH_CONNECT);
-            if (!ADVERTISE_GRANTED) permissionsToRequest.add(Manifest.permission.BLUETOOTH_ADVERTISE);
-
-            if (!permissionsToRequest.isEmpty()) {
-                requestPermissions(permissionsToRequest.toArray(new String[0]), REQUEST_CODE_BLUETOOTH_CONNECT);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error asking for Bluetooth permissions", e);
-        }
+        // Request permission using modern API
+        Log.d(TAG, "Requesting BLUETOOTH_CONNECT permission");
+        requestBluetoothConnectLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT);
     }
 
     /**

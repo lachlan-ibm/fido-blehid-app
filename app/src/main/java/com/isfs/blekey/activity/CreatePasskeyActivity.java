@@ -59,6 +59,14 @@ public class CreatePasskeyActivity extends AppCompatActivity {
 
         // Set up back button in toolbar
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
+        
+        // Set up home button to navigate to MainActivity
+        findViewById(R.id.homeButton).setOnClickListener(view -> {
+            android.content.Intent intent = new android.content.Intent(this, com.isfs.blekey.MainActivity.class);
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP | android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            finish();
+        });
     }
 
     /**
@@ -117,11 +125,11 @@ public class CreatePasskeyActivity extends AppCompatActivity {
 
         // Validate local name
         if (localName.isEmpty()) {
-            nameErrorText.setText(R.string.prompt_passkey_name);
+            nameErrorText.setText(R.string.prompt_passkey_wallet_name);
             nameErrorText.setVisibility(View.VISIBLE);
             isValid = false;
         } else if (!NAME_PATTERN.matcher(localName).matches()) {
-            nameErrorText.setText(R.string.prompt_passkey_help);
+            nameErrorText.setText(R.string.prompt_passkey_wallet_alphanumeric);
             nameErrorText.setVisibility(View.VISIBLE);
             isValid = false;
         } else {
@@ -161,7 +169,7 @@ public class CreatePasskeyActivity extends AppCompatActivity {
 
         // Check if file already exists
         if (passkeyFile.exists()) {
-            Toast.makeText(this, getString(R.string.passkey_exists_error), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, getString(R.string.passkey_wallet_exists_error), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -182,10 +190,10 @@ public class CreatePasskeyActivity extends AppCompatActivity {
         Passkey passkey = Passkey.generatePasskey(pinHash, passkeyFile);
 
         if (passkey != null) {
-            Toast.makeText(this, R.string.create_passkey_success, Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.passkey_wallet_created, Toast.LENGTH_SHORT).show();
             finish(); // Return to previous activity
         } else {
-            Toast.makeText(this, R.string.create_passkey_fail, Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.passkey_wallet_create_failed, Toast.LENGTH_SHORT).show();
         }
     }
 }

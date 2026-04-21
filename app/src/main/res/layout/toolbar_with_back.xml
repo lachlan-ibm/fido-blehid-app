@@ -29,30 +29,39 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
+            android:gravity="center"
             android:paddingStart="8dp"
             android:paddingEnd="16dp">
 
             <ImageView
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
                 android:src="@drawable/eye"
                 android:contentDescription="Eye icon" />
 
             <ImageView
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
                 android:src="@drawable/bee"
                 android:contentDescription="Bee icon"
-                android:layout_marginStart="4dp" />
+                android:layout_marginStart="6dp" />
 
             <ImageView
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
                 android:src="@drawable/data_privacy_key"
                 android:contentDescription="Key icon"
-                android:layout_marginStart="4dp" />
+                android:layout_marginStart="6dp" />
         </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/homeButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_home"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Home"
+            android:padding="12dp" />
     </LinearLayout>
 </androidx.appcompat.widget.Toolbar>
 
