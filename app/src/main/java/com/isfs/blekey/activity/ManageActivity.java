@@ -871,6 +871,17 @@ public class ManageActivity extends AppCompatActivity {
             return;
         }
         
+        // Update the passkey file header with the current PIN hash
+        // This ensures the cached upper hash matches the current PIN
+        // This is critical after app reinstalls or when the header is out of date
+        Log.d(TAG, "Updating passkey header after successful unlock");
+        boolean updated = Passkey.writeKey(passkey, pinHash, selectedPasskeyFile);
+        if (!updated) {
+            Log.w(TAG, "Failed to update passkey header, but passkey is still usable");
+        } else {
+            Log.d(TAG, "Passkey header updated successfully");
+        }
+        
         Toast.makeText(this, getString(R.string.wallet_unlocked), Toast.LENGTH_SHORT).show();
         hideKeyboard();
         launchAppropriateActivity(pinHash);

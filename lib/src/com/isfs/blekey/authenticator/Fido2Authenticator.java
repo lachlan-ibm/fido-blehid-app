@@ -29,6 +29,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
 
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
@@ -462,7 +463,19 @@ public class Fido2Authenticator implements java.io.Serializable {
                 rpId = (String) publicKey.get("rpId");
             }
         }
-        byte[] rpIdHash = digest.digest(rpId.getBytes());
+        logger.debug("rpId string: '{}', length: {}", rpId, rpId.length());
+        byte[] rpIdBytes = rpId.getBytes(StandardCharsets.UTF_8);
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : rpIdBytes) {
+            hexString.append(String.format("%02x", b));
+        }
+        logger.debug("rpId bytes (hex): {}", hexString.toString());
+        byte[] rpIdHash = digest.digest(rpIdBytes);
+        hexString = new StringBuilder();
+        for (byte b : rpIdHash) {
+            hexString.append(String.format("%02x", b));
+        }
+        logger.debug("rpIdHash (hex): {}", hexString.toString());
         authDataBytes.write(rpIdHash);
 
         int flags = 0x01; // UP

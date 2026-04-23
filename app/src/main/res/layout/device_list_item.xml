@@ -6,15 +6,18 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
-    android:padding="12dp"
-    android:gravity="center_vertical">
+    android:padding="16dp"
+    android:gravity="center_vertical"
+    android:background="@android:color/white"
+    android:layout_marginBottom="8dp"
+    android:elevation="2dp">
 
     <!-- Status indicator bar (left edge) -->
     <View
         android:id="@+id/deviceStatusBar"
-        android:layout_width="4dp"
-        android:layout_height="40dp"
-        android:layout_marginEnd="12dp"
+        android:layout_width="6dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="16dp"
         android:background="@color/device_disconnected" />
 
     <!-- Device info -->
@@ -28,7 +31,7 @@
             android:id="@+id/deviceNameText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="15sp"
+            android:textSize="16sp"
             android:textStyle="bold"
             android:textColor="@android:color/black" />
 
@@ -36,9 +39,48 @@
             android:id="@+id/deviceStatusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="12sp"
-            android:layout_marginTop="2dp" />
+            android:textSize="13sp"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/text_secondary" />
     </LinearLayout>
+
+    <!-- Reconnect Button (for disconnected devices) -->
+    <Button
+        android:id="@+id/reconnectButton"
+        android:layout_width="wrap_content"
+        android:layout_height="44dp"
+        android:minWidth="44dp"
+        android:text="@string/reconnect"
+        android:backgroundTint="@color/ibm_blue"
+        android:textColor="@color/ibm_white"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:paddingHorizontal="16dp"
+        android:drawableStart="@drawable/ic_refresh"
+        android:drawablePadding="6dp"
+        android:letterSpacing="0.01"
+        android:visibility="gone"
+        android:elevation="2dp"
+        android:stateListAnimator="@null"
+        style="@android:style/Widget.Material.Button" />
+
+    <!-- Disconnect Button (for connected/active devices) -->
+    <Button
+        android:id="@+id/disconnectButton"
+        android:layout_width="wrap_content"
+        android:layout_height="44dp"
+        android:minWidth="44dp"
+        android:text="@string/disconnect"
+        android:backgroundTint="@color/device_error"
+        android:textColor="@color/ibm_white"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:paddingHorizontal="16dp"
+        android:letterSpacing="0.01"
+        android:visibility="gone"
+        android:elevation="2dp"
+        android:stateListAnimator="@null"
+        style="@android:style/Widget.Material.Button" />
 
 </LinearLayout>
 

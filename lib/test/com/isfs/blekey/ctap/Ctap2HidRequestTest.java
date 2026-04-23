@@ -284,14 +284,23 @@ public class Ctap2HidRequestTest {
         int totalMessageLength = ((firstSegment[5] & 0xFF) << 8) | (firstSegment[6] & 0xFF);
         System.err.println("Total message length: " + totalMessageLength);
         
-        // The CBOR data starts after the command byte, so total CBOR data length is totalMessageLength - 1
-        int totalCborLength = totalMessageLength - 1; // Subtract 1 for the command byte
+        // The CBOR data starts after the status byte, so total CBOR data length is totalMessageLength - 1
+        int totalCborLength = totalMessageLength - 1; // Subtract 1 for the status byte
+        
+        // If there's no CBOR data (just a status code), return an empty map
+        if (totalCborLength <= 0) {
+            System.err.println("No CBOR data in response (status-only response)");
+            return new java.util.HashMap<>();
+        }
+        
         int bytesRead = 0;
         
         // First segment: skip first 8 bytes (4 bytes CID + 1 byte CMD + 2 bytes length + 1 byte status)
-        int firstSegmentDataLength = firstSegment.length - 8;
-        cborDataStream.write(firstSegment, 8, firstSegmentDataLength);
-        bytesRead += firstSegmentDataLength;
+        int firstSegmentDataLength = Math.min(totalCborLength, firstSegment.length - 8);
+        if (firstSegmentDataLength > 0) {
+            cborDataStream.write(firstSegment, 8, firstSegmentDataLength);
+            bytesRead += firstSegmentDataLength;
+        }
         
         // Process remaining segments
         for (int i = 1; i < segments.size(); i++) {
@@ -633,16 +642,13 @@ public class Ctap2HidRequestTest {
         
         // Add PIN auth to request
         if (pinToken != null) {
-            // Compute pinUvAuthParam = HMAC-SHA-256(pinToken, rpIdHash)[0:16]
+            // Compute pinUvAuthParam = HMAC-SHA-256(pinToken, clientDataHash)[0:16]
+            // Per CTAP2 spec: pinUvAuthParam is computed over clientDataHash for makeCredential
             try {
-                String rpId = "example.com";
-                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-                byte[] rpIdHash = digest.digest(rpId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                
                 javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
                 javax.crypto.spec.SecretKeySpec keySpec = new javax.crypto.spec.SecretKeySpec(pinToken, "HmacSHA256");
                 mac.init(keySpec);
-                byte[] hmac = mac.doFinal(rpIdHash);
+                byte[] hmac = mac.doFinal(clientDataHash);
                 byte[] pinUvAuthParam = java.util.Arrays.copyOfRange(hmac, 0, 16);
                 
                 params.put(0x08, pinUvAuthParam); // pinUvAuthParam
@@ -758,11 +764,10 @@ public class Ctap2HidRequestTest {
         random.nextBytes(clientDataHash);
         
         // Create parameters map for getAssertion using TestConfig
+        // Per CTAP2 spec: 0x01 = rpId, 0x02 = clientDataHash
         Map<Integer, Object> params = new HashMap<>();
-        params.put(0x01, clientDataHash); // clientDataHash
-        
-        // For getAssertion, parameter 0x02 is the rpId string directly (not a map like in makeCredential)
-        params.put(0x02, rpIdString); // rpId as string
+        params.put(0x01, rpIdString); // rpId as string (parameter 0x01)
+        params.put(0x02, clientDataHash); // clientDataHash (parameter 0x02)
         
         // Add allowCredentials parameter with the credential ID we just created
         Map<String, byte[]> allowedCred = new HashMap<>();
@@ -788,16 +793,13 @@ public class Ctap2HidRequestTest {
         
         // Add PIN auth to request
         if (pinToken != null) {
-            // Compute pinUvAuthParam = HMAC-SHA-256(pinToken, rpIdHash)[0:16]
+            // Compute pinUvAuthParam = HMAC-SHA-256(pinToken, clientDataHash)[0:16]
+            // Per CTAP2 spec: pinUvAuthParam is computed over clientDataHash for getAssertion
             try {
-                String rpId = "example.com";
-                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-                byte[] rpIdHash = digest.digest(rpId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                
                 javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
                 javax.crypto.spec.SecretKeySpec keySpec = new javax.crypto.spec.SecretKeySpec(pinToken, "HmacSHA256");
                 mac.init(keySpec);
-                byte[] hmac = mac.doFinal(rpIdHash);
+                byte[] hmac = mac.doFinal(clientDataHash);
                 byte[] pinUvAuthParam = java.util.Arrays.copyOfRange(hmac, 0, 16);
                 
                 params.put(0x08, pinUvAuthParam); // pinUvAuthParam

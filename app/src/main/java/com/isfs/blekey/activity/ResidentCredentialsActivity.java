@@ -280,13 +280,50 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             try {
                 String rpId = new String(cred.get("rp.id"), "UTF-8");
                 holder.text1.setText("Credential: " + rpId);
-                holder.text2.setText("Tap to delete");
+                
+                // Display user_handle as hex (first 16 bytes, or 13 + "..." if longer)
+                byte[] userHandle = cred.get("user.id");
+                String userHandleDisplay = formatUserHandle(userHandle);
+                holder.text2.setText("User: " + userHandleDisplay);
                 
                 holder.itemView.setOnClickListener(v -> showDeleteDialog(cred.get("rp.id"), rpId));
             } catch (Exception e) {
                 holder.text1.setText("Credential: [Encoding Error]");
                 holder.text2.setText("");
             }
+        }
+        
+        /**
+         * Formats a user handle as hex string.
+         * Shows first 16 bytes, or first 13 bytes + "..." if longer.
+         *
+         * @param userHandle The user handle byte array
+         * @return Formatted hex string
+         */
+        private String formatUserHandle(byte[] userHandle) {
+            if (userHandle == null || userHandle.length == 0) {
+                return "(empty)";
+            }
+            
+            // Determine how many bytes to show
+            int bytesToShow = Math.min(userHandle.length, 16);
+            boolean truncated = userHandle.length > 16;
+            
+            if (truncated) {
+                bytesToShow = 13; // Show 13 bytes + "..." if truncated
+            }
+            
+            // Convert to hex
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < bytesToShow; i++) {
+                hex.append(String.format("%02x", userHandle[i]));
+            }
+            
+            if (truncated) {
+                hex.append("...");
+            }
+            
+            return hex.toString();
         }
         
         @Override

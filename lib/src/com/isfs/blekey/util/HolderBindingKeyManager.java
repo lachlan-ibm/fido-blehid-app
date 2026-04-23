@@ -47,6 +47,7 @@ public class HolderBindingKeyManager {
     private static final int SEED_LENGTH = 32;
     private static final int KEY_LENGTH = 32;
     private static final String HKDF_INFO_PREFIX = "AYE BLE KEY DIGITAL CREDENTIAL MASTER SEED";
+    private static final byte[] HKDF_INFO_PREFIX_BYTES = HKDF_INFO_PREFIX.getBytes(StandardCharsets.UTF_8);
     
     /**
      * Platform-specific keystore manager for master key operations.
@@ -115,7 +116,37 @@ public class HolderBindingKeyManager {
      */
     public static KeyPair deriveBindingKey(byte[] seed, String credentialId, String issuerId,
                                           String credentialType, PrivateKey masterKey) {
-        // Validate inputs
+        validateDerivationInputs(seed, credentialId, issuerId, credentialType, masterKey);
+        
+        try {
+            byte[] salt = computeSalt(credentialId, issuerId);
+            byte[] masterKeyDerivedMaterial = deriveMasterKeyMaterial(masterKey, seed);
+            byte[] infoBytes = buildHkdfInfo(credentialType);
+            byte[] keyMaterial = KeyUtils.hkdf(masterKeyDerivedMaterial, salt, infoBytes, KEY_LENGTH);
+            KeyPair keyPair = generateECKeyPairFromSeed(keyMaterial);
+            
+            logger.debug("Derived EC binding key pair for credential {} (issuer: {})",
+                        credentialId, issuerId);
+            return keyPair;
+        } catch (Exception e) {
+            logger.error("Failed to derive binding key", e);
+            throw new RuntimeException("Failed to derive binding key", e);
+        }
+    }
+    
+    /**
+     * Validates all inputs for key derivation.
+     *
+     * @param seed The credential seed
+     * @param credentialId The credential identifier
+     * @param issuerId The issuer identifier
+     * @param credentialType The credential type
+     * @param masterKey The master private key
+     * @throws IllegalArgumentException if any input is invalid
+     */
+    private static void validateDerivationInputs(byte[] seed, String credentialId,
+                                                 String issuerId, String credentialType,
+                                                 PrivateKey masterKey) {
         if (seed == null || seed.length != SEED_LENGTH) {
             throw new IllegalArgumentException("Seed must be " + SEED_LENGTH + " bytes");
         }
@@ -131,31 +162,45 @@ public class HolderBindingKeyManager {
         if (masterKey == null) {
             throw new IllegalArgumentException("Master key cannot be null");
         }
-        
-        try {
-            // Compute salt: SHA-256(credential_id || issuer_id)
-            byte[] salt = computeSalt(credentialId, issuerId);
-            
-            // Sign the seed with master key (requires biometric auth)
-            byte[] masterKeySignature = KeyUtils.sign(seed, masterKey);
-            
-            // Compute info: prefix || credential_type
-            String info = HKDF_INFO_PREFIX + credentialType;
-            byte[] infoBytes = info.getBytes(StandardCharsets.UTF_8);
-            
-            // Derive key material using HKDF (32 bytes for EC P-256 private key)
-            byte[] keyMaterial = KeyUtils.hkdf(masterKeySignature, salt, infoBytes, KEY_LENGTH);
-            
-            // Generate EC key pair from derived material
-            KeyPair keyPair = generateECKeyPairFromSeed(keyMaterial);
-            
-            logger.debug("Derived EC binding key pair for credential {} (issuer: {})",
-                        credentialId, issuerId);
-            return keyPair;
-        } catch (Exception e) {
-            logger.error("Failed to derive binding key", e);
-            throw new RuntimeException("Failed to derive binding key", e);
+    }
+    
+    /**
+     * Derives deterministic key material from master key and seed using HMAC-SHA256.
+     * This is deterministic unlike signing which uses random k-values in ECDSA.
+     *
+     * @param masterKey The master private key
+     * @param seed The credential seed
+     * @return Derived key material (32 bytes)
+     * @throws Exception if HMAC derivation fails
+     */
+    private static byte[] deriveMasterKeyMaterial(PrivateKey masterKey, byte[] seed)
+            throws Exception {
+        byte[] masterKeyBytes = masterKey.getEncoded();
+        if (masterKeyBytes == null) {
+            throw new IllegalStateException("Master key encoding not available");
         }
+        
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        javax.crypto.spec.SecretKeySpec keySpec =
+            new javax.crypto.spec.SecretKeySpec(masterKeyBytes, "HmacSHA256");
+        mac.init(keySpec);
+        return mac.doFinal(seed);
+    }
+    
+    /**
+     * Builds the HKDF info parameter by concatenating the prefix with credential type.
+     * Uses pre-computed prefix bytes for efficiency.
+     *
+     * @param credentialType The credential type
+     * @return HKDF info bytes
+     */
+    private static byte[] buildHkdfInfo(String credentialType) {
+        byte[] credentialTypeBytes = credentialType.getBytes(StandardCharsets.UTF_8);
+        byte[] infoBytes = new byte[HKDF_INFO_PREFIX_BYTES.length + credentialTypeBytes.length];
+        System.arraycopy(HKDF_INFO_PREFIX_BYTES, 0, infoBytes, 0, HKDF_INFO_PREFIX_BYTES.length);
+        System.arraycopy(credentialTypeBytes, 0, infoBytes, HKDF_INFO_PREFIX_BYTES.length,
+                        credentialTypeBytes.length);
+        return infoBytes;
     }
     
     /**

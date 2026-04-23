@@ -169,8 +169,7 @@ public class AuthenticatorAPI {
 
     private static PinUvAuthResult verifyPinAuthToken(byte[] pinAuthToken, byte[] pinUvAuthParam, byte[] clientDataHash)
             throws InvalidKeyException {
-        logger.debug("HMAC verification - clientDataHash (hex): {}", bytesToHex(clientDataHash));
-        logger.debug("HMAC verification - PIN token (hex): {}", bytesToHex(pinAuthToken));
+        logger.debug("Verifying PIN/UV auth token");
         
         // Get cached Mac instance from ThreadLocal
         javax.crypto.Mac mac = HMAC_SHA256.get();
@@ -182,14 +181,12 @@ public class AuthenticatorAPI {
         // Compare first 16 bytes (CTAP2 spec requirement)
         byte[] expectedAuth16 = Arrays.copyOf(expectedAuth, 16);
         
-        logger.debug("HMAC verification - Expected auth (hex): {}", bytesToHex(expectedAuth16));
-        logger.debug("HMAC verification - Received pinUvAuthParam (hex): {}", bytesToHex(pinUvAuthParam));
-        
         if (!MessageDigest.isEqual(pinUvAuthParam, expectedAuth16)) {
             logger.error("PIN/UV auth token verification failed: HMAC mismatch");
             return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
         }
-        return new PinUvAuthResult(false, Ctap2StatusCode.SUCCESS);
+        // Success: user is verified, no error code
+        return new PinUvAuthResult(true, null);
     }
     
 
@@ -320,7 +317,7 @@ public class AuthenticatorAPI {
         
         final PinUvAuthResult result = verifyToken(txn, params, clientDataHash);
         
-        if (result.errorCode == Ctap2StatusCode.SUCCESS) {
+        if (result.errorCode == null) {
             logger.debug("PIN/UV auth verification completed successfully");
         }
         return result;
@@ -557,7 +554,7 @@ public class AuthenticatorAPI {
     private interface GetAssertionKeys {
         int RPID = 0x01;
         int CLIENT_DATA_HASH = 0x02;
-        //int ALLOW_LIST = 0x03;
+        int ALLOW_LIST = 0x03;
         //int OPTIONS = 0x05;
         //int PIN_UV_AUTH_PARAM = 0x06;
         //int PIN_UV_AUTH_PROTOCOL = 0x07;
@@ -1054,15 +1051,10 @@ public class AuthenticatorAPI {
      * @return A byte array containing the response
      */
     protected static byte[] makeCredential(CtapTxn txn, Map<Integer, Object> req) {
-        logger.info("=== makeCredential START ===");
-        logger.info("Request parameters: {}", req.keySet());
-        logger.info("Transaction CID: {}", java.util.Arrays.toString(txn.getCid()));
-        logger.info("Has passkey: {}", txn.getPasskey() != null);
-        logger.info("Has PIN auth token: {}", txn.getPinAuthTkn() != null);
+        logger.info("makeCredential: starting credential creation");
         
         // Load authenticated session from openKeys if available
         loadAuthenticatedSession(txn);
-        logger.info("After loading session - Has passkey: {}", txn.getPasskey() != null);
         
         // Validate the request and determine credential type
         CredentialValidationResult validation = _canMakeCredential(req, txn.getPasskey());
@@ -1075,7 +1067,7 @@ public class AuthenticatorAPI {
         logger.info("Creating credential of type: {}", validation.type);
         
         try {
-            return _makeCredential(validation, txn, req);
+            return executeMakeCredential(validation, txn, req);
         } catch (Exception e) {
             logger.error("makeCredential exception: {}", e.getMessage(), e);
             return error(Ctap2StatusCode.OTHER);
@@ -1156,18 +1148,27 @@ public class AuthenticatorAPI {
             Map<Integer, Object> req,
             Fido2Authenticator authenticator) throws Exception {
         
+        logger.debug("=== buildAuthenticatorData START ===");
+        Object rpValue = req.get(0x02);
+        logger.debug("RP value from request: {}", rpValue);
+        
         Map<String, Object> options = Map.of(
-            "rp", req.get(0x02),
+            "rp", rpValue,
             "attestation", true
         );
         
-        return authenticator.buildAuthenticatorData(
+        logger.debug("Calling authenticator.buildAuthenticatorData with options: {}", options.keySet());
+        byte[] result = authenticator.buildAuthenticatorData(
             options,
             "packed",
             null,
             null,
             authenticator.getKeyPair()
         );
+        logger.debug("buildAuthenticatorData result length: {}", result != null ? result.length : "null");
+        logger.debug("=== buildAuthenticatorData END ===");
+        
+        return result;
     }
 
     /**
@@ -1188,7 +1189,14 @@ public class AuthenticatorAPI {
             KeyPair attestationKeyPair,
             X509Certificate akiCert) throws Exception {
         
-        return authenticator.processAttestationStatement(
+        logger.debug("=== createAttestationStatement START ===");
+        logger.debug("clientDataHash length: {}", clientDataHash != null ? clientDataHash.length : "null");
+        logger.debug("authenticatorData length: {}", authenticatorData != null ? authenticatorData.length : "null");
+        logger.debug("credId length: {}", authenticator.getCredId() != null ? authenticator.getCredId().length : "null");
+        logger.debug("attestationKeyPair: {}", attestationKeyPair != null ? "present" : "null");
+        logger.debug("akiCert: {}", akiCert != null ? "present" : "null");
+        
+        Map<String, Object> result = authenticator.processAttestationStatement(
             "packed",
             clientDataHash,
             authenticatorData,
@@ -1197,6 +1205,11 @@ public class AuthenticatorAPI {
             attestationKeyPair,
             akiCert
         );
+        
+        logger.debug("attestationStatement result: {}", result != null ? result.keySet() : "null");
+        logger.debug("=== createAttestationStatement END ===");
+        
+        return result;
     }
 
     /**
@@ -1210,13 +1223,26 @@ public class AuthenticatorAPI {
             byte[] authenticatorData,
             Map<String, Object> attestationStatement) {
         
+        logger.debug("=== buildMakeCredentialResponse START ===");
+        logger.debug("authenticatorData length: {}", authenticatorData != null ? authenticatorData.length : "null");
+        logger.debug("attestationStatement: {}", attestationStatement != null ? attestationStatement.keySet() : "null");
+        
         Map<Integer, Object> response = Map.of(
             0x01, "packed",  // fmt
             0x02, authenticatorData,
             0x03, attestationStatement
         );
         
-        return success(Cbor.encode(response));
+        logger.debug("Response map created with keys: {}", response.keySet());
+        byte[] encoded = Cbor.encode(response);
+        logger.debug("CBOR encoded response length: {}", encoded != null ? encoded.length : "null");
+        
+        if (encoded == null || encoded.length == 0) {
+            logger.error("CBOR encoding returned empty or null result!");
+            logger.error("Response map: {}", response);
+        }
+        
+        return success(encoded);
     }
 
     /**
@@ -1231,37 +1257,6 @@ public class AuthenticatorAPI {
             logger.error("Missing required clientDataHash (0x01) in request");
         }
         return clientDataHash;
-    }
-
-    /**
-     * Logs the start of credential creation with key parameters.
-     *
-     * @param validation The credential validation result
-     * @param req The request parameters
-     */
-    private static void logMakeCredentialStart(
-            CredentialValidationResult validation,
-            Map<Integer, Object> req) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Starting credential creation - type: {}, hasPinUvAuthParam: {}, hasPinUvAuthProtocol: {}",
-                validation.type,
-                req.containsKey(0x08),
-                req.containsKey(0x09));
-        }
-    }
-
-    /**
-     * Logs transaction state for debugging (without sensitive data).
-     *
-     * @param txn The CTAP transaction to log information about
-     */
-    private static void logTransactionState(CtapTxn txn) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Transaction state - hasPasskey: {}, hasPinToken: {}, hasPinHash: {}",
-                        txn.getPasskey() != null,
-                        txn.getPinAuthTkn() != null,
-                        txn.getPinHash() != null);
-        }
     }
 
     /**
@@ -1392,10 +1387,16 @@ public class AuthenticatorAPI {
         
         byte[] clientDataHash = extractClientDataHash(req);
         if (clientDataHash == null) {
+            logger.error("buildCredentialData: clientDataHash is null");
             return new CredentialCreationResult(Ctap2StatusCode.MISSING_PARAMETER);
         }
-        
+
         byte[] authenticatorData = buildAuthenticatorData(req, authenticator);
+        if (authenticatorData == null) {
+            logger.error("buildCredentialData: authenticatorData is null");
+            return new CredentialCreationResult(Ctap2StatusCode.OTHER);
+        }
+
         Map<String, Object> attestationStatement = createAttestationStatement(
             clientDataHash,
             authenticatorData,
@@ -1403,52 +1404,43 @@ public class AuthenticatorAPI {
             attestation.keyPair,
             attestation.anonCA
         );
+        if (attestationStatement == null) {
+            logger.error("buildCredentialData: attestationStatement is null");
+            return new CredentialCreationResult(Ctap2StatusCode.OTHER);
+        }
+        logger.debug("buildCredentialData: attestationStatement keys: {}", attestationStatement.keySet());
+        logger.debug("=== buildCredentialData SUCCESS ===");
         
         return new CredentialCreationResult(authenticatorData, attestationStatement);
     }
 
-    private static byte[] _makeCredential(
+    private static byte[] executeMakeCredential(
             CredentialValidationResult validation,
             CtapTxn txn,
             Map<Integer, Object> req) throws Exception {
 
-        // Log credential creation start
-        logMakeCredentialStart(validation, req);
-        logTransactionState(txn);
-        
-        // Verify PIN/UV authentication
         PinUvAuthResult pinUvResult = verifyPinUvAuth(req, txn);
         if (pinUvResult.errorCode != null) {
             return error(pinUvResult.errorCode);
         }
-        
-        // Load attestation material (key pair and certificate)
         AttestationMaterial attestation = loadAttestationMaterial(
             validation.type,
             pinUvResult.userVerified,
             txn
         );
-        
-        // Validate and create authenticator
         Fido2Authenticator authenticator = validateAndCreateAuthenticator(txn, req);
         if (authenticator == null) {
             return error(Ctap2StatusCode.OTHER);
         }
-        
-        // Build credential data
         CredentialCreationResult credentialResult = buildCredentialData(req, authenticator, attestation);
         if (!credentialResult.isSuccess()) {
             return error(credentialResult.errorCode);
         }
-        
-        // Store credential if resident
         Ctap2StatusCode storeError = handleResidentCredentialStorage(
             validation.type, req, authenticator, txn);
         if (storeError != null) {
             return error(storeError);
         }
-        
-        // Build and return response
         return buildMakeCredentialResponse(
             credentialResult.authenticatorData,
             credentialResult.attestationStatement
@@ -1463,11 +1455,14 @@ public class AuthenticatorAPI {
      * @return true if an authenticated session was found and applied, false otherwise
      */
     private static boolean loadAuthenticatedSession(CtapTxn txn) {
-        Passkey passkey = openKeys.get(txn.getCid());
-        if (passkey != null) {
-            logger.debug("Found authenticated session for CID, loading passkey");
-            txn.setPasskey(passkey);
-            return true;
+        byte[] targetCid = txn.getCid();
+        // Manual lookup using Arrays.equals since HashMap doesn't work with byte[] keys
+        for (Map.Entry<byte[], Passkey> entry : openKeys.entrySet()) {
+            if (Arrays.equals(entry.getKey(), targetCid)) {
+                logger.debug("Found authenticated session for CID, loading passkey");
+                txn.setPasskey(entry.getValue());
+                return true;
+            }
         }
         logger.debug("No authenticated session found for CID");
         return false;
@@ -1496,7 +1491,6 @@ public class AuthenticatorAPI {
                     throw new IllegalStateException("Failed to generate seed from platform key");
                 }
                 
-                logger.debug("Configured U2F authenticator");
                 a.setSymKeys(seed);
             }
             
@@ -1583,11 +1577,10 @@ public class AuthenticatorAPI {
             throw new IllegalStateException("Failed to generate seed from passkey");
         }
         
-        logger.debug("Configured resident credential authenticator (seed length: {})", seed.length());
         a.setSymKeys(seed);
     }
 
-    private static boolean initializeAuthenticatorWithCredential(
+    private static Map<String, byte[]> initializeAuthenticatorWithCredential(
             Fido2Authenticator authenticator,
             ArrayList<Map<String, byte[]>> credentials) {
         
@@ -1598,7 +1591,7 @@ public class AuthenticatorAPI {
                     credId != null ? credId.length : 0);
                 authenticator.initFromCredId(credId);
                 logger.debug("Successfully initialized authenticator with credential");
-                return true;
+                return cred;  // Return the credential that was successfully used
             } catch (Exception e) {
                 logger.debug("Failed to initialize with credential: {}", e.getMessage());
                 // Continue trying other credentials
@@ -1606,7 +1599,7 @@ public class AuthenticatorAPI {
             }
         }
         logger.debug("Failed to initialize authenticator with any of {} credentials", credentials.size());
-        return false;
+        return null;
     }
 
     private static ArrayList<Map<String, byte[]>> processCredentials(
@@ -1619,23 +1612,24 @@ public class AuthenticatorAPI {
             allowList = new ArrayList<>();
         }
         if (passkey != null) { // Add resident credentials if available
-            List<Map<String, byte[]>> resCreds = passkey.getResCreds();
-            if (resCreds != null) {
-                for (Map<String, byte[]> cred : resCreds) {
-                    allowList.add(Map.of(
-                        "id", (byte[]) cred.get("cred.id"),
-                        "user", (byte[]) cred.get("user.id")
-                    ));
-                }
+        List<Map<String, byte[]>> resCreds = passkey.getResCreds();
+        if (resCreds != null) {
+            for (Map<String, byte[]> cred : resCreds) {
+                allowList.add(Map.of(
+                    "id", (byte[]) cred.get("cred.id"),
+                    "user", (byte[]) cred.get("user.id")  // Use "user.id" as key to match check in generateSignedAssertion
+                ));
             }
         }
+    }
         return allowList;
     }
 
 
     private static byte[] generateSignedAssertion(
             Map<Integer, Object> req,
-            Fido2Authenticator authenticator) {
+            Fido2Authenticator authenticator,
+            Map<String, byte[]> credentialData) {
         
         try {
             // Use GetAssertionKeys constants for correct parameter extraction
@@ -1646,10 +1640,39 @@ public class AuthenticatorAPI {
                 "id", authenticator.getCredId(),
                 "type", "public-key"
             );
-            Map<String, Object> pubKeyMap = Map.of("rpId", rpId);
+            
+            // Check if allowList is absent or empty (discoverable credential scenario)
+            // When allowList is not in the request, req.get returns null
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> allowList = (List<Map<String, Object>>) req.get(GetAssertionKeys.ALLOW_LIST);
+            boolean isDiscoverableCredential = (allowList == null || allowList.isEmpty());
+            
+            logger.info("allowList present: {}, isEmpty: {}, isDiscoverableCredential: {}",
+                allowList != null, allowList != null && allowList.isEmpty(), isDiscoverableCredential);
+            
+            Map<String, Object> options = Map.of("rpId", rpId);
             
             byte[] authData = authenticator.buildAuthenticatorData(
-                pubKeyMap, "packed", null, null, authenticator.getKeyPair());
+                options, "packed", null, null, authenticator.getKeyPair());
+            
+            // === DIAGNOSTIC LOGGING FOR AUTHENTICATOR DATA ===
+            logger.debug("=== generateSignedAssertion: authData verification ===");
+            logger.debug("authData length: {}", authData != null ? authData.length : "null");
+            if (authData != null && authData.length > 0) {
+                logger.debug("authData first 4 bytes (hex): {}",
+                    com.isfs.blekey.util.ByteUtils.bytesToHex(Arrays.copyOfRange(authData, 0, Math.min(4, authData.length))));
+                if (authData.length >= 37) {
+                    logger.debug("authData first 37 bytes (rpIdHash + flags + counter):");
+                    logger.debug("  rpIdHash (32 bytes): {}",
+                        com.isfs.blekey.util.ByteUtils.bytesToHex(Arrays.copyOfRange(authData, 0, 32)));
+                    logger.debug("  flags (1 byte): 0x{}", String.format("%02x", authData[32]));
+                    logger.debug("  counter (4 bytes): {}",
+                        com.isfs.blekey.util.ByteUtils.bytesToHex(Arrays.copyOfRange(authData, 33, 37)));
+                }
+                logger.debug("authData full hex dump:");
+                logger.debug("{}", com.isfs.blekey.util.ByteUtils.hexDump(authData, "AuthenticatorData"));
+            }
+            logger.debug("=== End authData verification ===");
             
             ByteBuffer bb = ByteBuffer.allocate(authData.length + clientDataHash.length);
             bb.put(authData);
@@ -1657,8 +1680,30 @@ public class AuthenticatorAPI {
             byte[] sig = authenticator.signData(
                 bb.array(), authenticator.getPrivKey(), "SHA256withECDSA");
             
-            Map<Integer, Object> rsp = Map.of(
-                0x01, cred, 0x02, authData, 0x03, sig);
+            // Build response - include user entity if discoverable credential
+            Map<Integer, Object> rsp;
+            if (isDiscoverableCredential && credentialData != null && credentialData.containsKey("user")) {
+                // Include user entity (0x04) for discoverable credentials
+                byte[] userId = credentialData.get("user");
+                Map<String, Object> userEntity = Map.of("id", userId);
+                
+                logger.info("Including user entity in assertion response (discoverable credential)");
+                logger.info("User ID length: {} bytes", userId.length);
+                logger.info("User ID (hex): {}", com.isfs.blekey.util.ByteUtils.bytesToHex(userId));
+                
+                rsp = Map.of(
+                    0x01, cred,
+                    0x02, authData,
+                    0x03, sig,
+                    0x04, userEntity
+                );
+            } else {
+                rsp = Map.of(
+                    0x01, cred,
+                    0x02, authData,
+                    0x03, sig
+                );
+            }
             
             return success(Cbor.encode(rsp));
         } catch (Exception e) {
@@ -1711,13 +1756,14 @@ public class AuthenticatorAPI {
         }
 
         // Initialize authenticator with a valid credential
-        if (!initializeAuthenticatorWithCredential(authenticator, credentials)) {
+        Map<String, byte[]> selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
+        if (selectedCredential == null) {
             logger.debug("Fido2Authenticator initialization failed with cred list");
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
 
-        // Generate and sign assertion
-        return generateSignedAssertion(req, authenticator);
+        // Generate and sign assertion with credential data (includes user.id for discoverable credentials)
+        return generateSignedAssertion(req, authenticator, selectedCredential);
     }
 
     /**
@@ -2140,7 +2186,6 @@ public class AuthenticatorAPI {
             updateAuthenticationState(txn, pinVerification.getPasskey(), pinToken, pinVerification.getPinHash());
             
             // Build and return response
-            logger.debug("PIN auth token successfully generated and encrypted");
             return new PinTokenResponseBuilder()
                 .withPinToken(encryptedPinToken)
                 .build();

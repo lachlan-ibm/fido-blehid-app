@@ -82,13 +82,15 @@ public class ServerActivity extends AppCompatActivity {
         ERROR
     }
 
-    /** Holds display name and current status for a BT device. */
+    /** Holds display name, address, and current status for a BT device. */
     private static class DeviceItem {
         final String name;
+        final String address;
         DeviceStatus status;
 
-        DeviceItem(String name, DeviceStatus status) {
+        DeviceItem(String name, String address, DeviceStatus status) {
             this.name = name;
+            this.address = address;
             this.status = status;
         }
     }
@@ -118,34 +120,53 @@ public class ServerActivity extends AppCompatActivity {
             TextView nameView = convertView.findViewById(R.id.deviceNameText);
             TextView statusView = convertView.findViewById(R.id.deviceStatusText);
             View statusBar = convertView.findViewById(R.id.deviceStatusBar);
+            android.widget.Button reconnectButton = convertView.findViewById(R.id.reconnectButton);
+            android.widget.Button disconnectButton = convertView.findViewById(R.id.disconnectButton);
 
             nameView.setText(item.name);
 
+            // Use device address from the item
+            final String deviceAddress = item.address;
+
             switch (item.status) {
                 case HID_ACTIVE:
-                    statusView.setText(getString(R.string.device_active));
+                case HID_ENUMERATED:
+                    // Device is usable - show green and disconnect button
+                    statusView.setText(item.status == DeviceStatus.HID_ACTIVE ?
+                        getString(R.string.device_active) : getString(R.string.device_discovered));
                     statusView.setTextColor(getColor(R.color.device_connected));
                     statusBar.setBackgroundColor(getColor(R.color.device_connected));
-                    break;
-                case HID_ENUMERATED:
-                    statusView.setText(getString(R.string.device_discovered));
-                    statusView.setTextColor(getColor(android.R.color.holo_orange_light));
-                    statusBar.setBackgroundColor(getColor(android.R.color.holo_orange_light));
+                    reconnectButton.setVisibility(View.GONE);
+                    disconnectButton.setVisibility(View.VISIBLE);
+                    disconnectButton.setOnClickListener(v ->
+                        ServerActivity.this.handleDisconnect(deviceAddress, item.name));
                     break;
                 case CONNECTED:
+                    // Connected but not yet HID ready - show green
                     statusView.setText(getString(R.string.device_status_connected));
                     statusView.setTextColor(getColor(R.color.device_connected));
                     statusBar.setBackgroundColor(getColor(R.color.device_connected));
+                    reconnectButton.setVisibility(View.GONE);
+                    disconnectButton.setVisibility(View.GONE);
                     break;
                 case ERROR:
                     statusView.setText(getString(R.string.device_status_error));
                     statusView.setTextColor(getColor(R.color.device_error));
                     statusBar.setBackgroundColor(getColor(R.color.device_error));
+                    reconnectButton.setVisibility(View.VISIBLE);
+                    disconnectButton.setVisibility(View.GONE);
+                    reconnectButton.setOnClickListener(v ->
+                        ServerActivity.this.handleReconnect(deviceAddress, item.name));
                     break;
                 default:
+                    // Disconnected - show grey and reconnect button
                     statusView.setText(getString(R.string.device_status_disconnected));
                     statusView.setTextColor(getColor(R.color.device_disconnected));
                     statusBar.setBackgroundColor(getColor(R.color.device_disconnected));
+                    reconnectButton.setVisibility(View.VISIBLE);
+                    disconnectButton.setVisibility(View.GONE);
+                    reconnectButton.setOnClickListener(v ->
+                        ServerActivity.this.handleReconnect(deviceAddress, item.name));
                     break;
             }
             return convertView;
@@ -480,6 +501,7 @@ public class ServerActivity extends AppCompatActivity {
     private TextView activityLogText;
     private TextView bleDeviceNameText;
     private SwitchCompat autoStartSwitch;
+    private android.widget.ImageView btStatusIcon;
 
     /** Ordered map: device address -> DeviceItem, preserves insertion order. */
     private final Map<String, DeviceItem> deviceMap = new LinkedHashMap<>();
@@ -503,7 +525,9 @@ public class ServerActivity extends AppCompatActivity {
         activityLogText = findViewById(R.id.activityLogText);
         bleDeviceNameText = findViewById(R.id.bleDeviceNameText);
         autoStartSwitch = findViewById(R.id.autoStartSwitch);
+        btStatusIcon = findViewById(R.id.btStatusIcon);
         updateBleDeviceNameDisplay();
+        updateBtStatusIcon();
 
         devicesAdapter = new DeviceListAdapter(deviceItems);
         devicesList.setAdapter(devicesAdapter);
@@ -512,7 +536,6 @@ public class ServerActivity extends AppCompatActivity {
         stateManager = new DeviceStateManager(this);
 
         setupAutoStartSwitch();
-        setupRestartButton();
 
         findViewById(R.id.backButton).setOnClickListener(view -> {
             unbindFromService();
@@ -605,33 +628,79 @@ public class ServerActivity extends AppCompatActivity {
     }
     
     /**
-     * Sets up the restart service button click handler.
+     * Updates the Bluetooth status icon based on adapter state.
      */
-    private void setupRestartButton() {
-        View restartButton = findViewById(R.id.restartServiceButton);
-        if (restartButton != null) {
-            restartButton.setOnClickListener(view -> {
-                appendLog("Restarting HID service...");
-                restartHIDService();
-            });
+    private void updateBtStatusIcon() {
+        if (btStatusIcon == null) return;
+        
+        boolean btEnabled = BTHIDService.isBluetoothEnabled(this);
+        if (btEnabled) {
+            btStatusIcon.setColorFilter(getColor(R.color.device_connected));
+        } else {
+            btStatusIcon.setColorFilter(getColor(R.color.device_error));
         }
     }
 
     /**
-     * Restarts the HID service by stopping and starting it.
+     * Handles disconnect button click for a device.
      */
-    private void restartHIDService() {
-        // Stop the service
-        unbindFromService();
-        Intent serviceIntent = new Intent(this, HIDForegroundService.class);
-        stopService(serviceIntent);
+    private void handleDisconnect(String deviceAddress, String deviceName) {
+        if (passkeyService == null) {
+            appendLog("Service not available");
+            return;
+        }
         
-        // Wait a moment then restart
-        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-            startHIDForegroundService();
-            appendLog("HID service restarted");
-            Toast.makeText(this, "HID Service Restarted", Toast.LENGTH_SHORT).show();
-        }, 500);
+        if (!hasBluetoothConnectPermission()) {
+            appendLog("Bluetooth permission required");
+            return;
+        }
+        
+        try {
+            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            if (adapter != null) {
+                BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
+                boolean success = passkeyService.disconnect(device);
+                if (success) {
+                    appendLog("Disconnecting from " + deviceName);
+                } else {
+                    appendLog("Failed to disconnect from " + deviceName);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error disconnecting device", e);
+            appendLog("Error disconnecting: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles reconnect button click for a device.
+     */
+    private void handleReconnect(String deviceAddress, String deviceName) {
+        if (passkeyService == null) {
+            appendLog("Service not available");
+            return;
+        }
+        
+        if (!hasBluetoothConnectPermission()) {
+            appendLog("Bluetooth permission required");
+            return;
+        }
+        
+        try {
+            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            if (adapter != null) {
+                BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
+                boolean success = passkeyService.connect(device);
+                if (success) {
+                    appendLog("Reconnecting to " + deviceName);
+                } else {
+                    appendLog("Failed to reconnect to " + deviceName);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error reconnecting device", e);
+            appendLog("Error reconnecting: " + e.getMessage());
+        }
     }
 
     /**
@@ -738,10 +807,14 @@ public class ServerActivity extends AppCompatActivity {
      */
     private void upsertDevice(String address, String displayName, DeviceStatus status) {
         DeviceItem existing = deviceMap.get(address);
+        String truncDispName = displayName;
+        if(displayName.length() > 16) {
+            truncDispName = displayName.substring(0, 13) + "...";
+        }
         if (existing != null) {
             existing.status = status;
         } else {
-            DeviceItem item = new DeviceItem(displayName, status);
+            DeviceItem item = new DeviceItem(truncDispName, address, status);
             deviceMap.put(address, item);
             deviceItems.add(item);
         }

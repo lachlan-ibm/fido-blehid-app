@@ -90,16 +90,31 @@ public class HolderBindingKeyManagerTest {
         KeyPair keyPair2 = HolderBindingKeyManager.deriveBindingKey(
             seed, credentialId, issuerId, credentialType, masterKeyPair.getPrivate());
         
-        assertArrayEquals(
-            keyPair1.getPublic().getEncoded(),
-            keyPair2.getPublic().getEncoded(),
-            "Same inputs should produce same public key"
+        // Compare EC key coordinates instead of encoded bytes
+        // EC key encoding can vary even for the same mathematical point
+        java.security.interfaces.ECPublicKey pub1 = (java.security.interfaces.ECPublicKey) keyPair1.getPublic();
+        java.security.interfaces.ECPublicKey pub2 = (java.security.interfaces.ECPublicKey) keyPair2.getPublic();
+        
+        assertEquals(
+            pub1.getW().getAffineX(),
+            pub2.getW().getAffineX(),
+            "Same inputs should produce same public key X coordinate"
         );
         
-        assertArrayEquals(
-            keyPair1.getPrivate().getEncoded(),
-            keyPair2.getPrivate().getEncoded(),
-            "Same inputs should produce same private key"
+        assertEquals(
+            pub1.getW().getAffineY(),
+            pub2.getW().getAffineY(),
+            "Same inputs should produce same public key Y coordinate"
+        );
+        
+        // For private keys, compare the S value (private key scalar)
+        java.security.interfaces.ECPrivateKey priv1 = (java.security.interfaces.ECPrivateKey) keyPair1.getPrivate();
+        java.security.interfaces.ECPrivateKey priv2 = (java.security.interfaces.ECPrivateKey) keyPair2.getPrivate();
+        
+        assertEquals(
+            priv1.getS(),
+            priv2.getS(),
+            "Same inputs should produce same private key scalar"
         );
     }
     

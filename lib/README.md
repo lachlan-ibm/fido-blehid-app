@@ -1,5 +1,5 @@
 <!--
- Copyright IBM 2025
+ Copyright IBM 2025, 2026
 -->
 
 # FIDO BLE HID Library Tests

@@ -80,7 +80,10 @@
     <string name="manage_credentials">Manage Credentials</string>
 
     <!-- ServerActivity UI labels -->
+    <string name="server_status">Server Status</string>
     <string name="device_name_label">Device Name: %1$s</string>
+    <string name="reconnect">Reconnect</string>
+    <string name="disconnect">Disconnect</string>
 
     <!-- ServerActivity activity log messages -->
     <string name="log_advertising_started">Advertising started</string>

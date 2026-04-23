@@ -82,19 +82,20 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         
         // Invoke private method using reflection
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalStateException when platform key is not available
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         // Verify the cause is IllegalStateException
         assertTrue(exception.getCause() instanceof IllegalStateException,
             "Expected IllegalStateException when seed generation fails");
-        assertTrue(exception.getCause().getMessage().contains("Failed to generate seed from platform key"),
-            "Exception message should indicate platform key seed generation failure");
+        String message = exception.getCause().getMessage();
+        assertTrue(message != null && message.contains("Failed to generate seed"),
+            "Exception message should indicate seed generation failure");
     }
 
     // ========== Branch: rpObj instanceof byte[] (line 1012) ==========
@@ -113,12 +114,12 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         when(mockTxn.getPasskey()).thenReturn(null);
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalStateException when platform key is not available
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalStateException,
@@ -145,12 +146,12 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         when(mockTxn.getPasskey()).thenReturn(null);
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalStateException when platform key is not available
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalStateException,
@@ -176,12 +177,12 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalStateException when platform key is not available
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalStateException,
@@ -201,18 +202,19 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         req.put(0x01, "clientDataHash".getBytes(StandardCharsets.UTF_8));
                 
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalArgumentException for missing RP parameter
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalArgumentException,
             "Expected IllegalArgumentException for missing RP parameter");
-        assertTrue(exception.getCause().getMessage().contains("Missing RP parameter"),
-            "Exception message should indicate missing RP parameter");
+        String message = exception.getCause().getMessage();
+        assertTrue(message != null && message.contains("Missing rpId"),
+            "Exception message should indicate missing rpId value");
     }
 
     /**
@@ -232,12 +234,12 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalArgumentException for missing id field in RP map
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalArgumentException,
@@ -259,16 +261,15 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         req.put(0x02, "example.com");
         req.put(0x01, "clientDataHash".getBytes(StandardCharsets.UTF_8));
         
-        // Mock passkey with certificate and private key
-        when(mockPasskey.getCertificate()).thenReturn(testCert);
+        // Mock passkey with private key only (certificate not needed for this path)
         when(mockPasskey.getPrivateKey()).thenReturn(testPrivateKey);
         when(mockTxn.getPasskey()).thenReturn(mockPasskey);
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
-        Fido2Authenticator result = (Fido2Authenticator) method.invoke(null, mockTxn, req);
+        Fido2Authenticator result = (Fido2Authenticator) method.invoke(null, mockTxn, req.get(0x02));
         
         assertNotNull(result, "Should create authenticator with passkey for resident credential");
     }
@@ -290,12 +291,12 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         when(mockTxn.getPasskey()).thenReturn(null);
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalStateException when platform key is not available
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalStateException,
@@ -317,18 +318,19 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         // Don't stub mockTxn.getPasskey() - let it return null naturally
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
-        // Expect RuntimeException wrapping the NullPointerException
+        // Expect IllegalArgumentException for null rpIdValue
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, null);
         });
         
-        assertTrue(exception.getCause() instanceof RuntimeException,
-            "Expected RuntimeException for unexpected errors");
-        assertTrue(exception.getCause().getMessage().contains("Failed to create authenticator"),
-            "Exception message should indicate authenticator creation failure");
+        assertTrue(exception.getCause() instanceof IllegalArgumentException,
+            "Expected IllegalArgumentException for null rpIdValue");
+        String message = exception.getCause().getMessage();
+        assertTrue(message != null && message.contains("Missing rpId"),
+            "Exception message should indicate missing rpId value");
     }
 
     /**
@@ -344,23 +346,23 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         req.put(0x01, "clientDataHash".getBytes(StandardCharsets.UTF_8));
         
         // Mock passkey with null private key to trigger exception
-        when(mockPasskey.getCertificate()).thenReturn(testCert);
         when(mockPasskey.getPrivateKey()).thenReturn(null);
         when(mockTxn.getPasskey()).thenReturn(mockPasskey);
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalStateException when seed generation fails
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalStateException,
             "Expected IllegalStateException when seed generation fails");
-        assertTrue(exception.getCause().getMessage().contains("Failed to generate seed from passkey"),
-            "Exception message should indicate passkey seed generation failure");
+        String message = exception.getCause().getMessage();
+        assertTrue(message != null && message.contains("Failed to generate seed"),
+            "Exception message should indicate seed generation failure");
     }
 
     // ========== Additional edge case tests ==========
@@ -379,18 +381,19 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalArgumentException for unsupported RP type
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalArgumentException,
             "Expected IllegalArgumentException for unsupported RP type");
-        assertTrue(exception.getCause().getMessage().contains("RP parameter has unsupported type"),
-            "Exception message should indicate unsupported RP type");
+        String message = exception.getCause().getMessage();
+        assertTrue(message != null && message.contains("unsupported type"),
+            "Exception message should indicate unsupported type");
     }
 
     /**
@@ -411,12 +414,12 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         
         
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Expect IllegalArgumentException for unsupported id type
         Exception exception = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req);
+            method.invoke(null, mockTxn, req.get(0x02));
         });
         
         assertTrue(exception.getCause() instanceof IllegalArgumentException,
@@ -433,7 +436,7 @@ public class AuthenticatorAPICreateAuthenticatorTest {
     @Test
     public void testCreateAuthenticator_ComprehensiveBranchCoverage() throws Exception {
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "createAuthenticator", CtapTxn.class, Map.class);
+            "createAuthenticator", CtapTxn.class, Object.class);
         method.setAccessible(true);
         
         // Test 1: String rpId + no passkey (will throw exception without platform key)
@@ -442,17 +445,16 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         req1.put(0x01, "hash1".getBytes());
         when(mockTxn.getPasskey()).thenReturn(null);
         assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req1);
+            method.invoke(null, mockTxn, req1.get(0x02));
         }, "String rpId without platform key should throw exception");
         
         // Test 2: byte[] rpId + with passkey
         Map<Integer, Object> req2 = new HashMap<>();
         req2.put(0x02, "example.com".getBytes());
         req2.put(0x01, "hash2".getBytes());
-        when(mockPasskey.getCertificate()).thenReturn(testCert);
         when(mockPasskey.getPrivateKey()).thenReturn(testPrivateKey);
         when(mockTxn.getPasskey()).thenReturn(mockPasskey);
-        Object result2 = method.invoke(null, mockTxn, req2);
+        Object result2 = method.invoke(null, mockTxn, req2.get(0x02));
         assertNotNull(result2, "byte[] rpId + passkey should succeed");
         
         // Test 3: Map with String id + no passkey (will throw exception without platform key)
@@ -463,7 +465,7 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         req3.put(0x01, "hash3".getBytes());
         when(mockTxn.getPasskey()).thenReturn(null);
         assertThrows(java.lang.reflect.InvocationTargetException.class, () -> {
-            method.invoke(null, mockTxn, req3);
+            method.invoke(null, mockTxn, req3.get(0x02));
         }, "Map with String id without platform key should throw exception");
         
         // Test 4: Map with byte[] id + with passkey
@@ -473,7 +475,7 @@ public class AuthenticatorAPICreateAuthenticatorTest {
         req4.put(0x02, rpMap4);
         req4.put(0x01, "hash4".getBytes());
         when(mockTxn.getPasskey()).thenReturn(mockPasskey);
-        Object result4 = method.invoke(null, mockTxn, req4);
+        Object result4 = method.invoke(null, mockTxn, req4.get(0x02));
         assertNotNull(result4, "Map with byte[] id + passkey should succeed");
     }
 }

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright IBM 2025
+# Copyright IBM 2025, 2026
 #
 
 # Script to run the FIDO2 Authenticator tests
