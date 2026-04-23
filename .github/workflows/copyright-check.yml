@@ -24,21 +24,25 @@ jobs:
         
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
-        
-    - name: Make check-copyright.sh executable
-      run: chmod +x ./check-copyright.sh
+      with:
+        gradle-version: wrapper
         
     - name: Run copyright check (dry run)
-      run: ./check-copyright.sh --dry-run
+      run: gradle checkCopyrightHeaders -PdryRun=true
       
     - name: Check for missing copyright headers
       id: check-missing
       run: |
         # Run the check and capture output
-        OUTPUT=$(./check-copyright.sh --dry-run)
+        OUTPUT=$(gradle checkCopyrightHeaders -PdryRun=true 2>&1)
         
         # Extract the number of missing copyright headers
         MISSING=$(echo "$OUTPUT" | grep -o "Files missing copyright: [0-9]*" | grep -o "[0-9]*")
+        
+        # If MISSING is empty, set it to 0
+        if [ -z "$MISSING" ]; then
+          MISSING=0
+        fi
         
         # Set output variable
         echo "missing=$MISSING" >> $GITHUB_OUTPUT
