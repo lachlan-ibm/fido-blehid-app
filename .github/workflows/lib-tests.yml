@@ -28,14 +28,16 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         
-    - name: Setup Gradle Wrapper
-      run: |
-        # Generate gradlew scripts from the wrapper jar
-        java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain wrapper
-        chmod +x gradlew
+    - name: Validate Gradle wrapper
+      uses: gradle/actions/wrapper-validation@v3
         
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: 8.13
+        
+    - name: Generate Gradle wrapper scripts
+      run: gradle wrapper --gradle-version=8.13
         
     - name: Run tests
       run: ./gradlew :lib:test --info
