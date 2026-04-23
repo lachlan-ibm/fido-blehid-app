@@ -27,6 +27,14 @@ jobs:
       with:
         gradle-version: 8.13
         
+    - name: Debug environment
+      run: |
+        echo "JAVA_HOME: $JAVA_HOME"
+        echo "PATH: $PATH"
+        ls -la ~/.gradle/ || echo "No ~/.gradle directory"
+        cat ~/.gradle/gradle.properties || echo "No ~/.gradle/gradle.properties"
+        env | grep -i java || echo "No JAVA env vars"
+        
     - name: Generate Gradle wrapper scripts
       run: gradle wrapper
         
