@@ -48,7 +48,7 @@ jobs:
         echo "$OUTPUT" > copyright-check-results.txt
         
     - name: Upload check results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: copyright-check-results
         path: copyright-check-results.txt
