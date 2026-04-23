@@ -22,16 +22,11 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         
-    - name: Validate Gradle wrapper
-      uses: gradle/actions/wrapper-validation@v3
-        
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: 8.13
         
     - name: Generate Gradle wrapper scripts
-      run: gradle wrapper --gradle-version=8.13
+      run: gradle wrapper
         
     - name: Run copyright check (dry run)
       run: ./gradlew checkCopyrightHeaders -PdryRun=true
@@ -40,7 +35,7 @@ jobs:
       id: check-missing
       run: |
         # Run the check and capture output
-        OUTPUT=$(gradle checkCopyrightHeaders -PdryRun=true 2>&1)
+        OUTPUT=$(./gradlew checkCopyrightHeaders -PdryRun=true 2>&1)
         
         # Extract the number of missing copyright headers
         MISSING=$(echo "$OUTPUT" | grep -o "Files missing copyright: [0-9]*" | grep -o "[0-9]*")

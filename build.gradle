@@ -21,5 +21,9 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+wrapper {
+    gradleVersion = '8.13'
+    distributionType = Wrapper.DistributionType.BIN
+}
 
 // Made with Bob
