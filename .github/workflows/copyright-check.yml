@@ -21,11 +21,13 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
+        
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
         
     - name: Make check-copyright.sh executable
       run: chmod +x ./check-copyright.sh
-      
+        
     - name: Run copyright check (dry run)
       run: ./check-copyright.sh --dry-run
       
