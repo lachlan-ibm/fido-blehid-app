@@ -304,6 +304,141 @@ public class KeyUtilsHKDFTest {
             assertEquals("Thread " + i + " should produce same result", firstResult, results[i]);
         }
     }
-}
+    
+    // ========== Additional HKDF Edge Case Tests ==========
+    
+    /**
+     * Test 16: HKDF with null salt
+     */
+    @Test
+    public void testHkdfNullSalt() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        int length = 32;
+        
+        byte[] result = KeyUtils.hkdf(ikm, null, info, length);
+        assertNotNull("Result should not be null with null salt", result);
+        assertEquals("Result should be requested length", length, result.length);
+    }
+    
+    /**
+     * Test 17: HKDF with null info
+     */
+    @Test
+    public void testHkdfNullInfo() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        int length = 32;
+        
+        byte[] result = KeyUtils.hkdf(ikm, salt, null, length);
+        assertNotNull("Result should not be null with null info", result);
+        assertEquals("Result should be requested length", length, result.length);
+    }
+    
+    /**
+     * Test 18: HKDF with null IKM should throw exception
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testHkdfNullIkm() throws Exception {
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        KeyUtils.hkdf(null, salt, info, 32);
+    }
+    
+    /**
+     * Test 19: HKDF with empty IKM should throw exception
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testHkdfEmptyIkm() throws Exception {
+        byte[] emptyIkm = new byte[0];
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        KeyUtils.hkdf(emptyIkm, salt, info, 32);
+    }
+    
+    /**
+     * Test 20: HKDF with invalid length (0)
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testHkdfInvalidLength() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        KeyUtils.hkdf(ikm, salt, info, 0);
+    }
+    
+    /**
+     * Test 21: HKDF with negative length
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testHkdfNegativeLength() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        KeyUtils.hkdf(ikm, salt, info, -1);
+    }
+    
+    /**
+     * Test 22: HKDF determinism - same inputs produce same output
+     */
+    @Test
+    public void testHkdfDeterministic() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        int length = 32;
+        
+        byte[] result1 = KeyUtils.hkdf(ikm, salt, info, length);
+        byte[] result2 = KeyUtils.hkdf(ikm, salt, info, length);
+        
+        assertArrayEquals("HKDF should be deterministic", result1, result2);
+    }
+    
+    /**
+     * Test 23: HKDF with different output lengths
+     */
+    @Test
+    public void testHkdfDifferentLengths() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        
+        byte[] result16 = KeyUtils.hkdf(ikm, salt, info, 16);
+        byte[] result32 = KeyUtils.hkdf(ikm, salt, info, 32);
+        byte[] result64 = KeyUtils.hkdf(ikm, salt, info, 64);
+        
+        assertEquals("16-byte result should be correct length", 16, result16.length);
+        assertEquals("32-byte result should be correct length", 32, result32.length);
+        assertEquals("64-byte result should be correct length", 64, result64.length);
+    }
+    
+    /**
+     * Test 24: HKDF with maximum allowed length
+     */
+    @Test
+    public void testHkdfMaxLength() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        int maxLength = 255 * 32; // Maximum for HKDF with SHA-256
+        
+        byte[] result = KeyUtils.hkdf(ikm, salt, info, maxLength);
+        
+        assertNotNull("Result should not be null", result);
+        assertEquals("Result should be maximum length", maxLength, result.length);
+    }
+    
+    /**
+     * Test 25: HKDF with length exceeding maximum should throw exception
+     */
+    @Test(expected = IllegalArgumentException.class)
+    public void testHkdfExceedMaxLength() throws Exception {
+        byte[] ikm = "input key material".getBytes(StandardCharsets.UTF_8);
+        byte[] salt = "salt".getBytes(StandardCharsets.UTF_8);
+        byte[] info = "info".getBytes(StandardCharsets.UTF_8);
+        int tooLarge = 255 * 32 + 1; // Exceeds maximum
+        
+        KeyUtils.hkdf(ikm, salt, info, tooLarge);
+    }
 
-// Made with Bob
+}

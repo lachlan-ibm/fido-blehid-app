@@ -36,13 +36,10 @@ import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.security.spec.ECField;
-import java.security.spec.ECFieldFp;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
-import java.security.spec.EllipticCurve;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
@@ -67,6 +64,8 @@ import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
 import org.bouncycastle.crypto.digests.SHA256Digest;
+import org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util;
+import org.bouncycastle.math.ec.FixedPointCombMultiplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,6 +103,14 @@ public class KeyUtils {
         } else if (!provider.getClass().equals(BouncyCastleProvider.class)) {
             Security.removeProvider(BOUNCY_CASTLE_PROVIDER_NAME);
             Security.insertProviderAt(new BouncyCastleProvider(), 1);
+        } else {
+            // BC exists and is correct class, but ensure it's at position 1
+            Provider[] providers = Security.getProviders();
+            if (providers.length > 0 && !providers[0].getName().equals(BOUNCY_CASTLE_PROVIDER_NAME)) {
+                // BC is not at position 1, so remove and re-insert it
+                Security.removeProvider(BOUNCY_CASTLE_PROVIDER_NAME);
+                Security.insertProviderAt(new BouncyCastleProvider(), 1);
+            }
         }
     }
     
@@ -777,79 +784,15 @@ public class KeyUtils {
         return kf.generatePublic(new X509EncodedKeySpec(raw));
     }
 
-    private static class FieldP {
-        final static BigInteger _2 = BigInteger.valueOf(2);
-        final static BigInteger _3 = BigInteger.valueOf(3);
-    }
-
-    private static ECPoint doublePoint(final BigInteger p, final BigInteger a,
-            final ECPoint R) {
-        if (R.equals(ECPoint.POINT_INFINITY)) {
-            return R;
-        }
-        BigInteger slope = (R.getAffineX().pow(2)).multiply(FieldP._3);
-        slope = slope.add(a);
-        slope = slope.multiply((R.getAffineY().multiply(FieldP._2)).modInverse(p));
-        final BigInteger Xout = slope.pow(2).subtract(R.getAffineX().multiply(FieldP._2))
-                .mod(p);
-        final BigInteger Yout = (R.getAffineY().negate())
-                .add(slope.multiply(R.getAffineX().subtract(Xout))).mod(p);
-        return new ECPoint(Xout, Yout);
-    }
-
-    private static ECPoint addPoint(final BigInteger p, final BigInteger a, final ECPoint r,
-            final ECPoint g) {
-        if (r.equals(ECPoint.POINT_INFINITY)) {
-            return g;
-        }
-        if (g.equals(ECPoint.POINT_INFINITY)) {
-            return r;
-        }
-        if (r == g || r.equals(g)) {
-            return doublePoint(p, a, r);
-        }
-        final BigInteger gX = g.getAffineX();
-        final BigInteger sY = g.getAffineY();
-        final BigInteger rX = r.getAffineX();
-        final BigInteger rY = r.getAffineY();
-        final BigInteger slope = (rY.subtract(sY)).multiply(rX.subtract(gX).modInverse(p))
-                .mod(p);
-        final BigInteger Xout = (slope.modPow(FieldP._2, p).subtract(rX)).subtract(gX).mod(p);
-        BigInteger Yout = sY.negate().mod(p);
-        Yout = Yout.add(slope.multiply(gX.subtract(Xout))).mod(p);
-        return new ECPoint(Xout, Yout);
-    }
-
-    public static ECPoint scalmult(final EllipticCurve curve, final ECPoint g,
-            final BigInteger kin) {
-        final ECField field = curve.getField();
-        if (!(field instanceof ECFieldFp)) {
-            throw new UnsupportedOperationException(field.getClass().getCanonicalName());
-        }
-        final BigInteger p = ((ECFieldFp) field).getP();
-        final BigInteger a = curve.getA();
-        ECPoint R = ECPoint.POINT_INFINITY;
-        BigInteger k = kin.mod(p);
-        final int length = k.bitLength();
-        final byte[] binarray = new byte[length];
-        for (int i = 0; i <= length - 1; i++) {
-            binarray[i] = k.mod(FieldP._2).byteValue();
-            k = k.shiftRight(1);
-        }
-        for (int i = length - 1; i >= 0; i--) {
-            R = doublePoint(p, a, R);
-            if (binarray[i] == 1) {
-                R = addPoint(p, a, R, g);
-            }
-        }
-        return R;
-    }
-
     public static ECPublicKey getPubKey(final ECPrivateKey pk)
-            throws NoSuchAlgorithmException, InvalidKeySpecException {
+            throws NoSuchAlgorithmException, InvalidKeySpecException, NoSuchProviderException {
         ECParameterSpec spec = pk.getParams();
-        ECPoint w = scalmult(spec.getCurve(), pk.getParams().getGenerator(), pk.getS());
-        KeyFactory kf = KeyFactory.getInstance("EC");
+        org.bouncycastle.math.ec.ECPoint bcG = EC5Util.convertPoint(
+                EC5Util.convertCurve(spec.getCurve()), spec.getGenerator());
+        org.bouncycastle.math.ec.ECPoint bcW =
+                new FixedPointCombMultiplier().multiply(bcG, pk.getS()).normalize();
+        ECPoint w = EC5Util.convertPoint(bcW);
+        KeyFactory kf = KeyFactory.getInstance("EC", BouncyCastleProvider.PROVIDER_NAME);
         return (ECPublicKey) kf.generatePublic(new ECPublicKeySpec(w, spec));
     }
 
@@ -873,18 +816,9 @@ public class KeyUtils {
     
     private static KeyPair getECKeyPair() throws Exception {
         ensureBouncyCastleProvider();
-        try {
-            // Try with default provider first
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance(ECDSA_ALGORITHM);
-            kpg.initialize(256);
-            return kpg.generateKeyPair();
-        } catch (Exception e) {
-            logger.error("Failed to generate EC keypair with default provider, trying BouncyCastle: " + e.getMessage());
-            // Try BouncyCastle if default fails
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance(ECDSA_ALGORITHM, BOUNCY_CASTLE_PROVIDER_NAME);
-            kpg.initialize(256);
-            return kpg.generateKeyPair();
-        }
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance(ECDSA_ALGORITHM);
+        kpg.initialize(256);
+        return kpg.generateKeyPair();
     }
     
     

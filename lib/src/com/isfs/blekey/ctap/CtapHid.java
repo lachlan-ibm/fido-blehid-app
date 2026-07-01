@@ -9,7 +9,6 @@ import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -83,7 +82,19 @@ public class CtapHid {
      * Map of assigned channel IDs and their ongoing CTAP transaction context.
      * Keyed by hex string to avoid byte[] reference-equality pitfall in HashMap.
      */
-    private static Map<String, CtapTxn> assignedCids = new HashMap<String, CtapTxn>();
+    private static Map<String, CtapTxn> assignedCids = new java.util.concurrent.ConcurrentHashMap<String, CtapTxn>();
+
+    /** Callback invoked when a CANCEL command dismisses a deferred UP request. */
+    private static volatile Runnable onCancelCallback = null;
+
+    /**
+     * Registers a callback that fires when a CTAPHID_CANCEL command arrives while a
+     * deferred user-presence command is outstanding.  The app layer uses this to
+     * dismiss any pending dialog and stop keepalive.
+     *
+     * @param r Runnable to invoke on the calling thread (schedule to UI thread if needed)
+     */
+    public static void setOnCancelCallback(Runnable r) { onCancelCallback = r; }
 
     private static String cidKey(byte[] cid) {
         StringBuilder sb = new StringBuilder(cid.length * 2);
@@ -168,7 +179,7 @@ public class CtapHid {
                     txn != null ? txn.hashCode() : "null");
         
         if (existingTxn != null) {
-            // Preserve PIN token, passkey, PIN hash, and passkey filename
+            // Preserve PIN token, passkey, PIN hash, passkey filename, and UP cache
             if (existingTxn.getPinAuthTkn() != null) {
                 txn.setPinAuthTkn(existingTxn.getPinAuthTkn());
                 logger.debug("Preserved PIN token ({} bytes) when updating CID transaction",
@@ -186,6 +197,11 @@ public class CtapHid {
             }
             if (existingTxn.getPasskeyFileName() != null) {
                 txn.setPasskeyFileName(existingTxn.getPasskeyFileName());
+            }
+            // Propagate cached user presence so makeCredential / getAssertion still proceed
+            if (existingTxn.isUserPresent()) {
+                txn.setUserPresent(true);
+                logger.debug("Preserved userPresent=true when updating CID transaction");
             }
         } else {
             logger.warn("=== PIN HASH TRACKING: No existing transaction found for CID!");
@@ -484,6 +500,7 @@ public class CtapHid {
                 api == 2 ? "getAssertion" :
                 api == 4 ? "getInfo" :
                 api == 6 ? "clientPIN" :
+                api == 11 ? "authenticatorSelection" :
                 "unknown");
             logger.debug("api : : " + api);
             
@@ -502,14 +519,46 @@ public class CtapHid {
                     logger.info("CBOR: {}", cbor.toString());
                 }
                 logger.info("=== END CBOR REQUEST ===");
-                buildCborInitAndSequencePackets(
-                    AuthenticatorAPI.process(CtapHid.assignedCids.get(cidKey(this.cid)), api, cbor));
+                // Set the deferred cmd BEFORE calling process() so
+                // the callback exists when processing the txn.
+                CtapTxn txn = CtapHid.assignedCids.get(cidKey(this.cid));
+                if (txn != null) {
+                    txn.setDeferredCmd(this);
+                }
+                byte[] response = AuthenticatorAPI.process(txn, api, cbor);
+                if (response == null) {
+                    // Deferred — cmd is already on txn; responseReady stays false.
+                    logger.info("CBOR response deferred for CID {}", cidKey(this.cid));
+                    return;
+                }
+                // Non-deferred — clear the cmd we just set, then build packets.
+                if (txn != null) {
+                    txn.setDeferredCmd(null);
+                }
+                buildCborInitAndSequencePackets(response);
+                // responseReady is set inside _writeResponseFrame — do NOT add another set here
             } catch (Exception e) {
                 logger.error(e.getMessage(), e);
                 this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
             }
         }
-        this.responseReady = true;
+        // NOTE: responseReady is set by _writeResponseFrame() inside ctapAck/ctapErr.
+        // The unconditional set that was formerly here has been removed (it fired even
+        // when the deferred path returned early, or after ctapErr had already set it).
+    }
+
+    /**
+     * Injects a deferred CBOR response after user-presence resolution.
+     * After this returns, {@link #hasMoreResponses()} is true and the caller
+     * must drain {@link #getResponseSegment()} and write HID input reports.
+     *
+     * @param cborResponse The fully-formed CTAP response bytes (status byte + CBOR payload)
+     * @throws IOException if building the HID packets fails
+     */
+    public void injectDeferredResponse(byte[] cborResponse) throws IOException {
+        this.responseSegment = -1;          // reset drain cursor
+        buildCborInitAndSequencePackets(cborResponse);
+        // _writeResponseFrame sets responseReady = true
     }
 
     /**
@@ -555,11 +604,25 @@ public class CtapHid {
      * @param data The cancel message data
      * @throws IOException if an error occurs while creating the response
      */
-    private void cancel(byte[] data) throws IOException  {
-        if(CtapHid.assignedCids.containsKey(cidKey(this.getCid()))) {
-            //TODO cleanup request in progress
-            ctapAck(0, null);
+    private void cancel(byte[] data) throws IOException {
+        CtapTxn txn = assignedCids.get(cidKey(this.getCid()));
+        if (txn != null) {
+            CtapHid pending = txn.takeDeferredCmd();
+            if (pending != null) {
+                // Inject KEEPALIVE_CANCEL into the original deferred command
+                pending.injectDeferredResponse(
+                    new byte[]{ (byte) Ctap2StatusCode.KEEPALIVE_CANCEL.getCode() });
+                logger.info("CANCEL: injected KEEPALIVE_CANCEL for CID {}", cidKey(this.getCid()));
+                // Notify the app layer so it can dismiss any dialog and stop keepalive
+                if (onCancelCallback != null) {
+                    onCancelCallback.run();
+                }
+                // Per spec §11.2.9.1.5: no reply to the CANCEL frame itself.
+                return;
+            }
         }
+        // No deferred command — acknowledge normally.
+        ctapAck(0, null);
     }
 
     /**
@@ -617,5 +680,16 @@ public class CtapHid {
      */
     public int getSize() {
         return this.byteCount;
+    }
+
+    /**
+     * Returns the {@link CtapTxn} for the given channel ID, or null if no transaction exists.
+     * Used by the app layer to retrieve the deferred command after user-presence resolution.
+     *
+     * @param cid The 4-byte channel identifier
+     * @return The associated transaction, or null
+     */
+    public static CtapTxn getCidTransaction(byte[] cid) {
+        return assignedCids.get(cidKey(cid));
     }
 }

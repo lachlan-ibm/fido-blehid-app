@@ -45,10 +45,11 @@ import com.isfs.blekey.util.KeystoreManager;
  * 1. PIN Hash Splitting:
  *    - The 32-byte PIN hash is split into two 16-byte parts: upperHash and lowerHash
  *    - Only the lowerHash (first 16 bytes) is required from the user for decryption
- *    - The upperHash (last 16 bytes) is cached in the encrypted header for PIN auth protocol
+ *    - The upperHash (last 16 bytes) is cached in the companion {@code .stash} file for PIN auth protocol
  *
- * 2. File Structure (in order):
- *    - Header (230 bytes): Encrypted upperHash using ECDH with platform public key or KSM
+ * 2. File Structure:
+ *    - {@code <name>.passkey}: [length 4B LE][PKCS12 data][enc res-creds][opt VC][opt VC-len 4B]
+ *    - {@code <name>.stash}: encrypted upperHash ciphertext (KSM AES-GCM or ECDH envelope)
  *    - Length prefix (4 bytes, little-endian): Length of PKCS12 data
  *    - PKCS12 data (variable): Contains passkey private key and X.509 certificate, encrypted with full PIN hash
  *    - Resident credentials (variable): CBOR-encoded array of credentials, ECDH encrypted with passkey public key
@@ -56,14 +57,15 @@ import com.isfs.blekey.util.KeystoreManager;
  *
  * 3. Encryption Process (writeKey):
  *    - Split PIN hash into upperHash and lowerHash
- *    - Encrypt upperHash with KSM (if available) or ECDH with platform public key -> header
+ *    - Encrypt upperHash with KSM (if available) or ECDH with platform public key
  *    - Serialize passkey (private key + certificate) to PKCS12 using full PIN hash
  *    - ECDH encrypt resident credentials using passkey's public key
- *    - Write: [header][length][PKCS12 data][encrypted resident credentials]
+ *    - Write .passkey: [length][PKCS12 data][encrypted resident credentials]
+ *    - Write .stash: [encrypted upperHash]
  *
  * 4. Decryption Process (readKey):
  *    - User provides lowerHash (16 bytes) or full PIN hash (32 bytes)
- *    - Read header and decrypt with KSM or platform private key -> upperHash
+ *    - Read companion {@code .stash} file and decrypt with KSM or platform private key {@code ->} upperHash
  *    - Read length prefix (little-endian) to determine PKCS12 data size
  *    - Reconstruct full PIN hash: [lowerHash][upperHash] (if only lowerHash provided)
  *    - Decrypt PKCS12 data using full PIN hash -> passkey private key and certificate
@@ -117,11 +119,6 @@ public class Passkey {
      * Logger for debugging and error reporting.
      */
     private static final Logger logger = LoggerFactory.getLogger(Passkey.class);
-    
-    /**
-     * Constants for ecdh encrypt pin hash operations
-     */
-    private static final int HEADER_SIZE = 230;
     
     /**
      * Default names for file objects
@@ -342,14 +339,14 @@ public class Passkey {
             logger.debug("lowerHash length: {}", lowerHash.length);
             logger.debug("lowerHash (hex): {}", bytesToHex(lowerHash));
             
-            // Read and parse file data
-            byte[] fileData;
+            // Read passkey body
+            byte[] passkeyData;
             try {
                 logger.debug("Attempting to read passkey file: {}", pkeyFile.getAbsolutePath());
                 logger.debug("File exists: {}, canRead: {}, length: {}",
                     pkeyFile.exists(), pkeyFile.canRead(), pkeyFile.length());
-                fileData = FileUtils.readFileBytes(pkeyFile);
-                logger.debug("Read {} bytes from file", fileData != null ? fileData.length : "null");
+                passkeyData = FileUtils.readFileBytes(pkeyFile);
+                logger.debug("Read {} bytes from passkey file", passkeyData != null ? passkeyData.length : "null");
             } catch (java.io.IOException e) {
                 logger.error("IOException reading passkey file: {}", e.getMessage(), e);
                 return null;
@@ -358,14 +355,19 @@ public class Passkey {
                 return null;
             }
             
-            if (!validateFileData(fileData)) {
+            if (!validateFileData(passkeyData)) {
                 return null;
             }
 
-            logger.debug("File size: {} bytes", fileData.length);
-            byte[] upperHashObf = Arrays.copyOfRange(fileData, 0, HEADER_SIZE);
+            // Read companion stash file for encrypted upperHash
+            File stashFile = FileUtils.getStashFile(pkeyFile);
+            if (!stashFile.exists()) {
+                logger.error("Missing stash file: {}", stashFile.getAbsolutePath());
+                return null;
+            }
+            byte[] upperHashObf = FileUtils.readFileBytes(stashFile);
             
-            logger.debug("Decrypting upperHash from header...");
+            logger.debug("Decrypting upperHash from stash file...");
             byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
                         KeyUtils.ksmDecrypt(upperHashObf, keystoreManager) : KeyUtils.ecdhDecrypt(upperHashObf, rootPrivateKey);
             logger.debug("upperHash decrypted, length: {}", upperHash != null ? upperHash.length : "null");
@@ -373,9 +375,7 @@ public class Passkey {
                 logger.debug("upperHash (hex): {}", bytesToHex(upperHash));
             }
             
-            byte[] passkeyData = Arrays.copyOfRange(fileData, HEADER_SIZE, fileData.length);
-            
-            logger.debug("Header size: {}, Passkey data size: {}", HEADER_SIZE, passkeyData.length);
+            logger.debug("Passkey data size: {}", passkeyData.length);
             
             ByteBuffer buffer = ByteBuffer.wrap(Arrays.copyOfRange(passkeyData, 0, 4));
             buffer.order(ByteOrder.LITTLE_ENDIAN);
@@ -536,9 +536,9 @@ public class Passkey {
      * Validates the file data.
      */
     private static boolean validateFileData(byte[] fileData) {
-        if (fileData == null || fileData.length < HEADER_SIZE) {
-            logger.error("Error reading passkey file: insufficient file bytes (expected at least {} bytes, got {})",
-                        HEADER_SIZE, fileData != null ? fileData.length : 0);
+        if (fileData == null || fileData.length < 4) {
+            logger.error("Error reading passkey file: insufficient file bytes (expected at least 4 bytes, got {})",
+                        fileData != null ? fileData.length : 0);
             return false;
         }
         return true;
@@ -572,30 +572,24 @@ public class Passkey {
     public static boolean writeKey(Passkey passkey, byte[] pinHash, File passkeyFile) {
         try {
             // If we only have 16 bytes (lower hash), reconstruct the full 32-byte PIN hash
-            // by reading the cached upper hash from the existing file (same as readKey does)
+            // by reading the cached upper hash from the companion .stash file
             if (pinHash != null && pinHash.length == 16) {
-                logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from file");
+                logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
                 try {
-                    byte[] fileData = FileUtils.readFileBytes(passkeyFile);
-                    if (fileData != null && fileData.length >= HEADER_SIZE) {
-                        byte[] upperHashEnc = Arrays.copyOfRange(fileData, 0, HEADER_SIZE);
-                        byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
-                                    KeyUtils.ksmDecrypt(upperHashEnc, keystoreManager) :
-                                    KeyUtils.ecdhDecrypt(upperHashEnc, rootPrivateKey);
-                        
-                        if (upperHash != null && upperHash.length == HALF_HASH) {
-                            pinHash = getCachedPinHash(upperHash, pinHash);
-                            logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", pinHash.length);
-                        } else {
-                            logger.error("writeKey: Failed to decrypt upper hash from file");
-                            return false;
-                        }
+                    byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(passkeyFile));
+                    byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
+                                KeyUtils.ksmDecrypt(upperHashEnc, keystoreManager) :
+                                KeyUtils.ecdhDecrypt(upperHashEnc, rootPrivateKey);
+                    
+                    if (upperHash != null && upperHash.length == HALF_HASH) {
+                        pinHash = getCachedPinHash(upperHash, pinHash);
+                        logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", pinHash.length);
                     } else {
-                        logger.error("writeKey: File too small or unreadable for hash reconstruction");
+                        logger.error("writeKey: Failed to decrypt upper hash from stash file");
                         return false;
                     }
                 } catch (Exception e) {
-                    logger.error("writeKey: Error reconstructing PIN hash from file", e);
+                    logger.error("writeKey: Error reconstructing PIN hash from stash file", e);
                     return false;
                 }
             }
@@ -612,20 +606,24 @@ public class Passkey {
             // Serialize passkey data to CBOR
             byte[] passkeyData = serializePasskey(passkey, pinHash);
             
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            
-            // Encrypt upper hash with app key if available, then with ECDH as fallback
-            byte[] pinHashCiphertext = keystoreManager.isKeystoreAvailable() ? 
+            // Encrypt upper hash with KSM if available, then ECDH as fallback
+            byte[] pinHashCiphertext = keystoreManager.isKeystoreAvailable() ?
                         KeyUtils.ksmEncrypt(upperHash, keystoreManager) : KeyUtils.ecdhEncrypt(upperHash, rootPublicKey);
-            bos.write(pinHashCiphertext);
-            bos.write(passkeyData);
             
-            // Write to file
+            // Write .passkey — body only, no header prefix
             try (FileOutputStream fos = new FileOutputStream(passkeyFile)) {
-                fos.write(bos.toByteArray());
+                fos.write(passkeyData);
                 fos.flush();
-                return true;
             }
+            
+            // Write .stash — ciphertext only
+            File stashFile = FileUtils.getStashFile(passkeyFile);
+            try (FileOutputStream sfos = new FileOutputStream(stashFile)) {
+                sfos.write(pinHashCiphertext);
+                sfos.flush();
+            }
+            
+            return true;
         } catch (Exception e) {
             logger.error("Error saving passkey", e);
             return false;
@@ -1108,19 +1106,19 @@ public class Passkey {
                 return;
             }
             String cmd = args[0];
+            if(!cmd.equals("generate") && !cmd.equals("manage")) {
+                System.out.println("Usage: generate || manage");
+                return;
+            }
             // Initialize scanner for user input
             Scanner scanner = new Scanner(System.in);
             initPlatformKey(scanner);
             if(cmd.equals("generate")) {
                 System.out.println("Generating a passkey file");
                 generateMain(scanner);
-            } 
-            else if(cmd.equals("manage")) {
+            } else {
                 System.out.println("Managing a passkey file");
                 manageMain(scanner);
-            }
-            else {
-                System.out.println("Usage: generate || manage");
             }
             scanner.close();
         } catch (Exception e) {

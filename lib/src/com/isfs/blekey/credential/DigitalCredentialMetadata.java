@@ -4,13 +4,23 @@
 package com.isfs.blekey.credential;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 /**
  * Metadata associated with a digital credential.
  * Contains issuer information, credential type, validity dates, and display properties.
+ *
+ * <p>For JSON-LD credentials, additional fields are available:
+ * <ul>
+ *   <li>contexts - List of @context URLs</li>
+ *   <li>types - List of credential types</li>
+ *   <li>credentialSubject - Subject claims as JSON string</li>
+ *   <li>proofType - Type of cryptographic proof</li>
+ * </ul>
  */
 public class DigitalCredentialMetadata {
     
@@ -21,6 +31,12 @@ public class DigitalCredentialMetadata {
     private Instant expiresAt;
     private String statusListUrl;
     private Map<String, String> displayProperties;
+    
+    // JSON-LD specific fields
+    private List<String> contexts;
+    private List<String> types;
+    private String credentialSubject;
+    private String proofType;
     
     /**
      * Creates a new credential metadata instance.
@@ -194,6 +210,98 @@ public class DigitalCredentialMetadata {
         return Instant.now().isAfter(issuedAt);
     }
     
+    // JSON-LD specific getters and setters
+    
+    /**
+     * Gets the list of @context URLs for JSON-LD credentials.
+     * @return List of context URLs, or null if not a JSON-LD credential
+     */
+    public List<String> getContexts() {
+        return contexts;
+    }
+    
+    /**
+     * Sets the list of @context URLs for JSON-LD credentials.
+     * @param contexts List of context URLs
+     */
+    public void setContexts(List<String> contexts) {
+        this.contexts = contexts;
+    }
+    
+    /**
+     * Adds a context URL to the list.
+     * @param contextUrl Context URL to add
+     */
+    public void addContext(String contextUrl) {
+        if (this.contexts == null) {
+            this.contexts = new ArrayList<>();
+        }
+        if (!this.contexts.contains(contextUrl)) {
+            this.contexts.add(contextUrl);
+        }
+    }
+    
+    /**
+     * Gets the list of credential types for JSON-LD credentials.
+     * @return List of types, or null if not a JSON-LD credential
+     */
+    public List<String> getTypes() {
+        return types;
+    }
+    
+    /**
+     * Sets the list of credential types for JSON-LD credentials.
+     * @param types List of credential types
+     */
+    public void setTypes(List<String> types) {
+        this.types = types;
+    }
+    
+    /**
+     * Adds a type to the list.
+     * @param type Type to add
+     */
+    public void addType(String type) {
+        if (this.types == null) {
+            this.types = new ArrayList<>();
+        }
+        if (!this.types.contains(type)) {
+            this.types.add(type);
+        }
+    }
+    
+    /**
+     * Gets the credential subject as JSON string for JSON-LD credentials.
+     * @return Credential subject JSON, or null if not a JSON-LD credential
+     */
+    public String getCredentialSubject() {
+        return credentialSubject;
+    }
+    
+    /**
+     * Sets the credential subject as JSON string for JSON-LD credentials.
+     * @param credentialSubject Credential subject JSON
+     */
+    public void setCredentialSubject(String credentialSubject) {
+        this.credentialSubject = credentialSubject;
+    }
+    
+    /**
+     * Gets the proof type for JSON-LD credentials.
+     * @return Proof type (e.g., "JsonWebSignature2020"), or null if not a JSON-LD credential
+     */
+    public String getProofType() {
+        return proofType;
+    }
+    
+    /**
+     * Sets the proof type for JSON-LD credentials.
+     * @param proofType Proof type
+     */
+    public void setProofType(String proofType) {
+        this.proofType = proofType;
+    }
+    
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -204,12 +312,17 @@ public class DigitalCredentialMetadata {
                Objects.equals(credentialType, that.credentialType) &&
                Objects.equals(issuedAt, that.issuedAt) &&
                Objects.equals(expiresAt, that.expiresAt) &&
-               Objects.equals(statusListUrl, that.statusListUrl);
+               Objects.equals(statusListUrl, that.statusListUrl) &&
+               Objects.equals(contexts, that.contexts) &&
+               Objects.equals(types, that.types) &&
+               Objects.equals(credentialSubject, that.credentialSubject) &&
+               Objects.equals(proofType, that.proofType);
     }
     
     @Override
     public int hashCode() {
-        return Objects.hash(issuerDid, issuerUrl, credentialType, issuedAt, expiresAt, statusListUrl);
+        return Objects.hash(issuerDid, issuerUrl, credentialType, issuedAt, expiresAt,
+                           statusListUrl, contexts, types, credentialSubject, proofType);
     }
     
     @Override
@@ -222,6 +335,10 @@ public class DigitalCredentialMetadata {
                ", expiresAt=" + expiresAt +
                ", statusListUrl='" + statusListUrl + '\'' +
                ", displayProperties=" + displayProperties +
+               ", contexts=" + contexts +
+               ", types=" + types +
+               ", hasCredentialSubject=" + (credentialSubject != null) +
+               ", proofType='" + proofType + '\'' +
                '}';
     }
 }

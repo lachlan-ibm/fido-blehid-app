@@ -33,7 +33,6 @@ import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.interfaces.RSAPublicKey;
-import java.security.spec.ECPoint;
 import java.security.spec.InvalidKeySpecException;
 import java.util.Arrays;
 import java.util.Collection;
@@ -278,32 +277,6 @@ public class KeyUtilsTest {
         
         // Verify both parties derive the same shared secret
         assertArrayEquals("Shared secrets should match", aliceSharedSecret, bobSharedSecret);
-    }
-    
-    /**
-     * Test scalar multiplication for EC points
-     */
-    @Test
-    public void testScalmult() throws Exception {
-        // Get the EC parameters from the key pair
-        ECPrivateKey privateKey = (ECPrivateKey) ecKeyPair.getPrivate();
-        ECPublicKey publicKey = (ECPublicKey) ecKeyPair.getPublic();
-        
-        // Perform scalar multiplication: private scalar * generator point
-        ECPoint result = KeyUtils.scalmult(
-            privateKey.getParams().getCurve(),
-            privateKey.getParams().getGenerator(),
-            privateKey.getS()
-        );
-        
-        // Verify the result matches the public key point
-        assertNotNull("Result point should not be null", result);
-        assertEquals("X coordinate should match", 
-                    publicKey.getW().getAffineX().bitLength(), 
-                    result.getAffineX().bitLength());
-        assertEquals("Y coordinate should match", 
-                    publicKey.getW().getAffineY().bitLength(), 
-                    result.getAffineY().bitLength());
     }
     
     /**

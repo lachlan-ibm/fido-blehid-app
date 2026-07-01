@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Bluetooth permissions -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <!-- Classic Bluetooth permissions for Android 11 and below -->
     <uses-permission android:name="android.permission.BLUETOOTH"
                      android:maxSdkVersion="30" />
@@ -17,6 +18,8 @@
 
     <!-- Declare Classic Bluetooth feature -->
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
+    <!-- Declare BLE feature for FIDO service -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <!-- Notification permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Foreground service permissions -->
@@ -24,7 +27,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <!-- Boot receiver permission -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Camera permissions for QR code scanning (Phase 1: QR Scanner Integration) -->
+    <!-- Camera permissions for QR code scanning -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -53,6 +56,7 @@
         <activity
             android:name="com.isfs.blekey.activity.ServerActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:theme="@style/AppTheme.NoActionBar" />
         
         <!-- Register ManageActivity -->
@@ -137,7 +141,7 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- Digital Credential Provider Service (Phase 4.2) -->
+        <!-- Digital Credential Provider Service -->
         <!-- Note: Full Credential Manager integration requires Android 14+ (API 34+) -->
         <service
             android:name=".credentials.DigitalCredentialProviderService"
@@ -147,6 +151,13 @@
                 android:name="android.credentials.provider"
                 android:resource="@xml/digital_credential_provider" />
         </service>
+
+        <!-- FIDO BLE Service for CTAP2 over BLE (FIDO GATT) -->
+        <service
+            android:name=".fidoble.FIDOBLEService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- Boot receiver to auto-start service on device boot and Bluetooth state changes -->
         <receiver

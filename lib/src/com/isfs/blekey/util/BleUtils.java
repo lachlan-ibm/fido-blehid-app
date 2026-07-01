@@ -12,9 +12,20 @@ public class BleUtils {
     public static final UUID SERVICE_BLE_HID            = getCharateristicUuid(0x1812);
     public static final UUID SERVICE_DEVICE_INFORMATION = getCharateristicUuid(0x180A);
     public static final UUID SERVICE_BATTERY            = getCharateristicUuid(0x180F);
+    public static final UUID SERVICE_FIDO               = getCharateristicUuid(0xFFFD);
 
     /** Generic Attribute service characteristics */
     public static final UUID CHARACTERISTIC_SERVICE_CHANGED = getCharateristicUuid(0x2A05);
+
+    /** FIDO Service Characteristics (CTAP spec §11.4.5) */
+    public static final UUID CHAR_FIDO_CONTROL_POINT =
+        UUID.fromString("F1D0FFF1-DEAA-ECEE-B42F-C9BA7ED623BB");
+    public static final UUID CHAR_FIDO_STATUS =
+        UUID.fromString("F1D0FFF2-DEAA-ECEE-B42F-C9BA7ED623BB");
+    public static final UUID CHAR_FIDO_CONTROL_POINT_LENGTH =
+        UUID.fromString("F1D0FFF3-DEAA-ECEE-B42F-C9BA7ED623BB");
+    public static final UUID CHAR_FIDO_SERVICE_REVISION_BITFIELD =
+        UUID.fromString("F1D0FFF4-DEAA-ECEE-B42F-C9BA7ED623BB");
 
     public static UUID getCharateristicUuid(int serviceId) {
         return UUID.fromString(

@@ -8,6 +8,7 @@ import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
 
 import java.util.Arrays;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -162,6 +163,43 @@ public class HIDPasskey {
                            cmd != null ? "present" : "NULL",
                            cmd != null ? cmd.hasMoreResponses() : "N/A");
             }
+        }
+    }
+
+    /**
+     * Delivers a deferred CBOR response to the host after user-presence resolution.
+     *
+     * <p>Takes the deferred {@link CtapHid} from {@code txn}, injects {@code cborResponse}
+     * into it, then drains every HID frame via the transport.  Works for both the
+     * multi-frame approved path and the single-frame deny/timeout/cancel path.</p>
+     *
+     * @param txn          The live {@link CtapTxn} holding the deferred command
+     * @param cborResponse Pre-built CTAP response bytes (status byte + optional CBOR payload)
+     */
+    public void sendDeferredResponse(CtapTxn txn, byte[] cborResponse) {
+        if (txn == null) {
+            logger.error("sendDeferredResponse: txn is null");
+            return;
+        }
+        CtapHid cmd = txn.takeDeferredCmd();
+        if (cmd == null) {
+            logger.error("sendDeferredResponse: no deferred cmd on txn");
+            return;
+        }
+        try {
+            cmd.injectDeferredResponse(cborResponse);
+            byte[] frame;
+            while ((frame = cmd.getResponseSegment()) != null) {
+                if (_transport != null) {
+                    _transport.sendInputReport(frame);
+                } else {
+                    logger.error("sendDeferredResponse: _transport is NULL — cannot send frame");
+                    break;
+                }
+            }
+            logger.info("sendDeferredResponse: response sent ({} bytes injected)", cborResponse.length);
+        } catch (Exception e) {
+            logger.error("sendDeferredResponse: exception", e);
         }
     }
 

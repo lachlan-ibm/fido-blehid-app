@@ -162,6 +162,15 @@ public class HIDForegroundService extends Service {
     }
 
     /**
+     * Returns the {@link HIDPasskey} instance owned by the running {@link BTHIDService},
+     * or null if the service is not yet initialized.
+     */
+    @Nullable
+    public HIDPasskey getHIDPasskey() {
+        return hidService != null ? hidService.getPasskey() : null;
+    }
+
+    /**
      * Checks if the service is running with an active BTHIDService.
      */
     public boolean isRunning() {

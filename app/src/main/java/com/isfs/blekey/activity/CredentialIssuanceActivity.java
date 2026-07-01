@@ -37,6 +37,9 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
     private TextView issuerNameText;
     private TextView issuerTrustText;
     private TextView credentialTypeText;
+    private TextView credentialFormatText;
+    private TextView credentialContextText;
+    private TextView credentialTypesText;
     private TextView credentialClaimsText;
     private TextView validityPeriodText;
     private TextView expirationText;
@@ -111,6 +114,9 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
         issuerNameText = findViewById(R.id.issuerName);
         issuerTrustText = findViewById(R.id.issuerTrust);
         credentialTypeText = findViewById(R.id.credentialType);
+        credentialFormatText = findViewById(R.id.credentialFormat);
+        credentialContextText = findViewById(R.id.credentialContext);
+        credentialTypesText = findViewById(R.id.credentialTypes);
         credentialClaimsText = findViewById(R.id.credentialClaims);
         validityPeriodText = findViewById(R.id.validityPeriod);
         expirationText = findViewById(R.id.expirationText);
@@ -118,7 +124,6 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
         declineButton = findViewById(R.id.declineButton);
         progressBar = findViewById(R.id.progressBar);
         contentLayout = findViewById(R.id.contentLayout);
-        
         acceptButton.setOnClickListener(v -> acceptCredentialOffer());
         declineButton.setOnClickListener(v -> declineCredentialOffer());
     }
@@ -192,11 +197,114 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
         if (credentialOffer != null && !credentialOffer.getCredentials().isEmpty()) {
             String configId = credentialOffer.getCredentials().get(0);
             credentialTypeText.setText("Type: " + configId);
+            
+            // Detect and display credential format
+            com.isfs.blekey.credential.DigitalCredentialFormat format = detectCredentialFormat();
+            if (format != null) {
+                credentialFormatText.setText("Format: " + format.getDisplayName());
+                
+                // Show JSON-LD specific fields if applicable
+                if (format == com.isfs.blekey.credential.DigitalCredentialFormat.JSON_LD) {
+                    displayJsonLdFields();
+                } else {
+                    // Hide JSON-LD specific fields for other formats
+                    credentialContextText.setVisibility(View.GONE);
+                    credentialTypesText.setVisibility(View.GONE);
+                }
+            } else {
+                credentialFormatText.setText("Format: SD-JWT-VC (default)");
+                credentialContextText.setVisibility(View.GONE);
+                credentialTypesText.setVisibility(View.GONE);
+            }
+            
             credentialClaimsText.setText("Claims: Standard credential claims");
             validityPeriodText.setText("Validity: As specified by issuer");
             
             // Start expiration countdown
             startExpirationCountdown();
+        }
+    }
+    
+    /**
+     * Detects the credential format from issuer metadata.
+     */
+    private com.isfs.blekey.credential.DigitalCredentialFormat detectCredentialFormat() {
+        if (issuerMetadata == null) {
+            return null;
+        }
+        
+        java.util.List<java.util.Map<String, Object>> credentialsSupported =
+            issuerMetadata.getCredentialsSupported();
+        
+        if (credentialsSupported != null && !credentialsSupported.isEmpty()) {
+            for (java.util.Map<String, Object> credConfig : credentialsSupported) {
+                Object formatObj = credConfig.get("format");
+                if (formatObj instanceof String) {
+                    String formatStr = (String) formatObj;
+                    
+                    // Map format strings to enum
+                    if ("ldp_vc".equals(formatStr) || "jwt_vc_json-ld".equals(formatStr)) {
+                        return com.isfs.blekey.credential.DigitalCredentialFormat.JSON_LD;
+                    } else if ("mso_mdoc".equals(formatStr)) {
+                        return com.isfs.blekey.credential.DigitalCredentialFormat.ISO_MDOC;
+                    } else if ("jwt_vc_json".equals(formatStr) || "vc+sd-jwt".equals(formatStr)) {
+                        return com.isfs.blekey.credential.DigitalCredentialFormat.SD_JWT_VC;
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Displays JSON-LD specific fields from issuer metadata.
+     */
+    private void displayJsonLdFields() {
+        if (issuerMetadata == null) {
+            return;
+        }
+        
+        java.util.List<java.util.Map<String, Object>> credentialsSupported =
+            issuerMetadata.getCredentialsSupported();
+        
+        if (credentialsSupported != null && !credentialsSupported.isEmpty()) {
+            java.util.Map<String, Object> credConfig = credentialsSupported.get(0);
+            
+            // Display @context
+            Object contextObj = credConfig.get("@context");
+            if (contextObj instanceof java.util.List) {
+                @SuppressWarnings("unchecked")
+                java.util.List<String> contexts = (java.util.List<String>) contextObj;
+                if (!contexts.isEmpty()) {
+                    StringBuilder contextStr = new StringBuilder("@context:\n");
+                    for (String ctx : contexts) {
+                        contextStr.append("  • ").append(ctx).append("\n");
+                    }
+                    credentialContextText.setText(contextStr.toString().trim());
+                    credentialContextText.setVisibility(View.VISIBLE);
+                }
+            }
+            
+            // Display types
+            Object credDefObj = credConfig.get("credential_definition");
+            if (credDefObj instanceof java.util.Map) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> credDef = (java.util.Map<String, Object>) credDefObj;
+                Object typesObj = credDef.get("type");
+                if (typesObj instanceof java.util.List) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<String> types = (java.util.List<String>) typesObj;
+                    if (!types.isEmpty()) {
+                        StringBuilder typesStr = new StringBuilder("Types:\n");
+                        for (String type : types) {
+                            typesStr.append("  • ").append(type).append("\n");
+                        }
+                        credentialTypesText.setText(typesStr.toString().trim());
+                        credentialTypesText.setVisibility(View.VISIBLE);
+                    }
+                }
+            }
         }
     }
     

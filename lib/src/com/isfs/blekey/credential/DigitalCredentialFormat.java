@@ -68,11 +68,11 @@ public enum DigitalCredentialFormat {
     }
     
     /**
-     * Checks if this format is supported in the current MVP implementation.
+     * Checks if this format is supported in the current implementation.
      * @return true if format is supported, false otherwise
      */
     public boolean isSupported() {
-        return this == SD_JWT_VC;
+        return this == SD_JWT_VC || this == ISO_MDOC || this == JSON_LD;
     }
 }
 

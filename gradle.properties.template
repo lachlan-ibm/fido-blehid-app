@@ -12,5 +12,3 @@ org.gradle.caching=true
 # Android specific properties
 android.useAndroidX=true
 android.enableJetifier=false
-
-# Made with Bob

@@ -45,6 +45,12 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'org.glassfish:jakarta.json:2.0.1'
     
+    // JSON-LD 1.1 library for W3C Verifiable Credentials support
+    implementation 'com.apicatalog:titanium-json-ld:1.4.1'
+    
+    // COSE library for ISO mDL support
+    implementation 'com.augustcellars.cose:cose-java:1.1.0'
+    
     // Use jose4j but exclude its transitive jakarta.json-api dependency
     implementation('org.bitbucket.b_c:jose4j:0.9.6') {
         exclude group: 'jakarta.json', module: 'jakarta.json-api'

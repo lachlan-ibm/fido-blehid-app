@@ -4,8 +4,14 @@
 package com.isfs.blekey.activity;
 
 import com.isfs.blekey.BootReceiver;
+import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import com.isfs.blekey.ctap.Ctap2StatusCode;
+import com.isfs.blekey.ctap.CtapHid;
+import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.fidoble.KeepaliveManager;
 import com.isfs.blekey.hidsvc.BTHIDService;
 import com.isfs.blekey.hidsvc.HIDForegroundService;
+import com.isfs.blekey.hidsvc.HIDPasskey;
 
 import androidx.appcompat.widget.SwitchCompat;
 import android.widget.CompoundButton;
@@ -34,6 +40,8 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.content.DialogInterface.OnDismissListener;
+import android.app.Notification;
+import android.app.PendingIntent;
 import android.content.ServiceConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -51,6 +59,8 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
@@ -94,12 +104,42 @@ public class ServerActivity extends AppCompatActivity {
             this.status = status;
         }
     }
+    
+    /** Holds the result of collecting current device states from Bluetooth system. */
+    private static class DeviceCollectionResult {
+        final Set<String> bondedAddresses;
+        final Set<String> connectedAddresses;
+        final List<BluetoothDevice> connectedDevices;
+        final boolean canQueryHidProfile;
+        
+        DeviceCollectionResult(Set<String> bonded, Set<String> connected,
+                              List<BluetoothDevice> devices, boolean canQuery) {
+            this.bondedAddresses = bonded;
+            this.connectedAddresses = connected;
+            this.connectedDevices = devices;
+            this.canQueryHidProfile = canQuery;
+        }
+    }
 
     /** Custom adapter that renders device_list_item rows with status colour. */
     private class DeviceListAdapter extends BaseAdapter {
 
         private final List<DeviceItem> items;
         private final LayoutInflater inflater;
+        private final View.OnClickListener reconnectClickListener = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                DeviceItem item = (DeviceItem) v.getTag();
+                ServerActivity.this.handleReconnect(item.address, item.name);
+            }
+        };
+        private final View.OnClickListener disconnectClickListener = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                DeviceItem item = (DeviceItem) v.getTag();
+                ServerActivity.this.handleDisconnect(item.address, item.name);
+            }
+        };
 
         DeviceListAdapter(List<DeviceItem> items) {
             this.items = items;
@@ -112,64 +152,82 @@ public class ServerActivity extends AppCompatActivity {
 
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
+            ViewHolder holder;
             if (convertView == null) {
                 convertView = inflater.inflate(R.layout.device_list_item, parent, false);
+                holder = new ViewHolder(convertView);
+                convertView.setTag(holder);
+            } else {
+                holder = (ViewHolder) convertView.getTag();
             }
+
             DeviceItem item = items.get(position);
-
-            TextView nameView = convertView.findViewById(R.id.deviceNameText);
-            TextView statusView = convertView.findViewById(R.id.deviceStatusText);
-            View statusBar = convertView.findViewById(R.id.deviceStatusBar);
-            android.widget.Button reconnectButton = convertView.findViewById(R.id.reconnectButton);
-            android.widget.Button disconnectButton = convertView.findViewById(R.id.disconnectButton);
-
-            nameView.setText(item.name);
-
-            // Use device address from the item
-            final String deviceAddress = item.address;
+            holder.nameView.setText(item.name);
 
             switch (item.status) {
                 case HID_ACTIVE:
                 case HID_ENUMERATED:
-                    // Device is usable - show green and disconnect button
-                    statusView.setText(item.status == DeviceStatus.HID_ACTIVE ?
-                        getString(R.string.device_active) : getString(R.string.device_discovered));
-                    statusView.setTextColor(getColor(R.color.device_connected));
-                    statusBar.setBackgroundColor(getColor(R.color.device_connected));
-                    reconnectButton.setVisibility(View.GONE);
-                    disconnectButton.setVisibility(View.VISIBLE);
-                    disconnectButton.setOnClickListener(v ->
-                        ServerActivity.this.handleDisconnect(deviceAddress, item.name));
+                    setDeviceStatus(holder,
+                        item.status == DeviceStatus.HID_ACTIVE ?
+                            getString(R.string.device_active) : getString(R.string.device_discovered),
+                        R.color.device_connected);
+                    setButtonVisibility(holder, false, true);
+                    holder.disconnectButton.setTag(item);
+                    holder.disconnectButton.setOnClickListener(disconnectClickListener);
                     break;
                 case CONNECTED:
-                    // Connected but not yet HID ready - show green
-                    statusView.setText(getString(R.string.device_status_connected));
-                    statusView.setTextColor(getColor(R.color.device_connected));
-                    statusBar.setBackgroundColor(getColor(R.color.device_connected));
-                    reconnectButton.setVisibility(View.GONE);
-                    disconnectButton.setVisibility(View.GONE);
+                    setDeviceStatus(holder,
+                        getString(R.string.device_status_connected),
+                        R.color.device_connected);
+                    setButtonVisibility(holder, false, false);
                     break;
                 case ERROR:
-                    statusView.setText(getString(R.string.device_status_error));
-                    statusView.setTextColor(getColor(R.color.device_error));
-                    statusBar.setBackgroundColor(getColor(R.color.device_error));
-                    reconnectButton.setVisibility(View.VISIBLE);
-                    disconnectButton.setVisibility(View.GONE);
-                    reconnectButton.setOnClickListener(v ->
-                        ServerActivity.this.handleReconnect(deviceAddress, item.name));
+                    setDeviceStatus(holder,
+                        getString(R.string.device_status_error),
+                        R.color.device_error);
+                    setButtonVisibility(holder, true, false);
+                    holder.reconnectButton.setTag(item);
+                    holder.reconnectButton.setOnClickListener(reconnectClickListener);
                     break;
                 default:
-                    // Disconnected - show grey and reconnect button
-                    statusView.setText(getString(R.string.device_status_disconnected));
-                    statusView.setTextColor(getColor(R.color.device_disconnected));
-                    statusBar.setBackgroundColor(getColor(R.color.device_disconnected));
-                    reconnectButton.setVisibility(View.VISIBLE);
-                    disconnectButton.setVisibility(View.GONE);
-                    reconnectButton.setOnClickListener(v ->
-                        ServerActivity.this.handleReconnect(deviceAddress, item.name));
+                    setDeviceStatus(holder,
+                        getString(R.string.device_status_disconnected),
+                        R.color.device_disconnected);
+                    setButtonVisibility(holder, true, false);
+                    holder.reconnectButton.setTag(item);
+                    holder.reconnectButton.setOnClickListener(reconnectClickListener);
                     break;
             }
             return convertView;
+        }
+
+        private void setDeviceStatus(ViewHolder holder, String statusText, int colorResId) {
+            holder.statusView.setText(statusText);
+            int color = getColor(colorResId);
+            holder.statusView.setTextColor(color);
+            holder.statusBar.setBackgroundColor(color);
+        }
+
+        private void setButtonVisibility(ViewHolder holder, boolean showReconnect, boolean showDisconnect) {
+            holder.reconnectButton.setVisibility(showReconnect ? View.VISIBLE : View.GONE);
+            holder.disconnectButton.setVisibility(showDisconnect ? View.VISIBLE : View.GONE);
+        }
+
+        /** ViewHolder pattern to cache view lookups. */
+        private static class ViewHolder {
+            final TextView nameView;
+            final TextView statusView;
+            final View statusBar;
+            final android.widget.Button reconnectButton;
+            final android.widget.Button disconnectButton;
+
+            ViewHolder(View view) {
+                nameView = view.findViewById(R.id.deviceNameText);
+                statusView = view.findViewById(R.id.deviceStatusText);
+                statusBar = view.findViewById(R.id.deviceStatusBar);
+                reconnectButton = view.findViewById(R.id.reconnectButton);
+                disconnectButton = view.findViewById(R.id.disconnectButton);
+            }
         }
     }
 
@@ -282,6 +340,26 @@ public class ServerActivity extends AppCompatActivity {
      */
     private DeviceStateManager stateManager;
 
+    // -------------------------------------------------------------------------
+    // User Presence state
+    // -------------------------------------------------------------------------
+
+    private boolean isInForeground = false;
+    private KeepaliveManager keepaliveManager;
+
+    /** txn for the currently-pending UP request; null when idle. */
+    private volatile CtapTxn pendingUpTxn          = null;
+    private byte[]            pendingApprovedBytes  = null;
+    private byte[]            pendingDeniedBytes    = null;
+
+    private AlertDialog userPresenceDialog = null;
+    private final android.os.Handler uiHandler =
+        new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable timeoutRunnable = null;
+
+    private static final int UP_TIMEOUT_MS      = 15_000;
+    private static final int UP_NOTIFICATION_ID = 4200;
+
     /**
      * Reconciles device states by comparing persisted state with current BT state.
      * This ensures UI shows accurate state even after app/service restarts.
@@ -296,87 +374,153 @@ public class ServerActivity extends AppCompatActivity {
         }
         
         try {
-            // Load persisted states
             Map<String, DeviceStateManager.DeviceState> persistedStates = stateManager.loadAllDeviceStates();
+            BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
             
-            // Get currently bonded Bluetooth devices at OS level
-            final BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
-            final Set<BluetoothDevice> bondedDevices = passkeyService.getBondedDevices();
-            Set<String> bondedAddresses = new HashSet<>();
-            for (BluetoothDevice device : bondedDevices) {
-                bondedAddresses.add(device.getAddress());
+            // Collect current device states from Bluetooth system
+            DeviceCollectionResult devices = collectCurrentDevices(bluetoothManager);
+            
+            // Reconcile connected devices
+            reconcileConnectedDevices(devices.connectedDevices, devices.connectedAddresses);
+            
+            // Reconcile bonded devices if HID profile query not supported
+            if (!devices.canQueryHidProfile) {
+                reconcileBondedDevicesViaService(
+                    passkeyService.getBondedDevices(),
+                    devices.connectedAddresses
+                );
             }
             
-            // Get currently connected devices
-            List<BluetoothDevice> connectedDevices = new ArrayList<>();
-            boolean canQueryHidProfile = true;
-            try {
-                connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.HID_DEVICE);
-            } catch (IllegalArgumentException e) {
-                Log.w(TAG, "HID_DEVICE profile query not supported on this device", e);
-                canQueryHidProfile = false;
-            }
-            Set<String> connectedAddresses = new HashSet<>();
+            // Reconcile persisted devices
+            reconcilePersistedDevices(
+                persistedStates,
+                devices.bondedAddresses,
+                devices.connectedAddresses
+            );
             
-            // Update connected devices with their HID state
-            for (BluetoothDevice device : connectedDevices) {
-                String addr = device.getAddress();
-                connectedAddresses.add(addr);
-                String name = getDisplayName(device);
-                
-                BTHIDService.HidDeviceState hidState = passkeyService.getDeviceState(addr);
-                DeviceStatus status = mapHidStateToDeviceStatus(hidState);
-                
-                upsertDevice(addr, name, status);
-                saveDeviceState(addr, name, status);
-                appendLog("Reconciled " + name + ": " + status);
-            }
-            
-            // If we can't query the HID profile, check bonded devices via service state
-            if (!canQueryHidProfile) {
-                for (BluetoothDevice device : bondedDevices) {
-                    String addr = device.getAddress();
-                    if (connectedAddresses.contains(addr)) {
-                        continue;
-                    }
-                    
-                    BTHIDService.HidDeviceState hidState = passkeyService.getDeviceState(addr);
-                    if (hidState != BTHIDService.HidDeviceState.DISCONNECTED) {
-                        connectedAddresses.add(addr);
-                        String name = getDisplayName(device);
-                        DeviceStatus status = mapHidStateToDeviceStatus(hidState);
-                        
-                        upsertDevice(addr, name, status);
-                        saveDeviceState(addr, name, status);
-                        appendLog("Reconciled (via service) " + name + ": " + status);
-                    }
-                }
-            }
-            
-            // Process persisted devices
-            for (Map.Entry<String, DeviceStateManager.DeviceState> entry : persistedStates.entrySet()) {
-                String addr = entry.getKey();
-                DeviceStateManager.DeviceState state = entry.getValue();
-                
-                if (!bondedAddresses.contains(addr)) {
-                    removeDevice(addr);
-                    stateManager.clearDeviceState(addr);
-                    appendLog("Removed unbonded device: " + state.name);
-                    continue;
-                }
-                
-                if (!connectedAddresses.contains(addr)) {
-                    upsertDevice(state.address, state.name, DeviceStatus.DISCONNECTED);
-                    state.btState = DeviceStateManager.BtState.DISCONNECTED;
-                    state.hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
-                    stateManager.saveDeviceState(state.address, state);
-                    appendLog("Reconciled " + state.name + ": DISCONNECTED");
-                }
-            }
         } catch (SecurityException e) {
             Log.e(TAG, "SecurityException in reconcileDeviceStates", e);
             appendLog("Error: Permission denied while reconciling device states");
         }
+    }
+    
+    /**
+     * Helper method to reconcile and persist a device's state.
+     * Combines upsert, save, and logging operations.
+     */
+    private void reconcileAndPersistDevice(String address, String name, DeviceStatus status, String logPrefix) {
+        upsertDevice(address, name, status);
+        saveDeviceState(address, name, status);
+        appendLog(logPrefix + name + ": " + status);
+    }
+    
+    /**
+     * Collects current device states from the Bluetooth system.
+     * Returns bonded devices, connected devices, and HID profile query capability.
+     */
+    private DeviceCollectionResult collectCurrentDevices(BluetoothManager bluetoothManager) {
+        Set<BluetoothDevice> bondedDevices = passkeyService.getBondedDevices();
+        Set<String> bondedAddresses = new HashSet<>();
+        for (BluetoothDevice device : bondedDevices) {
+            bondedAddresses.add(device.getAddress());
+        }
+        
+        List<BluetoothDevice> connectedDevices = new ArrayList<>();
+        boolean canQueryHidProfile = true;
+        try {
+            connectedDevices = bluetoothManager.getConnectedDevices(BluetoothProfile.HID_DEVICE);
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "HID_DEVICE profile query not supported on this device", e);
+            canQueryHidProfile = false;
+        }
+        
+        Set<String> connectedAddresses = new HashSet<>();
+        return new DeviceCollectionResult(bondedAddresses, connectedAddresses,
+                                         connectedDevices, canQueryHidProfile);
+    }
+    
+    /**
+     * Reconciles currently connected HID devices and updates their states.
+     */
+    private void reconcileConnectedDevices(List<BluetoothDevice> connectedDevices,
+                                          Set<String> connectedAddresses) {
+        for (BluetoothDevice device : connectedDevices) {
+            String addr = device.getAddress();
+            connectedAddresses.add(addr);
+            
+            BTHIDService.HidDeviceState hidState = passkeyService.getDeviceState(addr);
+            DeviceStatus status = mapHidStateToDeviceStatus(hidState);
+            
+            reconcileAndPersistDevice(addr, getDisplayName(device), status, "Reconciled ");
+        }
+    }
+    
+    /**
+     * Reconciles bonded devices via service state when HID profile query is not supported.
+     * This is a fallback mechanism for devices that don't support HID_DEVICE profile queries.
+     */
+    private void reconcileBondedDevicesViaService(Set<BluetoothDevice> bondedDevices,
+                                                  Set<String> connectedAddresses) {
+        for (BluetoothDevice device : bondedDevices) {
+            String addr = device.getAddress();
+            
+            if (connectedAddresses.contains(addr)) {
+                continue;
+            }
+            
+            BTHIDService.HidDeviceState hidState = passkeyService.getDeviceState(addr);
+            if (hidState == BTHIDService.HidDeviceState.DISCONNECTED) {
+                continue;
+            }
+            
+            connectedAddresses.add(addr);
+            String name = getDisplayName(device);
+            DeviceStatus status = mapHidStateToDeviceStatus(hidState);
+            
+            reconcileAndPersistDevice(addr, name, status, "Reconciled (via service) ");
+        }
+    }
+    
+    /**
+     * Reconciles persisted device states with current Bluetooth state.
+     * Removes unbonded devices and updates disconnected device states.
+     */
+    private void reconcilePersistedDevices(Map<String, DeviceStateManager.DeviceState> persistedStates,
+                                          Set<String> bondedAddresses,
+                                          Set<String> connectedAddresses) {
+        for (Map.Entry<String, DeviceStateManager.DeviceState> entry : persistedStates.entrySet()) {
+            String addr = entry.getKey();
+            DeviceStateManager.DeviceState state = entry.getValue();
+            
+            if (!bondedAddresses.contains(addr)) {
+                removeUnbondedDevice(addr, state.name);
+                continue;
+            }
+            
+            if (!connectedAddresses.contains(addr)) {
+                reconcileDisconnectedDevice(state);
+            }
+        }
+    }
+    
+    /**
+     * Removes a device that is no longer bonded at the OS level.
+     */
+    private void removeUnbondedDevice(String address, String name) {
+        removeDevice(address);
+        stateManager.clearDeviceState(address);
+        appendLog("Removed unbonded device: " + name);
+    }
+    
+    /**
+     * Updates a persisted device to disconnected state.
+     */
+    private void reconcileDisconnectedDevice(DeviceStateManager.DeviceState state) {
+        upsertDevice(state.address, state.name, DeviceStatus.DISCONNECTED);
+        state.btState = DeviceStateManager.BtState.DISCONNECTED;
+        state.hidState = DeviceStateManager.HidState.NOT_ENUMERATED;
+        stateManager.saveDeviceState(state.address, state);
+        appendLog("Reconciled " + state.name + ": DISCONNECTED");
     }
     
     /**
@@ -451,11 +595,50 @@ public class ServerActivity extends AppCompatActivity {
                 populateBondedDevices();
                 reconcileDeviceStates();
             }
+
+            // Keepalive sender: write frames directly through BTHIDService
+            keepaliveManager = new KeepaliveManager(frame -> {
+                if (passkeyService != null) passkeyService.sendInputReport(frame);
+            });
+
+            // UP callback — invoked on CTAP processing thread
+            AuthenticatorAPI.setUserPresenceCallback((rpId, txn, approvedBytes, deniedBytes) -> {
+                if (pendingUpTxn != null) {
+                    // Concurrent request — reject immediately without blocking
+                    Log.w(TAG, "UP: concurrent request, rejecting");
+                    HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
+                    if (pk != null) pk.sendDeferredResponse(txn, deniedBytes);
+                    return;
+                }
+                pendingUpTxn         = txn;
+                pendingApprovedBytes = approvedBytes;
+                pendingDeniedBytes   = deniedBytes;
+
+                byte[] cid = txn.getCid();
+                String cidKey = bytesToHex(cid);
+                keepaliveManager.startKeepalive(cidKey, KeepaliveManager.STATUS_PROCESSING);
+
+                uiHandler.post(() -> {
+                    keepaliveManager.updateStatus(cidKey, KeepaliveManager.STATUS_UP_NEEDED);
+                    showUserPresencePrompt();
+                });
+            });
+
+            // Cancel hook — CTAP cancel frame already injects KEEPALIVE_CANCEL into the
+            // deferred CtapHid; we just clean up the UI side here
+            CtapHid.setOnCancelCallback(() -> uiHandler.post(() -> {
+                dismissDialogIfShowing();
+                cancelTimeout();
+                stopUpKeepalive();
+                clearPendingUpState();
+            }));
         }
-        
+
         @Override
         public void onServiceDisconnected(ComponentName name) {
             Log.d(TAG, "Service disconnected");
+            AuthenticatorAPI.setUserPresenceCallback(null);
+            if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
             serviceBound = false;
             foregroundService = null;
             passkeyService = null;
@@ -656,7 +839,8 @@ public class ServerActivity extends AppCompatActivity {
         }
         
         try {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            BluetoothAdapter adapter = bluetoothManager.getAdapter();
             if (adapter != null) {
                 BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
                 boolean success = passkeyService.disconnect(device);
@@ -687,7 +871,8 @@ public class ServerActivity extends AppCompatActivity {
         }
         
         try {
-            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            BluetoothAdapter adapter = bluetoothManager.getAdapter();
             if (adapter != null) {
                 BluetoothDevice device = adapter.getRemoteDevice(deviceAddress);
                 boolean success = passkeyService.connect(device);
@@ -1022,21 +1207,145 @@ public class ServerActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        isInForeground = true;
         Log.d(TAG, "onResume - reconciling device states");
-        
-        // Only reconcile if service is bound and ready
         if (serviceBound && passkeyService != null && stateManager != null) {
             reconcileDeviceStates();
         }
+        // If UP was requested while we were backgrounded, show the dialog now
+        if (pendingUpTxn != null && userPresenceDialog == null) {
+            showUserPresencePrompt();
+        }
     }
 
-    /**
-     * Cleans up resources when the activity is destroyed.
-     */
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isInForeground = false;
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        AuthenticatorAPI.setUserPresenceCallback(null);
+        cancelTimeout();
+        dismissDialogIfShowing();
+        if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
         unbindFromService();
+    }
+
+    // -------------------------------------------------------------------------
+    // UP helpers
+    // -------------------------------------------------------------------------
+
+    private void showUserPresencePrompt() {
+        if (!isInForeground) {
+            postUpNotification();
+            return;
+        }
+        dismissDialogIfShowing();
+        userPresenceDialog = new AlertDialog.Builder(this)
+            .setTitle(getString(R.string.up_getinfo_title))
+            .setMessage(getString(R.string.up_getinfo_message))
+            .setPositiveButton(R.string.up_allow,  (d, w) -> deliverApproved())
+            .setNegativeButton(R.string.up_deny,   (d, w) -> deliverDenied())
+            .setCancelable(false)
+            .create();
+        userPresenceDialog.show();
+        timeoutRunnable = this::deliverTimeout;
+        uiHandler.postDelayed(timeoutRunnable, UP_TIMEOUT_MS);
+    }
+
+    private void deliverApproved() {
+        cancelTimeout();
+        dismissDialogIfShowing();
+        cancelUpNotification();
+        if (pendingUpTxn != null) {
+            pendingUpTxn.setUserPresent(true);
+            HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
+            if (pk != null) pk.sendDeferredResponse(pendingUpTxn, pendingApprovedBytes);
+        }
+        stopUpKeepalive();
+        clearPendingUpState();
+    }
+
+    private void deliverDenied() {
+        cancelTimeout();
+        dismissDialogIfShowing();
+        cancelUpNotification();
+        if (pendingUpTxn != null) {
+            HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
+            if (pk != null) pk.sendDeferredResponse(pendingUpTxn, pendingDeniedBytes);
+        }
+        stopUpKeepalive();
+        clearPendingUpState();
+    }
+
+    private void deliverTimeout() {
+        dismissDialogIfShowing();
+        cancelUpNotification();
+        if (pendingUpTxn != null) {
+            HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
+            if (pk != null) pk.sendDeferredResponse(pendingUpTxn,
+                AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.USER_ACTION_TIMEOUT));
+        }
+        Toast.makeText(this, R.string.up_timeout_toast, Toast.LENGTH_SHORT).show();
+        stopUpKeepalive();
+        clearPendingUpState();
+    }
+
+    private void stopUpKeepalive() {
+        if (pendingUpTxn != null && keepaliveManager != null) {
+            keepaliveManager.stopKeepalive(bytesToHex(pendingUpTxn.getCid()));
+        }
+    }
+
+    private void dismissDialogIfShowing() {
+        if (userPresenceDialog != null && userPresenceDialog.isShowing()) {
+            userPresenceDialog.dismiss();
+        }
+        userPresenceDialog = null;
+    }
+
+    private void cancelTimeout() {
+        if (timeoutRunnable != null) {
+            uiHandler.removeCallbacks(timeoutRunnable);
+            timeoutRunnable = null;
+        }
+    }
+
+    private void clearPendingUpState() {
+        pendingUpTxn         = null;
+        pendingApprovedBytes = null;
+        pendingDeniedBytes   = null;
+    }
+
+    private void postUpNotification() {
+        Intent intent = new Intent(this, ServerActivity.class)
+            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification n = new NotificationCompat.Builder(this,
+                com.isfs.blekey.ForegroundNotificationService.CHANNEL_ID)
+            .setSmallIcon(R.drawable.bee)
+            .setContentTitle(getString(R.string.up_notification_title))
+            .setContentText(getString(R.string.up_notification_text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build();
+        NotificationManagerCompat.from(this).notify(UP_NOTIFICATION_ID, n);
+    }
+
+    private void cancelUpNotification() {
+        NotificationManagerCompat.from(this).cancel(UP_NOTIFICATION_ID);
+    }
+
+    private static String bytesToHex(byte[] b) {
+        if (b == null) return "";
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) sb.append(String.format("%02x", x));
+        return sb.toString();
     }
 }
 

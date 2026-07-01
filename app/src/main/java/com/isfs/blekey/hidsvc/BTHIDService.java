@@ -341,6 +341,13 @@ public class BTHIDService implements IHIDTransport {
     }
     
     /**
+     * Returns the {@link HIDPasskey} instance used by this service.
+     */
+    public HIDPasskey getPasskey() {
+        return passkey;
+    }
+
+    /**
      * Add input report to queue (called by HIDPasskey)
      */
     protected void addInputReport(final byte[] inputReport) {

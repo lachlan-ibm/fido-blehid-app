@@ -9,7 +9,6 @@ This document analyzes the work required to implement Bluetooth Low Energy (BLE)
 **Estimated Effort**: 10 weeks (400 hours) for full implementation
 **Complexity**: High - requires new GATT service, fragmentation protocol, and security implementation
 
-**⚠️ CRITICAL COMPATIBILITY NOTE**: Firefox on Linux currently has **LIMITED BLE CTAP2 support**. See [Browser Compatibility](#browser-compatibility) section below.
 
 ---
 
@@ -31,7 +30,6 @@ This document analyzes the work required to implement Bluetooth Low Energy (BLE)
    - Purpose: FIDO2 authenticator operations
    - Completely different service structure
 
-**Both profiles use BLE transport** - there is no "USB HID device" in the GATT server. The current implementation uses BLE to emulate a HID device (keyboard/mouse), while the new FIDO profile will use BLE for FIDO2 authentication.
 
 ### 1.2 Current vs. Target Architecture
 

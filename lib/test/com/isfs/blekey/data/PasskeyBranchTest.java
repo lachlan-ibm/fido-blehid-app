@@ -151,7 +151,7 @@ public class PasskeyBranchTest {
     }
     
     /**
-     * Test readKey() with corrupted data (lines 328, 339, 348, 354, 367, 375).
+     * Test readKey() with corrupted data.
      * Tests error handling for various corruption scenarios.
      */
     @Test
@@ -159,22 +159,29 @@ public class PasskeyBranchTest {
         Method readKey = Passkey.class.getDeclaredMethod("readKey", File.class, byte[].class);
         readKey.setAccessible(true);
         
-        // Test 1: File doesn't exist (line 339)
+        // Test 1: File doesn't exist
         File nonExistentFile = new File(tempFolder.getRoot(), "nonexistent.passkey");
         byte[] lowerHash = Arrays.copyOfRange(testPinHash, 0, HALF_HASH);
         Passkey result1 = (Passkey) readKey.invoke(null, nonExistentFile, lowerHash);
         assertNull("Should return null for non-existent file", result1);
         
-        // Test 2: Insufficient lowerHash bytes (line 328)
+        // Test 2: Insufficient lowerHash bytes
         byte[] shortHash = new byte[HALF_HASH - 1];
         Passkey result2 = (Passkey) readKey.invoke(null, tempPasskeyFile, shortHash);
         assertNull("Should return null for insufficient hash bytes", result2);
         
-        // Test 3: File too short (line 348)
-        byte[] shortData = new byte[100]; // Less than HEADER_SIZE (230)
+        // Test 3: Passkey file too short (fewer than 4 bytes)
+        byte[] shortData = new byte[3]; // Less than minimum 4 bytes
         java.nio.file.Files.write(tempPasskeyFile.toPath(), shortData);
         Passkey result3 = (Passkey) readKey.invoke(null, tempPasskeyFile, lowerHash);
-        assertNull("Should return null for file too short", result3);
+        assertNull("Should return null for passkey file too short", result3);
+        
+        // Test 4: Passkey file valid but stash file missing
+        byte[] validData = new byte[100]; // More than 4 bytes
+        java.nio.file.Files.write(tempPasskeyFile.toPath(), validData);
+        // No stash file written — readKey should detect missing stash
+        Passkey result4 = (Passkey) readKey.invoke(null, tempPasskeyFile, lowerHash);
+        assertNull("Should return null when stash file is missing", result4);
     }
     
     /**
@@ -208,8 +215,8 @@ public class PasskeyBranchTest {
     }
     
     /**
-     * Test validateFileData() with invalid formats (line 451).
-     * Tests file data validation.
+     * Test validateFileData() with invalid formats.
+     * Tests file data validation (minimum 4 bytes for PKCS12 length prefix).
      */
     @Test
     public void testValidateFileData() throws Exception {
@@ -220,15 +227,20 @@ public class PasskeyBranchTest {
         boolean result1 = (boolean) validateFileData.invoke(null, (byte[]) null);
         assertFalse("Should return false for null data", result1);
         
-        // Test with insufficient data
-        byte[] shortData = new byte[100];
+        // Test with insufficient data (fewer than 4 bytes)
+        byte[] shortData = new byte[3];
         boolean result2 = (boolean) validateFileData.invoke(null, shortData);
-        assertFalse("Should return false for insufficient data", result2);
+        assertFalse("Should return false for fewer than 4 bytes", result2);
         
-        // Test with valid data
-        byte[] validData = new byte[250]; // More than HEADER_SIZE (230)
+        // Test with valid data (exactly 4 bytes — the length prefix)
+        byte[] validData = new byte[4];
         boolean result3 = (boolean) validateFileData.invoke(null, validData);
-        assertTrue("Should return true for valid data", result3);
+        assertTrue("Should return true for 4 or more bytes", result3);
+        
+        // Test with larger valid data
+        byte[] largeData = new byte[250];
+        boolean result4 = (boolean) validateFileData.invoke(null, largeData);
+        assertTrue("Should return true for larger data", result4);
     }
     
     /**

@@ -3,13 +3,17 @@
  */
 package com.isfs.blekey.credential;
 
+import com.isfs.blekey.credential.jsonld.JsonLdCredential;
+import com.isfs.blekey.credential.jsonld.JsonLdException;
 import com.isfs.blekey.util.Cbor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -201,8 +205,66 @@ public class VerifiableCredential {
     }
     
     /**
+     * Serializes a JSON-LD credential to JSON string format.
+     * This method is only applicable for JSON_LD format credentials.
+     *
+     * @return JSON string representation of the JSON-LD credential
+     * @throws IllegalStateException if credential format is not JSON_LD
+     * @throws JsonLdException if serialization fails
+     */
+    public String serializeJsonLd() throws JsonLdException {
+        if (format != DigitalCredentialFormat.JSON_LD) {
+            throw new IllegalStateException("serializeJsonLd() can only be called on JSON_LD format credentials");
+        }
+        
+        if (metadata == null) {
+            throw new JsonLdException("Metadata is required for JSON-LD serialization");
+        }
+        
+        // Create JsonLdCredential from metadata
+        JsonLdCredential jsonLdCred = new JsonLdCredential();
+        
+        // Set ID if present
+        if (id != null) {
+            jsonLdCred.setId(id);
+        }
+        
+        // Set contexts
+        if (metadata.getContexts() != null) {
+            for (String contextUrl : metadata.getContexts()) {
+                jsonLdCred.getContext().addContextUrl(contextUrl);
+            }
+        }
+        
+        // Set types
+        if (metadata.getTypes() != null) {
+            for (String type : metadata.getTypes()) {
+                jsonLdCred.addType(type);
+            }
+        }
+        
+        // Set issuer
+        if (metadata.getIssuerDid() != null) {
+            jsonLdCred.setIssuer(metadata.getIssuerDid());
+        }
+        
+        // Set dates
+        if (metadata.getIssuedAt() != null) {
+            jsonLdCred.setIssuanceDate(metadata.getIssuedAt());
+        }
+        if (metadata.getExpiresAt() != null) {
+            jsonLdCred.setExpirationDate(metadata.getExpiresAt());
+        }
+        
+        // Note: credentialSubject and proof would need to be reconstructed from stored data
+        // This is a basic serialization - full implementation would decrypt and parse stored data
+        //TODO do this
+        return jsonLdCred.toJson();
+    }
+    
+    /**
      * Serializes this credential to CBOR format for storage.
-     * 
+     *
      * CBOR Structure:
      * {
      *   1: id (string),
@@ -212,7 +274,7 @@ public class VerifiableCredential {
      *   5: encryptedData (bytes),
      *   6: salt (bytes)
      * }
-     * 
+     *
      * @return CBOR-encoded credential data
      */
     public byte[] toCbor() {
@@ -333,6 +395,11 @@ public class VerifiableCredential {
     
     /**
      * Serializes metadata to CBOR map format.
+     *
+     * CBOR keys:
+     * 1: issuerDid, 2: issuerUrl, 3: credentialType, 4: issuedAt, 5: expiresAt,
+     * 6: statusListUrl, 7: displayProperties
+     * 8: contexts (JSON-LD), 9: types (JSON-LD), 10: credentialSubject (JSON-LD), 11: proofType (JSON-LD)
      */
     private Map<Integer, Object> serializeMetadata() {
         Map<Integer, Object> metaMap = new HashMap<>();
@@ -357,6 +424,20 @@ public class VerifiableCredential {
         }
         if (!metadata.getDisplayProperties().isEmpty()) {
             metaMap.put(7, metadata.getDisplayProperties());
+        }
+        
+        // JSON-LD specific fields
+        if (metadata.getContexts() != null && !metadata.getContexts().isEmpty()) {
+            metaMap.put(8, new ArrayList<>(metadata.getContexts()));
+        }
+        if (metadata.getTypes() != null && !metadata.getTypes().isEmpty()) {
+            metaMap.put(9, new ArrayList<>(metadata.getTypes()));
+        }
+        if (metadata.getCredentialSubject() != null) {
+            metaMap.put(10, metadata.getCredentialSubject());
+        }
+        if (metadata.getProofType() != null) {
+            metaMap.put(11, metadata.getProofType());
         }
         
         return metaMap;
@@ -406,6 +487,29 @@ public class VerifiableCredential {
         Map<String, String> displayProps = getOptional(metaMap, 7, Map.class, "display properties");
         if (displayProps != null) {
             displayProps.forEach(metadata::setDisplayProperty);
+        }
+        
+        // JSON-LD specific fields
+        @SuppressWarnings("unchecked")
+        List<String> contexts = getOptional(metaMap, 8, List.class, "contexts");
+        if (contexts != null) {
+            metadata.setContexts(new ArrayList<>(contexts));
+        }
+        
+        @SuppressWarnings("unchecked")
+        List<String> types = getOptional(metaMap, 9, List.class, "types");
+        if (types != null) {
+            metadata.setTypes(new ArrayList<>(types));
+        }
+        
+        String credentialSubject = getOptional(metaMap, 10, String.class, "credential subject");
+        if (credentialSubject != null) {
+            metadata.setCredentialSubject(credentialSubject);
+        }
+        
+        String proofType = getOptional(metaMap, 11, String.class, "proof type");
+        if (proofType != null) {
+            metadata.setProofType(proofType);
         }
         
         return metadata;

@@ -27,6 +27,9 @@ jobs:
       with:
         gradle-version: 8.13
         
+    - name: Copy gradle.properties from template
+      run: cp gradle.properties.template gradle.properties
+        
     - name: Generate Gradle wrapper scripts
       run: gradle wrapper
         

@@ -13,7 +13,8 @@ public enum AuthenticatorCmd {
     MKCRED(0x01),
     NXTAST(0x02),
     GETINF(0x04),
-    ATHPIN(0x06);
+    ATHPIN(0x06),
+    SELECTION(0x0B);
 
     private final int value;
 

@@ -50,6 +50,59 @@ public class AuthenticatorAPI {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthenticatorAPI.class);
 
+    // -------------------------------------------------------------------------
+    // User-Presence callback — set once by the Android layer before any ceremony
+    // -------------------------------------------------------------------------
+
+    /**
+     * Callback invoked when user presence evidence must be collected.
+     * Implemented by the Android layer (ServerActivity); the lib layer has no
+     * Android dependencies.
+     *
+     * <p>The lib pre-builds both possible response buffers and hands them to the
+     * app layer together with the live {@link CtapTxn}.  The app layer sends
+     * keepalive frames until the user acts, then calls
+     * {@code HIDPasskey.sendDeferredResponse(txn, approvedResponse)} or
+     * {@code HIDPasskey.sendDeferredResponse(txn, deniedResponse)} accordingly.
+     * No runnables are involved — the app layer owns the decision and the send.</p>
+     */
+    public interface UserPresenceCallback {
+        /**
+         * @param rpId            Relying-party ID (null for getInfo).
+         * @param txn             The live {@link CtapTxn} for this channel.
+         * @param approvedResponse Pre-built bytes to send when the user approves.
+         * @param deniedResponse  Pre-built bytes to send when the user denies.
+         */
+        void onUserPresenceRequired(String rpId, CtapTxn txn,
+                                    byte[] approvedResponse, byte[] deniedResponse);
+    }
+
+    /** Shared callback — volatile so background threads see updates immediately. */
+    private static volatile UserPresenceCallback userPresenceCallback = null;
+
+    /**
+     * Registers the user-presence callback.  Call from ServerActivity before
+     * any CTAP ceremony begins; call with {@code null} in onDestroy to unregister.
+     *
+     * @param cb The callback implementation, or null to clear it.
+     */
+    public static void setUserPresenceCallback(UserPresenceCallback cb) {
+        userPresenceCallback = cb;
+    }
+
+    /**
+     * Public wrapper over the private {@link #error(Ctap2StatusCode)} method.
+     * Used by the Android layer when it needs to build an error response byte
+     * array (e.g. for timeout or denied UP) without having visibility into
+     * the private method.
+     *
+     * @param code The CTAP2 status code
+     * @return Single-byte array {@code [code.getCode()]}
+     */
+    public static byte[] buildErrorResponse(Ctap2StatusCode code) {
+        return new byte[] { (byte) code.getCode() };
+    }
+
     /**
      * Number of PIN retry attempts allowed before lockout.
      */
@@ -1055,6 +1108,13 @@ public class AuthenticatorAPI {
         
         // Load authenticated session from openKeys if available
         loadAuthenticatedSession(txn);
+
+        // UP must have been collected during getInfo on this channel.
+        // CTAP §6.1.2 step 14: cached UP satisfies the "up" option requirement.
+        if (txn == null || !txn.isUserPresent()) {
+            logger.warn("makeCredential: user presence not cached — returning OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
         
         // Validate the request and determine credential type
         CredentialValidationResult validation = _canMakeCredential(req, txn.getPasskey());
@@ -1726,7 +1786,14 @@ public class AuthenticatorAPI {
         
         // Load authenticated session from openKeys if available
         loadAuthenticatedSession(txn);
-        
+
+        // UP must have been collected during getInfo on this channel.
+        // CTAP §6.2.2 step 9: cached UP satisfies the "up" option requirement.
+        if (txn == null || !txn.isUserPresent()) {
+            logger.warn("getAssertion: user presence not cached — returning OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
         // Extract rpId string (parameter 0x01) for getAssertion
         Object rpIdValue = req.get(GetAssertionKeys.RPID);
         logger.info("=== getAssertion: Extracted rpId value (0x01) ===");
@@ -1776,6 +1843,14 @@ public class AuthenticatorAPI {
      */
     protected static byte[] getInfo(CtapTxn txn, Map<Integer, Object> req) {
         logger.debug("getInfo");
+
+        // If no callback is registered, there is no way to collect UP — deny immediately.
+        if (userPresenceCallback == null) {
+            logger.warn("getInfo: no UserPresenceCallback registered — returning OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
+        // Pre-compute the response; it is only sent to the host after the user approves.
         Map<String, Boolean> capabilities = Map.of("rk", true,
                                                    "plat", true,
                                                    "clientPin", true);
@@ -1787,8 +1862,21 @@ public class AuthenticatorAPI {
             0x05, 4096, // maxMsgSize
             0x06, new int[] {1} //PIN/UV Auth Protocol One
         );
-        logger.debug("getInfo response: {}", info);
-        return success(Cbor.encode(info));
+        // approved: multi-frame CBOR response — drained via HIDPasskey.sendDeferredResponse(txn, buf)
+        final byte[] approvedResponse = success(Cbor.encode(info));
+        // denied: always a single status byte — known upfront, no drain needed
+        final byte[] deniedResponse   = error(Ctap2StatusCode.OPERATION_DENIED);
+        logger.debug("getInfo: pre-computed approved ({} bytes) and denied (1 byte) responses",
+                     approvedResponse.length);
+
+        // Pass both buffers to the app layer together with the live txn.
+        // The app layer sends keepalives until the user acts, then calls:
+        //   HIDPasskey.sendDeferredResponse(txn, approvedResponse) — approve (drains all frames)
+        //   HIDPasskey.sendDeferredResponse(txn, deniedResponse)   — deny/timeout/cancel (single frame)
+        userPresenceCallback.onUserPresenceRequired(null, txn, approvedResponse, deniedResponse);
+
+        // Return null to signal CtapHid that the response is deferred.
+        return null;
     }
 
     /**
@@ -2229,9 +2317,32 @@ public class AuthenticatorAPI {
                 return getInfo(txn, request);
             case ATHPIN:
                 return pinRequest(txn, request);
+            case SELECTION:
+                return authenticatorSelection(txn);
             default:
                 return error(Ctap2StatusCode.INVALID_COMMAND);
         }
+    }
+
+    /**
+     * Processes an authenticatorSelection request (CTAP2.1 command 0x0B).
+     *
+     * Chrome sends this immediately after getInfo to confirm the authenticator
+     * is reachable before proceeding with makeCredential. UP was already collected
+     * during getInfo, so no second prompt is needed — return success immediately.
+     *
+     * @param txn The CTAP transaction
+     * @return 1-byte success response, or OPERATION_DENIED if UP was not collected
+     */
+    private static byte[] authenticatorSelection(CtapTxn txn) {
+        logger.debug("authenticatorSelection");
+        if (txn == null || !txn.isUserPresent()) {
+            logger.warn("authenticatorSelection: UP not cached — returning OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+        // CTAP2.1 §6.9: success response is a single 0x00 status byte with no CBOR payload.
+        logger.debug("authenticatorSelection: UP cached — returning success");
+        return new byte[]{ 0x00 };
     }
 }
 

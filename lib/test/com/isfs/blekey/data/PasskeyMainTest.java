@@ -81,11 +81,11 @@ public class PasskeyMainTest {
         rootPrivateKeyField.setAccessible(true);
         rootPrivateKeyField.set(null, null);
         
-        // Explicitly delete any passkey files that might have been created
+        // Explicitly delete any passkey and stash files that might have been created
         if (fido2Home != null) {
             File dir = new File(fido2Home);
             if (dir.exists()) {
-                File[] files = dir.listFiles((d, name) -> name.endsWith(".passkey"));
+                File[] files = dir.listFiles((d, name) -> name.endsWith(".passkey") || name.endsWith(".stash"));
                 if (files != null) {
                     for (File file : files) {
                         if (!file.delete()) {
@@ -131,10 +131,12 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class))).thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class))).thenCallRealMethod();
             
             // Set up input for the scanner
-            String simulatedUserInput = 
-                "\n" + 
+            String simulatedUserInput =
+                "\n" +
                 "\n" +             // Accept default passkey file
                 "testpassword123\n";  // PIN (at least 8 characters)
                 
@@ -149,13 +151,18 @@ public class PasskeyMainTest {
             // Verify output contains success message
             String output = outContent.toString();
             originalErr.println(output);
-            assertTrue("Output should indicate successful generation", 
+            assertTrue("Output should indicate successful generation",
                       output.contains("Passkey successfully generated"));
             
             // Verify the passkey file was created
             File passkeyFile = new File(fido2Home + File.separator + "default.passkey");
             assertTrue("Passkey file should exist", passkeyFile.exists());
             assertTrue("Passkey file should have content", passkeyFile.length() > 0);
+            
+            // Verify the companion stash file was also created
+            File stashFile = FileUtils.getStashFile(passkeyFile);
+            assertTrue("Stash file should exist", stashFile.exists());
+            assertTrue("Stash file should have content", stashFile.length() > 0);
         }
     }
     
@@ -172,8 +179,10 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
-            // Allow readFileBytes to call the real implementation
+            // Allow readFileBytes and getStashFile to call the real implementation
             mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class)))
+                .thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class)))
                 .thenCallRealMethod();
             
             // Initialize root key pair within mock scope so rootPublicKey is set
@@ -255,6 +264,8 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to throw an exception
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenThrow(new RuntimeException("Test exception"));
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class))).thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class))).thenCallRealMethod();
             
             // Set up input for the scanner
             String simulatedUserInput = 
@@ -283,6 +294,8 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class))).thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class))).thenCallRealMethod();
             
             // Set up input for the scanner with a PIN that's too short
             String simulatedUserInput = 
@@ -322,6 +335,8 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class))).thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class))).thenCallRealMethod();
             
             // Create a passkey file first with a unique name
             File passkeyFile = getUniquePasskeyFile("overwrite_test");
@@ -358,6 +373,8 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class))).thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class))).thenCallRealMethod();
             
             // Create a passkey file first
             File passkeyFile = getUniquePasskeyFile("reject_test");
@@ -397,6 +414,8 @@ public class PasskeyMainTest {
         // Mock FileUtils.getFido2Home() to return our temporary directory
         try (MockedStatic<FileUtils> mockedFileUtils = Mockito.mockStatic(FileUtils.class)) {
             mockedFileUtils.when(FileUtils::getFido2Home).thenReturn(fido2Home);
+            mockedFileUtils.when(() -> FileUtils.getStashFile(Mockito.any(File.class))).thenCallRealMethod();
+            mockedFileUtils.when(() -> FileUtils.readFileBytes(Mockito.any(File.class))).thenCallRealMethod();
             
             // Set up input for the scanner with custom file name
             String simulatedUserInput = 

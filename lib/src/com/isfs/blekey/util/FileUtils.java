@@ -91,6 +91,20 @@ public class FileUtils {
         return fidoHomeStr;
     }
 
+    /**
+     * Derives the companion `.stash` path from a `.passkey` file path.
+     * The stash file lives in the same directory with the same base name
+     * but with the {@code .stash} extension instead of {@code .passkey}.
+     *
+     * @param passkeyFile A {@code .passkey} {@link File}
+     * @return The corresponding {@code .stash} {@link File}
+     */
+    public static File getStashFile(File passkeyFile) {
+        String path = passkeyFile.getAbsolutePath();
+        String stashPath = path.substring(0, path.length() - ".passkey".length()) + ".stash";
+        return new File(stashPath);
+    }
+
     public static List<File> listPasskeys() {
         String fidoHomeStr = getFido2Home();
         if (fidoHomeStr == null || fidoHomeStr.isEmpty()) {

@@ -34,7 +34,6 @@ import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 import java.io.ByteArrayInputStream;
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -42,7 +41,6 @@ import java.io.InputStream;
 import java.math.BigInteger;
 import java.security.KeyPair;
 import java.security.NoSuchAlgorithmException;
-import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Security;
 import java.security.SecureRandom;
@@ -54,7 +52,6 @@ import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
-import java.security.spec.ECPoint;
 import java.security.spec.InvalidKeySpecException;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -452,55 +449,5 @@ public class CertUtils implements java.io.Serializable {
         new SecureRandom().nextBytes(randBytes);
         return generateTPMCert(caCert, null, days, keyPair, true, altNames, caKeyPair, true,
                 KeyUsage.digitalSignature, randBytes);
-    }
-
-    public static void main(String[] args) {
-        if (args.length < 1) {
-            logger.error("Usage: CertUtils pemfile");
-            System.exit(1);
-        }
-        String pemFile = args[0];
-        try {
-            X509Certificate cert = (X509Certificate) CertUtils.readCert(pemFile, "X.509");
-            PublicKey pk = cert.getPublicKey();
-            logger.debug("X509 Public Key:");
-            logger.debug("{} {}", pk.getAlgorithm(), pk.getFormat());
-            logger.debug("{}", Base64.getEncoder().encodeToString(pk.getEncoded()));
-            System.exit(0);
-        } catch (Exception e) {
-            logger.debug("Failed to get X509 Public key");
-        }
-
-        try {
-            ECPublicKey cert = (ECPublicKey) FileUtils.readPublicPEM(new File(pemFile));
-            logger.debug("EC Public Key:");
-            ECPoint point = cert.getW();
-            String x = point.getAffineX().toString(16);
-            String y = point.getAffineY().toString(16);
-            logger.debug("X = {}, Y = {}", x, y);
-            System.exit(0);
-        } catch (Exception e) {
-            logger.debug("Failed to get EC Public key");
-        }
-
-        try {
-            PrivateKey pk = FileUtils.readPrivatePEM(new File(pemFile));
-            logger.debug("RSA Private Key:");
-            logger.debug("{} {}", pk.getAlgorithm(), pk.getFormat());
-            logger.debug("{}", Base64.getEncoder().encodeToString(pk.getEncoded()));
-            System.exit(0);
-        } catch (Exception e) {
-            logger.debug("Failed to get RSA private key");
-        }
-
-        try {
-            PrivateKey pk = FileUtils.readPrivatePEM(new File(pemFile));
-            logger.debug("EC Private Key:");
-            logger.debug("{} {}", pk.getAlgorithm(), pk.getFormat());
-            logger.debug("{}", Base64.getEncoder().encodeToString(pk.getEncoded()));
-            System.exit(0);
-        } catch (Exception e) {
-            logger.debug("Failed to get EC private key", e);
-        }
     }
 }

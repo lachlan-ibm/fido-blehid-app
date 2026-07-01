@@ -41,6 +41,40 @@ import java.util.Map;
  * when encoding to send to a device, but any response will have ints for keys.
  */
 public class Cbor {
+  
+  // CBOR tag constants for ISO mDL support
+  /** CBOR tag 24: Encoded CBOR data item */
+  public static final int TAG_ENCODED_CBOR = 24;
+  
+  /** CBOR tag 18: COSE_Sign1 structure */
+  public static final int TAG_COSE_SIGN1 = 18;
+  
+  /**
+   * Represents a CBOR tagged value.
+   */
+  public static class Tagged {
+    private final int tag;
+    private final Object value;
+    
+    public Tagged(int tag, Object value) {
+      this.tag = tag;
+      this.value = value;
+    }
+    
+    public int getTag() {
+      return tag;
+    }
+    
+    public Object getValue() {
+      return value;
+    }
+    
+    @Override
+    public String toString() {
+      return String.format(Locale.ROOT, "Tagged(%d, %s)", tag, value);
+    }
+  }
+  
   /**
    * Encodes an object into canonical CBOR.
    *
@@ -67,6 +101,8 @@ public class Cbor {
   public static void encodeTo(OutputStream stream, Object value) throws IOException {
     if (value == null) {
       dumpSimple(stream, null);
+    } else if (value instanceof Tagged) {
+      dumpTagged(stream, (Tagged) value);
     } else if (value instanceof BigInteger) {
       dumpBigInteger(stream, (BigInteger) value);
     } else if (value instanceof Number) {
@@ -87,6 +123,18 @@ public class Cbor {
       throw new IllegalArgumentException(
           String.format(Locale.ROOT, "Unsupported object type: %s", value.getClass()));
     }
+  }
+  
+  /**
+   * Encodes a tagged CBOR value.
+   *
+   * @param stream the output stream to write to
+   * @param tagged the tagged value to encode
+   * @throws IOException A communication error in the transport layer
+   */
+  private static void dumpTagged(OutputStream stream, Tagged tagged) throws IOException {
+    dumpInt(stream, tagged.getTag(), 6); // Major type 6 for tags
+    encodeTo(stream, tagged.getValue());
   }
 
   /**
@@ -225,9 +273,14 @@ public class Cbor {
         // Tag 3: negative bignum
         byte[] bytes = (byte[]) loadBytes((byte) (buf.get() & 0b11111), buf);
         return new BigInteger(-1, bytes).subtract(BigInteger.ONE);
+      } else if (tagNumber == TAG_ENCODED_CBOR || tagNumber == TAG_COSE_SIGN1) {
+        // Tag 24 (encoded CBOR) or Tag 18 (COSE_Sign1): return as Tagged object
+        Object taggedValue = decodeFrom(buf);
+        return new Tagged(tagNumber, taggedValue);
       } else {
-        // Ignore other tags and process the tagged item
-        return decodeFrom(buf);
+        // For other tags, return as Tagged object to preserve tag information
+        Object taggedValue = decodeFrom(buf);
+        return new Tagged(tagNumber, taggedValue);
       }
     }
     
@@ -473,6 +526,234 @@ public class Cbor {
       map.put(decodeFrom(buf), decodeFrom(buf));
     }
     return map;
+  }
+  
+  /**
+   * Converts a CBOR object to diagnostic notation for debugging.
+   * This provides a human-readable representation of CBOR data structures.
+   *
+   * @param value the CBOR object to convert
+   * @return diagnostic notation string
+   */
+  public static String toDiagnosticNotation(Object value) {
+    return toDiagnosticNotation(value, 0);
+  }
+  
+  /**
+   * Converts a CBOR object to diagnostic notation with indentation.
+   *
+   * @param value the CBOR object to convert
+   * @param indent current indentation level
+   * @return diagnostic notation string
+   */
+  private static String toDiagnosticNotation(Object value, int indent) {
+    if (value == null) {
+      return "null";
+    } else if (value instanceof Tagged) {
+      Tagged tagged = (Tagged) value;
+      return String.format(Locale.ROOT, "%d(%s)",
+          tagged.getTag(),
+          toDiagnosticNotation(tagged.getValue(), indent));
+    } else if (value instanceof Boolean) {
+      return value.toString();
+    } else if (value instanceof Number) {
+      return value.toString();
+    } else if (value instanceof String) {
+      return "\"" + escapeString((String) value) + "\"";
+    } else if (value instanceof byte[]) {
+      return "h'" + ByteUtils.bytesToHex((byte[]) value) + "'";
+    } else if (value instanceof List) {
+      return listToDiagnostic((List<?>) value, indent);
+    } else if (value instanceof Map) {
+      return mapToDiagnostic((Map<?, ?>) value, indent);
+    } else {
+      return value.toString();
+    }
+  }
+  
+  /**
+   * Converts a list to diagnostic notation.
+   */
+  private static String listToDiagnostic(List<?> list, int indent) {
+    if (list.isEmpty()) {
+      return "[]";
+    }
+    
+    StringBuilder sb = new StringBuilder();
+    sb.append("[\n");
+    String indentStr = getIndent(indent + 1);
+    
+    for (int i = 0; i < list.size(); i++) {
+      sb.append(indentStr);
+      sb.append(toDiagnosticNotation(list.get(i), indent + 1));
+      if (i < list.size() - 1) {
+        sb.append(",");
+      }
+      sb.append("\n");
+    }
+    
+    sb.append(getIndent(indent)).append("]");
+    return sb.toString();
+  }
+  
+  /**
+   * Converts a map to diagnostic notation.
+   */
+  private static String mapToDiagnostic(Map<?, ?> map, int indent) {
+    if (map.isEmpty()) {
+      return "{}";
+    }
+    
+    StringBuilder sb = new StringBuilder();
+    sb.append("{\n");
+    String indentStr = getIndent(indent + 1);
+    
+    List<Map.Entry<?, ?>> entries = new ArrayList<>(map.entrySet());
+    for (int i = 0; i < entries.size(); i++) {
+      Map.Entry<?, ?> entry = entries.get(i);
+      sb.append(indentStr);
+      sb.append(toDiagnosticNotation(entry.getKey(), indent + 1));
+      sb.append(": ");
+      sb.append(toDiagnosticNotation(entry.getValue(), indent + 1));
+      if (i < entries.size() - 1) {
+        sb.append(",");
+      }
+      sb.append("\n");
+    }
+    
+    sb.append(getIndent(indent)).append("}");
+    return sb.toString();
+  }
+  
+  /**
+   * Gets indentation string for diagnostic notation.
+   */
+  private static String getIndent(int level) {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < level; i++) {
+      sb.append("  ");
+    }
+    return sb.toString();
+  }
+  
+  /**
+   * Escapes special characters in strings for diagnostic notation.
+   */
+  private static String escapeString(String str) {
+    return str.replace("\\", "\\\\")
+              .replace("\"", "\\\"")
+              .replace("\n", "\\n")
+              .replace("\r", "\\r")
+              .replace("\t", "\\t");
+  }
+  
+  /**
+   * Encodes a COSE_Sign1 structure with tag 18.
+   * This is a convenience method for ISO mDL support.
+   *
+   * @param coseSign1Array the COSE_Sign1 array [protected, unprotected, payload, signature]
+   * @return CBOR encoded bytes with tag 18
+   */
+  public static byte[] encodeCoseSign1(List<?> coseSign1Array) {
+    if (coseSign1Array.size() != 4) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "COSE_Sign1 must have exactly 4 elements, got %d",
+              coseSign1Array.size()));
+    }
+    return encode(new Tagged(TAG_COSE_SIGN1, coseSign1Array));
+  }
+  
+  /**
+   * Decodes a COSE_Sign1 structure, expecting tag 18.
+   * This is a convenience method for ISO mDL support.
+   *
+   * @param data the CBOR encoded bytes
+   * @return the COSE_Sign1 array [protected, unprotected, payload, signature]
+   * @throws IllegalArgumentException if the data is not a valid COSE_Sign1 structure
+   */
+  public static List<?> decodeCoseSign1(byte[] data) {
+    Object decoded = decode(data);
+    
+    if (!(decoded instanceof Tagged)) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "Expected tagged CBOR value, got %s",
+              decoded.getClass().getSimpleName()));
+    }
+    
+    Tagged tagged = (Tagged) decoded;
+    if (tagged.getTag() != TAG_COSE_SIGN1) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "Expected COSE_Sign1 tag (18), got tag %d",
+              tagged.getTag()));
+    }
+    
+    if (!(tagged.getValue() instanceof List)) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "COSE_Sign1 value must be an array, got %s",
+              tagged.getValue().getClass().getSimpleName()));
+    }
+    
+    List<?> array = (List<?>) tagged.getValue();
+    if (array.size() != 4) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "COSE_Sign1 array must have exactly 4 elements, got %d",
+              array.size()));
+    }
+    
+    return array;
+  }
+  
+  /**
+   * Encodes data with tag 24 (encoded CBOR data item).
+   * This is useful for nested CBOR structures in ISO mDL.
+   *
+   * @param data the data to encode
+   * @return CBOR encoded bytes with tag 24
+   */
+  public static byte[] encodeWithTag24(Object data) {
+    byte[] innerCbor = encode(data);
+    return encode(new Tagged(TAG_ENCODED_CBOR, innerCbor));
+  }
+  
+  /**
+   * Decodes data with tag 24 (encoded CBOR data item).
+   * This is useful for nested CBOR structures in ISO mDL.
+   *
+   * @param data the CBOR encoded bytes
+   * @return the decoded inner CBOR data
+   * @throws IllegalArgumentException if the data is not tagged with tag 24
+   */
+  public static Object decodeWithTag24(byte[] data) {
+    Object decoded = decode(data);
+    
+    if (!(decoded instanceof Tagged)) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "Expected tagged CBOR value, got %s",
+              decoded.getClass().getSimpleName()));
+    }
+    
+    Tagged tagged = (Tagged) decoded;
+    if (tagged.getTag() != TAG_ENCODED_CBOR) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "Expected encoded CBOR tag (24), got tag %d",
+              tagged.getTag()));
+    }
+    
+    if (!(tagged.getValue() instanceof byte[])) {
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT,
+              "Tag 24 value must be byte string, got %s",
+              tagged.getValue().getClass().getSimpleName()));
+    }
+    
+    return decode((byte[]) tagged.getValue());
   }
 }
 

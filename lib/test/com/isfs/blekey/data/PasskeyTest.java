@@ -147,7 +147,8 @@ public class PasskeyTest {
     //-------------------------------------------------------------------------
     
     /**
-     * Test encryption and decryption of passkey data
+     * Test encryption and decryption of passkey data.
+     * Verifies the new two-file format: body in .passkey, ciphertext in .stash.
      */
     @Test
     public void testEncryptDecryptPasskeyData() throws Exception {
@@ -170,16 +171,20 @@ public class PasskeyTest {
         boolean writeSuccess = Passkey.writeKey(passkey, pinHash, tempPasskeyFile);
         assertTrue("Writing passkey should succeed", writeSuccess);
         
-        byte[] fileData = Files.readAllBytes(tempPasskeyFile.toPath());
-        assertNotNull("File data should not be null", fileData);
-        assertTrue("File data should not be empty", fileData.length > 0);
+        // Verify .passkey body: starts with 4-byte LE PKCS12 length, no 230-byte header
+        byte[] passkeyFileData = Files.readAllBytes(tempPasskeyFile.toPath());
+        assertNotNull("Passkey file data should not be null", passkeyFileData);
+        assertTrue("Passkey file should be at least 4 bytes", passkeyFileData.length >= 4);
         
-        // Verify file structure: header (230 bytes) + length (4 bytes) + PKCS12 + encrypted credentials
-        assertTrue("File should be at least header + length size", fileData.length >= 234);
+        // Verify .stash file exists and contains the ciphertext
+        File stashFile = FileUtils.getStashFile(tempPasskeyFile);
+        assertTrue("Stash file should exist", stashFile.exists());
+        byte[] stashData = Files.readAllBytes(stashFile.toPath());
+        assertNotNull("Stash data should not be null", stashData);
+        assertTrue("Stash data should not be empty", stashData.length > 0);
         
-        // Decrypt the header to verify upper hash
-        byte[] encUpperHash = Arrays.copyOfRange(fileData, 0, 230);
-        byte[] upperHash = KeyUtils.ecdhDecrypt(encUpperHash, rootKeyPair.getPrivate());
+        // Decrypt the stash to verify upper hash
+        byte[] upperHash = KeyUtils.ecdhDecrypt(stashData, rootKeyPair.getPrivate());
         assertNotNull("Decrypted upper hash should not be null", upperHash);
         assertEquals("Upper hash should be 16 bytes", 16, upperHash.length);
         

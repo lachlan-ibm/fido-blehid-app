@@ -10,6 +10,7 @@ import java.security.KeyPair;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import javax.crypto.KeyAgreement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -121,6 +122,10 @@ public class Ctap2HidRequestTest {
         
         // Set just the filename (not absolute path) - resolvePasskeyFile() will combine with FIDO2_HOME
         txn.setPasskeyFileName(passkeyFileName);
+
+        // Pre-approve user presence so makeCredential / getAssertion succeed in tests
+        // without needing a real UI interaction.
+        txn.setUserPresent(true);
         
         // Get the assignedCids field from CtapHid
         if (assignedCidsField == null) {
@@ -161,6 +166,22 @@ public class Ctap2HidRequestTest {
         pinHash = new byte[32];
         random.nextBytes(pinHash);
         
+        // Register a synchronous UP callback so getInfo completes without UI interaction.
+        // When getInfo defers, this callback immediately loads the approved response back
+        // into the waiting CtapHid so the drain loop in the test works normally.
+        com.isfs.blekey.authenticator.AuthenticatorAPI.setUserPresenceCallback(
+            (rpId, txn, approvedBytes, deniedBytes) -> {
+                com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
+                if (deferred != null) {
+                    try {
+                        deferred.injectDeferredResponse(approvedBytes);
+                        txn.setUserPresent(true);
+                    } catch (java.io.IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            });
+
         // Create a test passkey and add it to the assignedCids map
         com.isfs.blekey.data.Passkey passkey = createTestPasskey();
         setupPasskeyInCtapHid(passkey);
@@ -235,30 +256,10 @@ public class Ctap2HidRequestTest {
      * @throws Exception if an error occurs
      */
     private byte[] encapsulateSharedSecret(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-        if (!(publicKey instanceof java.security.interfaces.ECPublicKey) ||
-            !(privateKey instanceof java.security.interfaces.ECPrivateKey)) {
-            throw new IllegalArgumentException("Keys must be EC keys for ECDH");
-        }
-        
-        java.security.interfaces.ECPublicKey ecPublicKey = (java.security.interfaces.ECPublicKey) publicKey;
-        java.security.interfaces.ECPrivateKey ecPrivateKey = (java.security.interfaces.ECPrivateKey) privateKey;
-        
-        // Get the public key point
-        java.security.spec.ECPoint publicPoint = ecPublicKey.getW();
-        
-        // Get the private key scalar
-        java.math.BigInteger privateScalar = ecPrivateKey.getS();
-        
-        // Perform scalar multiplication: privateScalar * publicPoint
-        java.security.spec.ECPoint sharedPoint = KeyUtils.scalmult(
-                ecPublicKey.getParams().getCurve(),
-                publicPoint,
-                privateScalar);
-        
-        // Use the x-coordinate of the shared point as the shared secret
-        byte[] sharedX = sharedPoint.getAffineX().toByteArray();
-        
-        // Hash the shared secret to derive the AES key
+        KeyAgreement ka = KeyAgreement.getInstance("ECDH");
+        ka.init(privateKey);
+        ka.doPhase(publicKey, true);
+        byte[] sharedX = ka.generateSecret();
         java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
         return digest.digest(sharedX);
     }

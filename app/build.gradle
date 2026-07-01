@@ -87,6 +87,29 @@ android {
                 srcDirs = ['src/main/java']
             }
         }
+        test {
+            java {
+                srcDirs = ['src/test/java']
+            }
+        }
+    }
+    
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+            all {
+                useJUnitPlatform()
+                testLogging {
+                    events "passed", "skipped", "failed"
+                    showStandardStreams = true
+                    showExceptions = true
+                    showCauses = true
+                    showStackTraces = true
+                    exceptionFormat = 'full'
+                }
+            }
+        }
     }
 
 }
@@ -135,6 +158,29 @@ dependencies {
     
     // Use the lib module directly instead of the published artifact
     implementation project(':lib')
+    
+    // Android mock dependencies
+    // JUnit 4 (for backward compatibility)
+    testImplementation 'junit:junit:4.13.2'
+    
+    // JUnit 5 (Jupiter)
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+    testImplementation 'org.junit.platform:junit-platform-launcher:1.10.2'
+    
+    // Allows JUnit 4 tests to run with JUnit 5
+    testImplementation 'org.junit.vintage:junit-vintage-engine:5.10.2'
+    
+    // Mockito
+    testImplementation 'org.mockito:mockito-core:5.19.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.19.0'
+    
+    // Robolectric for Android unit tests
+    testImplementation 'org.robolectric:robolectric:4.13'
+    
+    // AndroidX Test
+    testImplementation 'androidx.test:core:1.5.0'
+    testImplementation 'androidx.test.ext:junit:1.1.5'
 }
 
 // JavaDoc configuration for Android app
