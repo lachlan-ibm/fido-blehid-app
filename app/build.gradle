@@ -16,33 +16,6 @@ buildscript {
 
 
 apply plugin: 'com.android.application'
-/**
-// NOTE: Eclipse plugin removed - .classpath is managed manually via regenrate_classpath.sh
-// The Gradle Buildship plugin was automatically regenerating .classpath on file edits,
-// overwriting manual configurations. Manual management is required for Android projects
-// in VS Code to properly configure JRE container and Android SDK paths.
-apply plugin: 'eclipse'
-
-eclipse {
-    classpath {
-        containers 'org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17'
-        file.whenMerged { cp ->
-            def entries = cp.entries
-            
-            // Add main source directory
-            def src = new org.gradle.plugins.ide.eclipse.model.SourceFolder('src/main/java', null)
-            entries.add(src)
-            
-            // Add Android SDK android.jar
-            def androidJar = new org.gradle.plugins.ide.eclipse.model.Library(
-                fileReferenceFactory.fromPath("${android.sdkDirectory}/platforms/${android.compileSdkVersion}/android.jar")
-            )
-            androidJar.sourcePath = fileReferenceFactory.fromPath("${android.sdkDirectory}/sources/${android.compileSdkVersion}")
-            entries.add(androidJar)
-        }
-    }
-}
-*/
 
 android {
     namespace = 'com.isfs.blekey'

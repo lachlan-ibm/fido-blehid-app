@@ -75,6 +75,14 @@ public class Fido2Authenticator implements java.io.Serializable {
     protected byte[] TEST_AAGUID = new byte[16];
 
     protected byte[] credId = null;
+
+    // Credential-ID format: "F1D0" ASCII prefix (0x46 0x31 0x44 0x30)
+    protected static final byte[] CRED_PREFIX =
+        "F1D0".getBytes(StandardCharsets.US_ASCII);
+
+    // COSE algorithm IDs used in the 34-byte plaintext
+    private static final int COSE_ALG_ES256 = -7;   // EC P-256 / SHA-256
+
     // TPM OID's
     protected static final String TPM_MANUFACTURER = "2.23.133.2.1";
     protected static final String TPM_VENDOR = "2.23.133.2.2";
@@ -106,34 +114,98 @@ public class Fido2Authenticator implements java.io.Serializable {
     }
 
     /**
-     * Generate the credential id for this authenticator. The original implementation
-     * of this was simply the SHA256 of the authenticator public key.
+     * Build the 34-byte plaintext for credential-ID encryption.
      *
-     * If the Fido2Authenticator has a AES Symmetric key then the credential id is
-     * the encrypted serialization of the authenticator's private key.
+     * Layout: 2-byte signed COSE alg (big-endian) || 32-byte key material.
      *
-     * @return The credential ID as a byte array, either from an existing ID, an encrypted private key,
-     *         or a SHA-256 hash of the public key
+     * @param coseAlg    COSE algorithm ID (e.g. {@link #COSE_ALG_ES256})
+     * @param keyMaterial 32-byte canonical private key material
+     * @return 34-byte plaintext
+     */
+    private static byte[] buildCredIdPlaintext(int coseAlg, byte[] keyMaterial) {
+        if (keyMaterial.length != 32)
+            throw new IllegalArgumentException("keyMaterial must be 32 bytes");
+        byte[] out = new byte[34];
+        out[0] = (byte) ((coseAlg >> 8) & 0xFF);
+        out[1] = (byte)  (coseAlg       & 0xFF);
+        System.arraycopy(keyMaterial, 0, out, 2, 32);
+        return out;
+    }
+
+    /**
+     * Parse the 34-byte plaintext produced by {@link #buildCredIdPlaintext}.
+     *
+     * @param plaintext 34 bytes: 2-byte COSE alg || 32-byte key material
+     * @return {@code Object[] { (Integer) coseAlg, (byte[]) keyMaterial }}
+     */
+    private static Object[] parseCredIdPlaintext(byte[] plaintext) {
+        if (plaintext.length != 34)
+            throw new IllegalArgumentException(
+                "Invalid cred-id plaintext length: " + plaintext.length);
+        short raw = (short) (((plaintext[0] & 0xFF) << 8) | (plaintext[1] & 0xFF));
+        int    coseAlg = raw;                          // signed 16-bit → int
+        byte[] keyMat  = Arrays.copyOfRange(plaintext, 2, 34);
+        return new Object[] { coseAlg, keyMat };
+    }
+
+    /**
+     * Returns {@code true} if {@code credId} starts with the 4-byte F1D0 prefix,
+     * allowing callers to skip decryption for credentials that do not belong to
+     * this authenticator.
+     *
+     * @param credId raw credential ID bytes
+     * @return {@code true} iff the bytes start with {@code CRED_PREFIX}
+     */
+    public static boolean hasF1D0Prefix(byte[] credId) {
+        return credId != null
+            && credId.length > CRED_PREFIX.length
+            && Arrays.equals(Arrays.copyOf(credId, CRED_PREFIX.length), CRED_PREFIX);
+    }
+
+    /**
+     * Generate the credential ID for this authenticator.
+     *
+     * <p>Format (when an AES key is set):
+     * <pre>
+     *   CRED_PREFIX (4 bytes: "F1D0")
+     *   || AES-GCM ciphertext of: 2-byte COSE alg || 32-byte key material
+     * </pre>
+     *
+     * <p>Falls back to SHA-256 of the public key when no AES key is configured.
+     *
+     * @return raw binary credential-ID bytes
      */
     public byte[] getCredId() {
-        if(this.credId != null) {
-            return this.credId;
-        }
-        if(aesKey != null) {
+        if (this.credId != null) return this.credId;
+
+        if (aesKey != null) {
             try {
-                byte[] encoded = this.keyPair.getPrivate().getEncoded();
-                String cred = aesKey.encrypt(encoded); // b64url
-                this.credId = cred.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                logger.debug("CredID generated: len={}, hash={}", this.credId.length, Integer.toHexString(cred.hashCode()));
+                ECPrivateKey priv    = (ECPrivateKey) this.keyPair.getPrivate();
+                byte[]       keyMat  = KeyUtils.extractKeyMaterial(priv);
+                byte[]       pt      = buildCredIdPlaintext(COSE_ALG_ES256, keyMat); // 34 bytes
+
+                // aesKey.encrypt() returns a URL-safe base64 string (the GCM token)
+                String b64token    = aesKey.encrypt(pt);
+                byte[] cipherBytes = Base64.getUrlDecoder().decode(b64token);
+
+                // credId = raw bytes: CRED_PREFIX || ciphertext
+                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                buf.write(CRED_PREFIX);
+                buf.write(cipherBytes);
+                this.credId = buf.toByteArray();
+
+                logger.debug("CredID generated: len={}, prefixOk={}",
+                    this.credId.length,
+                    Arrays.equals(Arrays.copyOf(this.credId, 4), CRED_PREFIX));
             } catch (Exception e) {
-                e.printStackTrace();
+                throw new RuntimeException("CredID generation failed", e);
             }
         } else {
-            try { // Fall back to default impl
+            try { // SHA-256 fallback (no symmetric key configured)
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 digest.update(this.keyPair.getPublic().getEncoded());
                 this.credId = digest.digest();
-                logger.debug("getCredId() - SHA-256 fallback: {}", this.credId.length);
+                logger.debug("getCredId() – SHA-256 fallback, len={}", this.credId.length);
             } catch (NoSuchAlgorithmException e) {
                 throw new RuntimeException(e);
             }
@@ -142,30 +214,39 @@ public class Fido2Authenticator implements java.io.Serializable {
     }
 
     /**
-     * Initialize authenticator from a credential ID received during getAssertion.
+     * Initialise this authenticator from a raw binary credential ID.
      *
-     * Clients sends credential IDs as UTF-8 bytes of base64url strings.
-     * We need to convert these bytes to a string for decryption.
+     * <p>The bytes must start with the F1D0 prefix; everything after the
+     * prefix is the AES-GCM token.  After decryption the 34-byte plaintext
+     * is parsed to reconstruct the EC key pair.
      *
-     * @param credId The credential ID as UTF-8 bytes of base64url string from Client
-     * @throws Exception if decryption or key initialization fails
+     * @param credId raw credential-ID bytes (CRED_PREFIX || ciphertext)
+     * @throws IllegalArgumentException if the F1D0 prefix is missing
+     * @throws Exception if decryption or key reconstruction fails
      */
     public void initFromCredId(byte[] credId) throws Exception {
         this.credId = credId;
-        // Convert UTF-8 bytes to base64url string
-        String credIdStr = new String(credId, java.nio.charset.StandardCharsets.UTF_8);
-        
-        // Log credential ID details with hash for debugging
-        logger.debug("CredID init: len={}, strLen={}, hash={}, validB64url={}",
-                     credId.length, credIdStr.length(),
-                     Integer.toHexString(credIdStr.hashCode()),
-                     credIdStr.matches("[A-Za-z0-9_-]*"));
-        
-        // Decrypt the token
-        byte[] asn1Bytes = aesKey.decrypt(credIdStr, null);
-        // Generate the key pair from the parameters
-        ECPrivateKey key = (ECPrivateKey) KeyUtils.getPrivate(asn1Bytes, "EC");
-        this.keyPair = new KeyPair(KeyUtils.getPubKey(key), key);
+
+        // Verify the F1D0 prefix — only our creds can be decrypted
+        if (credId.length < CRED_PREFIX.length ||
+                !Arrays.equals(Arrays.copyOf(credId, CRED_PREFIX.length), CRED_PREFIX)) {
+            throw new IllegalArgumentException("Credential ID missing F1D0 prefix");
+        }
+
+        // The encrypted token bytes start right after the prefix
+        byte[] cipherBytes = Arrays.copyOfRange(credId, CRED_PREFIX.length, credId.length);
+
+        // Decrypt: SymmetricKey.decrypt(byte[], Long) accepts the raw token bytes
+        byte[] plaintext = aesKey.decrypt(cipherBytes, null);
+
+        // Parse the 34-byte plaintext → {coseAlg, keyMaterial}
+        Object[] parts  = parseCredIdPlaintext(plaintext);
+        int      coseAlg = (Integer) parts[0];
+        byte[]   keyMat  = (byte[])  parts[1];
+
+        logger.debug("CredID init: coseAlg={}, keyMatLen={}", coseAlg, keyMat.length);
+
+        this.keyPair = KeyUtils.reconstructKeyPair(coseAlg, keyMat);
     }
 
     public void setSymKeys(String seed) {

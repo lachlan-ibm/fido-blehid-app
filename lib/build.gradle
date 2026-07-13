@@ -34,21 +34,15 @@ sourceSets {
 }
 
 dependencies {
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.19.0'
-    implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.18.1'
-    implementation 'org.slf4j:slf4j-api:2.0.9'
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.79'
-    implementation 'org.bouncycastle:bcpkix-jdk18on:1.79'
-    implementation 'com.macasaet.fernet:fernet-java8:1.4.2'
-    implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.2'
+    implementation 'tools.jackson.core:jackson-databind:3.1.4'
+    implementation 'org.slf4j:slf4j-api:2.0.18'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.84'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.84'
+    implementation 'jakarta.xml.bind:jakarta.xml.bind-api:4.0.5'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'com.google.code.gson:gson:2.14.0'
     implementation 'org.glassfish:jakarta.json:2.0.1'
-    
-    // JSON-LD 1.1 library for W3C Verifiable Credentials support
     implementation 'com.apicatalog:titanium-json-ld:1.4.1'
-    
-    // COSE library for ISO mDL support
     implementation 'com.augustcellars.cose:cose-java:1.1.0'
     
     // Use jose4j but exclude its transitive jakarta.json-api dependency

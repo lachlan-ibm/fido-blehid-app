@@ -16,7 +16,6 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -97,22 +96,23 @@ public class Fido2AuthenticatorTest {
         byte[] credId = auth.getCredId();
         assertNotNull(credId);
         assertTrue(credId.length > 0);
-        System.err.println("Credential Id:" + Arrays.toString(credId));
-        
-        // Re-encode the bytes to a base64 string for decryption
-        byte[] encoded = auth.getPrivKey().getEncoded();
-        System.err.println("start: " + encoded);
-        String test = new SymmetricKey(symKeySeed).encrypt(encoded);
-        byte[] decrypted = new SymmetricKey(symKeySeed).decrypt(test);
-        System.err.println("decoded: " + decrypted);
-        assertTrue(Arrays.equals(encoded, decrypted));
-        
-        // Try to decrypt the raw credential ID bytes instead of the base64-encoded string
+        System.err.println("Credential Id (bytes):" + Arrays.toString(credId));
+
+        // Verify the F1D0 prefix is present
+        assertTrue(Fido2Authenticator.hasF1D0Prefix(credId),
+            "Credential ID must start with F1D0 prefix");
+        assertEquals(0x46, credId[0] & 0xFF);
+        assertEquals(0x31, credId[1] & 0xFF);
+        assertEquals(0x44, credId[2] & 0xFF);
+        assertEquals(0x30, credId[3] & 0xFF);
+
+        // Strip F1D0 prefix (4 bytes) and decrypt raw cipher bytes
         System.err.println("Attempt to recover original key");
-        System.err.println(Arrays.toString(credId));
-        byte[] keyBytes = new SymmetricKey(symKeySeed).decrypt(new String(credId));
-        System.err.println("Decrypted key bytes: " + Arrays.toString(keyBytes));
+        byte[] cipherBytes = Arrays.copyOfRange(credId, 4, credId.length);
+        byte[] keyBytes = new SymmetricKey(symKeySeed).decrypt(cipherBytes, null);
+        System.err.println("Decrypted plaintext bytes: " + Arrays.toString(keyBytes));
         assertNotNull(keyBytes);
+        assertEquals(34, keyBytes.length, "Decrypted plaintext must be 34 bytes (2-byte COSE alg + 32-byte key material)");
 
         // Derive private key should be equal
         Fido2Authenticator a2 = new Fido2Authenticator();

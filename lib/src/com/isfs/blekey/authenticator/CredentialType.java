@@ -13,14 +13,19 @@ public enum CredentialType {
     NONE(0),
     
     /**
-     * Two-factor authentication credential (non-resident).
+     * UP only authentication credential.
      */
     TWO_FACTOR(1),
     
     /**
+     * UV authentication credential (non-resident).
+     */
+    PASSKEY(2),
+
+    /**
      * Resident credential (discoverable credential).
      */
-    RESIDENT(2);
+    RESIDENT(3);
     
     private final int value;
     

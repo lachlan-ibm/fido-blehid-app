@@ -449,6 +449,89 @@ public class Fido2AuthenticatorBranchTest {
         authenticator.setSymKeys(seed);
         assertEquals(seed, authenticator.getSymKeySeed());
     }
+    // ========== New Credential-ID Format Tests ==========
+
+    /**
+     * Credential IDs generated with an AES key must start with the F1D0 prefix (bytes 0x46 0x31 0x44 0x30).
+     */
+    @Test
+    public void testGetCredIdHasF1D0Prefix() throws Exception {
+        String seed = SymmetricKey.generateKey();
+        authenticator.setSymKeys(seed);
+
+        byte[] credId = authenticator.getCredId();
+
+        assertNotNull(credId);
+        assertTrue(credId.length > 4, "credId must be longer than the 4-byte prefix");
+        assertEquals(0x46, credId[0] & 0xFF, "byte 0 should be 'F' (0x46)");
+        assertEquals(0x31, credId[1] & 0xFF, "byte 1 should be '1' (0x31)");
+        assertEquals(0x44, credId[2] & 0xFF, "byte 2 should be 'D' (0x44)");
+        assertEquals(0x30, credId[3] & 0xFF, "byte 3 should be '0' (0x30)");
+        assertTrue(Fido2Authenticator.hasF1D0Prefix(credId),
+            "hasF1D0Prefix() must return true for a freshly-generated credId");
+    }
+
+    /**
+     * buildCredIdPlaintext(-7, new byte[32]) must return exactly 34 bytes.
+     */
+    @Test
+    public void testBuildCredIdPlaintextLength() throws Exception {
+        // Access via round-trip: encrypt a well-known key material and check decrypted length
+        String seed = SymmetricKey.generateKey();
+        authenticator.setSymKeys(seed);
+
+        byte[] credId = authenticator.getCredId();
+        // Strip prefix and decrypt
+        byte[] cipherBytes = Arrays.copyOfRange(credId, 4, credId.length);
+        byte[] plaintext = new SymmetricKey(seed).decrypt(cipherBytes, null);
+
+        assertEquals(34, plaintext.length,
+            "Decrypted plaintext must be exactly 34 bytes (2-byte COSE alg + 32-byte key material)");
+    }
+
+    /**
+     * The COSE alg -7 (ES256) must be encoded as big-endian signed short 0xFF 0xF9.
+     */
+    @Test
+    public void testBuildCredIdPlaintextCoseAlgEncoding() throws Exception {
+        String seed = SymmetricKey.generateKey();
+        authenticator.setSymKeys(seed);
+
+        byte[] credId = authenticator.getCredId();
+        byte[] cipherBytes = Arrays.copyOfRange(credId, 4, credId.length);
+        byte[] plaintext = new SymmetricKey(seed).decrypt(cipherBytes, null);
+
+        // -7 in big-endian signed 16-bit = 0xFF 0xF9
+        assertEquals(0xFF, plaintext[0] & 0xFF, "COSE alg high byte should be 0xFF");
+        assertEquals(0xF9, plaintext[1] & 0xFF, "COSE alg low byte should be 0xF9");
+    }
+
+    /**
+     * initFromCredId() must throw IllegalArgumentException when the F1D0 prefix is absent.
+     */
+    @Test
+    public void testInitFromCredIdRejectsMissingPrefix() {
+        String seed = SymmetricKey.generateKey();
+        authenticator.setSymKeys(seed);
+
+        byte[] noPrefixBytes = new byte[64]; // random bytes, no F1D0 prefix
+        new java.util.Random().nextBytes(noPrefixBytes);
+
+        assertThrows(IllegalArgumentException.class,
+            () -> authenticator.initFromCredId(noPrefixBytes),
+            "initFromCredId must throw IllegalArgumentException when F1D0 prefix is absent");
+    }
+
+    /**
+     * hasF1D0Prefix() must return false for null, empty array, and non-F1D0 bytes.
+     */
+    @Test
+    public void testHasF1D0PrefixNegativeCases() {
+        assertFalse(Fido2Authenticator.hasF1D0Prefix(null));
+        assertFalse(Fido2Authenticator.hasF1D0Prefix(new byte[0]));
+        assertFalse(Fido2Authenticator.hasF1D0Prefix(new byte[4])); // all zeros
+        assertFalse(Fido2Authenticator.hasF1D0Prefix(new byte[]{0x46, 0x31, 0x44, 0x30})); // exactly 4 bytes — not *longer* than prefix
+    }
 }
 
 // Made with Bob

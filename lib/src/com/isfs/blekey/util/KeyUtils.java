@@ -1450,4 +1450,76 @@ public class KeyUtils {
         }
         return null;
     }
+
+    // -----------------------------------------------------------------------
+    // Credential-ID helpers — compact key-material encoding/decoding
+    // -----------------------------------------------------------------------
+
+    /**
+     * Extract the 32-byte canonical key material from an EC P-256 private key.
+     *
+     * <p>Returns the big-endian private scalar {@code S}, left-padded with zeros
+     * to exactly 32 bytes (removing any leading sign byte that
+     * {@link java.math.BigInteger#toByteArray()} may add).
+     *
+     * @param key an EC P-256 private key
+     * @return 32-byte key material
+     * @throws UnsupportedOperationException if the key type is not supported
+     */
+    public static byte[] extractKeyMaterial(PrivateKey key) {
+        if (key instanceof ECPrivateKey) {
+            byte[] s = ((ECPrivateKey) key).getS().toByteArray();
+            // BigInteger may have a leading 0x00 sign byte — normalise to 32 bytes
+            byte[] out = new byte[32];
+            int src = Math.max(0, s.length - 32);
+            int dst = Math.max(0, 32 - s.length);
+            System.arraycopy(s, src, out, dst, s.length - src);
+            return out;
+        }
+        throw new UnsupportedOperationException(
+            "Cannot extract 32-byte key material from: " + key.getClass().getName());
+    }
+
+    /**
+     * Return the COSE algorithm ID that corresponds to {@code key}.
+     *
+     * @param key a private key
+     * @return {@code -7} for EC P-256 (ES256)
+     * @throws UnsupportedOperationException if the key type is not recognised
+     */
+    public static int inferCoseAlg(PrivateKey key) {
+        if (key instanceof ECPrivateKey) return -7;   // ES256
+        throw new UnsupportedOperationException(
+            "Unknown COSE alg for key type: " + key.getAlgorithm());
+    }
+
+    /**
+     * Reconstruct an EC P-256 {@link KeyPair} from a COSE algorithm ID and the
+     * 32-byte private scalar produced by {@link #extractKeyMaterial}.
+     *
+     * @param coseAlg    COSE algorithm ID (currently only {@code -7} / ES256 is supported)
+     * @param keyMaterial 32-byte big-endian private scalar
+     * @return reconstructed {@link KeyPair}
+     * @throws UnsupportedOperationException if {@code coseAlg} is not supported
+     * @throws Exception if key reconstruction fails
+     */
+    public static KeyPair reconstructKeyPair(int coseAlg, byte[] keyMaterial) throws Exception {
+        if (coseAlg == -7) { // ES256 / EC P-256
+            ensureBouncyCastleProvider();
+            BigInteger s = new BigInteger(1, keyMaterial); // treat as unsigned
+            org.bouncycastle.jce.spec.ECNamedCurveParameterSpec spec =
+                org.bouncycastle.jce.ECNamedCurveTable.getParameterSpec("P-256");
+            org.bouncycastle.jce.spec.ECNamedCurveSpec namedSpec =
+                new org.bouncycastle.jce.spec.ECNamedCurveSpec(
+                    "P-256", spec.getCurve(), spec.getG(), spec.getN());
+            java.security.spec.ECPrivateKeySpec privSpec =
+                new java.security.spec.ECPrivateKeySpec(s, namedSpec);
+            KeyFactory kf = KeyFactory.getInstance("EC",
+                org.bouncycastle.jce.provider.BouncyCastleProvider.PROVIDER_NAME);
+            ECPrivateKey priv = (ECPrivateKey) kf.generatePrivate(privSpec);
+            ECPublicKey  pub  = getPubKey(priv);
+            return new KeyPair(pub, priv);
+        }
+        throw new UnsupportedOperationException("Unsupported COSE alg: " + coseAlg);
+    }
 }

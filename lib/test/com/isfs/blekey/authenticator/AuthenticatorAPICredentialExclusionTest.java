@@ -61,79 +61,6 @@ public class AuthenticatorAPICredentialExclusionTest {
         platKeyPairField.set(null, originalPlatKeyPair);
     }
 
-    // ========================================================================
-    // determineCredentialType() - Missing UV Unavailable Branch
-    // Line 536-538: Test when UV is requested but not available
-    // ========================================================================
-
-    /**
-     * Test determineCredentialType() when UV is requested but not available.
-     * This tests the critical branch at line 536-538 that returns UNSUPPORTED_OPTION.
-     * 
-     * QUICK WIN: This branch is currently untested and represents a key error path.
-     */
-    @Test
-    public void testDetermineCredentialType_UVRequestedButUnavailable() throws Exception {
-        // Set platKeyPair to null to make UV unavailable
-        Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        platKeyPairField.setAccessible(true);
-        platKeyPairField.set(null, null);
-
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "determineCredentialType", boolean.class, boolean.class, Passkey.class);
-        method.setAccessible(true);
-        
-        // Request UV when it's not available
-        Object result = method.invoke(null, false, true, mockPasskey);
-        
-        assertNotNull(result);
-        Class<?> resultClass = result.getClass();
-        
-        // Verify error code is UNSUPPORTED_OPTION
-        Field errorField = resultClass.getDeclaredField("errorCode");
-        errorField.setAccessible(true);
-        Ctap2StatusCode error = (Ctap2StatusCode) errorField.get(result);
-        
-        assertEquals(Ctap2StatusCode.UNSUPPORTED_OPTION, error,
-                     "Should return UNSUPPORTED_OPTION when UV requested but unavailable");
-        
-        // Verify type is NONE
-        Field typeField = resultClass.getDeclaredField("type");
-        typeField.setAccessible(true);
-        Object credType = typeField.get(result);
-        
-        assertEquals("NONE", credType.toString(),
-                     "Should return NONE credential type when UV unavailable");
-    }
-
-    /**
-     * Test determineCredentialType() when UV is requested with resident key but UV unavailable.
-     * Tests line 536 branch with rk=true, uv=true, but UV not available.
-     */
-    @Test
-    public void testDetermineCredentialType_ResidentUVRequestedButUnavailable() throws Exception {
-        // Set platKeyPair to null to make UV unavailable
-        Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        platKeyPairField.setAccessible(true);
-        platKeyPairField.set(null, null);
-
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "determineCredentialType", boolean.class, boolean.class, Passkey.class);
-        method.setAccessible(true);
-        
-        // Request resident credential with UV when UV is not available
-        Object result = method.invoke(null, true, true, mockPasskey);
-        
-        assertNotNull(result);
-        Class<?> resultClass = result.getClass();
-        
-        Field errorField = resultClass.getDeclaredField("errorCode");
-        errorField.setAccessible(true);
-        Ctap2StatusCode error = (Ctap2StatusCode) errorField.get(result);
-        
-        assertEquals(Ctap2StatusCode.UNSUPPORTED_OPTION, error,
-                     "Should return UNSUPPORTED_OPTION for resident+UV when UV unavailable");
-    }
 
     // ========================================================================
     // checkExcludeList() - Missing Excluded Credential Branch
@@ -212,59 +139,6 @@ public class AuthenticatorAPICredentialExclusionTest {
                      "Should find excluded credential among multiple resident credentials");
     }
 
-    // ========================================================================
-    // validateUserPresence() - Completely Untested Method
-    // Line 473-478: Test user presence validation
-    // ========================================================================
-
-    /**
-     * Test validateUserPresence() when UP is true (valid).
-     * Tests line 474-475 branch (happy path).
-     * 
-     * QUICK WIN: This method has 0% coverage currently.
-     */
-    @Test
-    public void testValidateUserPresence_Valid() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validateUserPresence", Class.forName("com.isfs.blekey.authenticator.AuthenticatorAPI$CredentialOptions"));
-        method.setAccessible(true);
-        
-        // Create CredentialOptions with up=true using constructor
-        Class<?> optionsClass = Class.forName("com.isfs.blekey.authenticator.AuthenticatorAPI$CredentialOptions");
-        java.lang.reflect.Constructor<?> constructor = optionsClass.getDeclaredConstructor(
-            boolean.class, boolean.class, boolean.class);
-        constructor.setAccessible(true);
-        Object options = constructor.newInstance(true, false, false);
-        
-        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, options);
-        
-        assertNull(result, "Should return null when user presence is true");
-    }
-
-    /**
-     * Test validateUserPresence() when UP is false (invalid).
-     * Tests line 474-476 branch (error path).
-     * 
-     * QUICK WIN: Critical validation that must return INVALID_OPTION.
-     */
-    @Test
-    public void testValidateUserPresence_Invalid() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validateUserPresence", Class.forName("com.isfs.blekey.authenticator.AuthenticatorAPI$CredentialOptions"));
-        method.setAccessible(true);
-        
-        // Create CredentialOptions with up=false using constructor
-        Class<?> optionsClass = Class.forName("com.isfs.blekey.authenticator.AuthenticatorAPI$CredentialOptions");
-        java.lang.reflect.Constructor<?> constructor = optionsClass.getDeclaredConstructor(
-            boolean.class, boolean.class, boolean.class);
-        constructor.setAccessible(true);
-        Object options = constructor.newInstance(false, false, false);
-        
-        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, options);
-        
-        assertEquals(Ctap2StatusCode.INVALID_OPTION, result,
-                     "Should return INVALID_OPTION when user presence is false");
-    }
 
     // ========================================================================
     // isCredentialExcluded() - Helper Method Branch Coverage

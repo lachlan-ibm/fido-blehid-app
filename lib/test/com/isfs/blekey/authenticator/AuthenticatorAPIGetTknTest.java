@@ -253,38 +253,7 @@ public class AuthenticatorAPIGetTknTest {
         
         method.invoke(null, (java.security.PublicKey) null);
     }
-    
-    /**
-     * Test generatePinAuthToken() generates 32-byte token.
-     * Covers token generation logic.
-     */
-    @Test
-    public void testGeneratePinAuthToken() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod("generatePinAuthToken");
-        method.setAccessible(true);
-        
-        byte[] token = (byte[]) method.invoke(null);
-        
-        assertNotNull("Should generate token", token);
-        assertEquals("Token should be 32 bytes", 32, token.length);
-    }
-    
-    /**
-     * Test generatePinAuthToken() generates different tokens.
-     * Covers randomness of token generation.
-     */
-    @Test
-    public void testGeneratePinAuthToken_Uniqueness() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod("generatePinAuthToken");
-        method.setAccessible(true);
-        
-        byte[] token1 = (byte[]) method.invoke(null);
-        byte[] token2 = (byte[]) method.invoke(null);
-        
-        assertNotNull("Should generate first token", token1);
-        assertNotNull("Should generate second token", token2);
-        assertFalse("Tokens should be different", java.util.Arrays.equals(token1, token2));
-    }
+
 }
 
 // Made with Bob

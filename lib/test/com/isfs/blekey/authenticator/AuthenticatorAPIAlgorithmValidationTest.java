@@ -228,10 +228,13 @@ public class AuthenticatorAPIAlgorithmValidationTest {
         Class<?> resultClass = result.getClass();
         java.lang.reflect.Field typeField = resultClass.getDeclaredField("type");
         typeField.setAccessible(true);
+        java.lang.reflect.Field errorField = resultClass.getDeclaredField("errorCode");
+        errorField.setAccessible(true);
         Object credType = typeField.get(result);
-        
-        assertEquals("RESIDENT", credType.toString(),
-                     "Should return RESIDENT for rk=true, uv=false");
+        Object errorCode = errorField.get(result);
+        assertEquals("NONE", credType.toString(),
+                     "Should return NONE for rk=true, uv=false");
+        assertEquals(errorCode, Ctap2StatusCode.PIN_REQUIRED, "Must request UV to request RK");
     }
 
     /**
@@ -274,8 +277,8 @@ public class AuthenticatorAPIAlgorithmValidationTest {
         typeField.setAccessible(true);
         Object credType = typeField.get(result);
         
-        assertEquals("TWO_FACTOR", credType.toString(),
-                     "Should return TWO_FACTOR for rk=false, uv=true");
+        assertEquals("PASSKEY", credType.toString(),
+                     "Should return PASSKEY for rk=false, uv=true");
     }
 
     // ========================================================================

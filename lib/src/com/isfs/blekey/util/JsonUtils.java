@@ -3,14 +3,13 @@
  */
 package com.isfs.blekey.util;
 
-import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
 
 import com.apicatalog.jsonld.JsonLd;
 import com.apicatalog.jsonld.JsonLdError;
 import com.apicatalog.jsonld.document.JsonDocument;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import jakarta.json.Json;
 import jakarta.json.JsonArray;
@@ -43,7 +42,7 @@ public class JsonUtils {
         
         try {
             return mapper.writeValueAsString(o);
-        } catch (IOException e) {
+        } catch (Exception e) {
             return null;
         }
     }
@@ -63,7 +62,7 @@ public class JsonUtils {
         
         try {
             return mapper.readValue(s, clazz);
-        } catch (IOException e) {
+        } catch (Exception e) {
             return null;
         }
     }

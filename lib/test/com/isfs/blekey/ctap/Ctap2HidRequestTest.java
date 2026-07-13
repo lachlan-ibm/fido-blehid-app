@@ -182,6 +182,12 @@ public class Ctap2HidRequestTest {
                 }
             });
 
+        // Write a platform.key PEM file into FIDO2_HOME so that
+        // KeyUtils.getPlatformKey() finds it during makeCredential.
+        KeyPair platformKeyPair = KeyUtils.generateKeyPair("EC", 256);
+        java.io.File platKeyFile = new java.io.File(tempDir, "platform.key");
+        com.isfs.blekey.util.FileUtils.writePrivatePEM(platformKeyPair.getPrivate(), platKeyFile);
+
         // Create a test passkey and add it to the assignedCids map
         com.isfs.blekey.data.Passkey passkey = createTestPasskey();
         setupPasskeyInCtapHid(passkey);
@@ -200,7 +206,7 @@ public class Ctap2HidRequestTest {
             System.err.println("assignedCids keys: " + assignedCids.keySet());
         }
     }
-    
+
     /**
      * Helper method to create a CTAP2 CBOR request frame
      * 
@@ -632,6 +638,7 @@ public class Ctap2HidRequestTest {
         // Add options to request resident key
         Map<String, Object> options = new HashMap<>();
         options.put("rk", true); // Request resident key
+        options.put("uv", true); // Request user verification
         params.put(0x07, options); // options
         
         // Add PIN token

@@ -13,6 +13,7 @@ import java.security.cert.X509Certificate;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,19 +26,6 @@ import com.isfs.blekey.data.Passkey;
 /**
  * Branch coverage tests for AuthenticatorAPI.createAuthenticator() method.
  * 
- * This test class focuses on covering all branches in the createAuthenticator method
- * (lines 998-1054) to improve branch coverage as identified in CODE_COVERAGE_IMPROVE_PLAN.md.
- * 
- * Key branches tested:
- * - Line 1008: rpObj instanceof String (getAssertion path)
- * - Line 1012: rpObj instanceof byte[] (byte array path)
- * - Line 1016: rpObj instanceof Map (makeCredential path)
- * - Line 1022: rpIdObj instanceof String (map with String id)
- * - Line 1025: rpIdObj instanceof byte[] (map with byte[] id)
- * - Line 1032: rpIdBytes == null (fallback to clientDataHash)
- * - Line 1037: txn.getPasskey() != null (resident credential path)
- * - Line 1046: else branch (U2F authenticator path)
- * - Line 1050: Exception handling
  */
 @ExtendWith(MockitoExtension.class)
 public class AuthenticatorAPICreateAuthenticatorTest {
@@ -54,12 +42,21 @@ public class AuthenticatorAPICreateAuthenticatorTest {
     
     @BeforeEach
     public void setUp() throws Exception {
+        // Point FIDO2_HOME at a temp dir that has no platform.key file,
+        // so KeyUtils.getPlatformKey() reliably returns null in all tests.
+        System.setProperty("FIDO2_HOME", System.getProperty("java.io.tmpdir"));
+
         // Create test key pair and certificate
         testKeyPair = TestHelper.createTestKeyPair("EC");
         testPrivateKey = testKeyPair.getPrivate();
         
         Object[] caData = TestHelper.createTestCA();
         testCert = (X509Certificate) caData[1];
+    }
+
+    @AfterEach
+    public void tearDown() {
+        System.clearProperty("FIDO2_HOME");
     }
 
     // ========== Branch: rpObj instanceof String (line 1008) ==========

@@ -5,6 +5,9 @@ package com.isfs.blekey.authenticator;
 
 import static org.junit.Assert.*;
 
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -14,6 +17,7 @@ import org.junit.Test;
 
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.data.Passkey;
+import com.isfs.blekey.util.CertUtils;
 
 /**
  * Tests for AuthenticatorAPI algorithm validation and credential type determination.
@@ -209,7 +213,7 @@ public class AuthenticatorAPIAlgorithmTest {
     /**
      * Test determineCredentialType() with rk=true, uv=true.
      * Should return RESIDENT credential type.
-     * 
+     *
      * Covers: lines 541-543
      */
     @Test
@@ -217,8 +221,19 @@ public class AuthenticatorAPIAlgorithmTest {
         java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
-        
-        Object result = method.invoke(null, true, true, null);
+
+        // passkey must be non-null when uv=true (the guard rejects null as "no pin auth").
+        // Constructor is protected, so instantiate via reflection.
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance("EC");
+        kpg.initialize(256);
+        KeyPair kp = kpg.generateKeyPair();
+        X509Certificate cert = CertUtils.generateCaCert("CN=Test", kp, 365, true);
+        java.lang.reflect.Constructor<Passkey> ctor = Passkey.class.getDeclaredConstructor(
+            java.security.PrivateKey.class, X509Certificate.class, List.class);
+        ctor.setAccessible(true);
+        Passkey passkey = ctor.newInstance(kp.getPrivate(), cert, new ArrayList<>());
+
+        Object result = method.invoke(null, true, true, passkey);
         
         // Access the CredentialValidationResult fields via reflection
         Class<?> resultClass = result.getClass();
@@ -248,10 +263,14 @@ public class AuthenticatorAPIAlgorithmTest {
         Class<?> resultClass = result.getClass();
         java.lang.reflect.Field typeField = resultClass.getDeclaredField("type");
         typeField.setAccessible(true);
+
+        java.lang.reflect.Field errorField = resultClass.getDeclaredField("errorCode");
+        errorField.setAccessible(true);
         CredentialType type = (CredentialType) typeField.get(result);
         
-        assertEquals("Should return RESIDENT for rk=true even without UV", 
-                     CredentialType.RESIDENT, type);
+        assertEquals("reject rk=true without UV", 
+                     CredentialType.NONE, type);
+        assertEquals("Error code should require pin", Ctap2StatusCode.PIN_REQUIRED, errorField.get(result));
     }
     
     /**
@@ -263,29 +282,20 @@ public class AuthenticatorAPIAlgorithmTest {
      */
     @Test
     public void testDetermineCredentialType_UVNotAvailable() throws Exception {
-        // First check if UV is available
-        java.lang.reflect.Method uvMethod = AuthenticatorAPI.class.getDeclaredMethod(
-            "isUserVerificationAvailable");
-        uvMethod.setAccessible(true);
-        Boolean uvAvailable = (Boolean) uvMethod.invoke(null);
+        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "determineCredentialType", boolean.class, boolean.class, Passkey.class);
+        method.setAccessible(true);
         
-        if (!uvAvailable) {
-            // Only test this branch if UV is not available
-            java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
-                "determineCredentialType", boolean.class, boolean.class, Passkey.class);
-            method.setAccessible(true);
-            
-            Object result = method.invoke(null, false, true, null);
-            
-            // Access the CredentialValidationResult fields via reflection
-            Class<?> resultClass = result.getClass();
-            java.lang.reflect.Field errorField = resultClass.getDeclaredField("error");
-            errorField.setAccessible(true);
-            Ctap2StatusCode error = (Ctap2StatusCode) errorField.get(result);
-            
-            assertEquals("Should return UNSUPPORTED_OPTION when UV requested but not available",
-                         Ctap2StatusCode.UNSUPPORTED_OPTION, error);
-        }
+        Object result = method.invoke(null, false, true, null);
+        
+        // Access the CredentialValidationResult fields via reflection
+        Class<?> resultClass = result.getClass();
+        java.lang.reflect.Field errorField = resultClass.getDeclaredField("errorCode");
+        errorField.setAccessible(true);
+        Ctap2StatusCode error = (Ctap2StatusCode) errorField.get(result);
+        
+        assertEquals("Should return PIN_REQUIRED when UV requested but not passkey exists in the txn ctx",
+                        Ctap2StatusCode.PIN_REQUIRED, error);
     }
 }
 

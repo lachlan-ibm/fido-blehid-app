@@ -2,10 +2,23 @@
  * Copyright IBM 2025
  */
 apply plugin: 'java'
-// NOTE: Eclipse plugin disabled - .classpath is managed manually via app/regenrate_classpath.sh
-// The Gradle Buildship plugin automatically regenerates .classpath files, overwriting manual
-// configurations needed for Android projects in VS Code (JRE container, Android SDK, AAR deps)
-// apply plugin: 'eclipse'
+
+// Buildship's init.d/eclipsePlugin.gradle (injected by the Java Language Server) runs
+// `allprojects { apply plugin: "eclipse" }` at every IDE sync. On the :app Android
+// subproject this causes the eclipseClasspath task to overwrite our hand-crafted
+// .classpath with stale build/aarLibraries/... paths that don't exist on disk.
+//
+// Counter-measure: redirect the eclipseClasspath output file for :app to /dev/null so
+// the task runs harmlessly and never touches our managed .classpath. Scoped to :app
+// only (not :lib, which manages its own eclipse config). Done here in the root
+// build.gradle so it is registered before AGP evaluates the android {} block in
+// app/build.gradle, avoiding the spurious "does not specify compileSdk" error that
+// fires when eclipse {} DSL is configured from within app/build.gradle itself.
+project(':app') {
+    plugins.withId('eclipse') {
+        tasks.matching { it.name == 'eclipseClasspath' }.configureEach { enabled = false }
+    }
+}
 
 
 repositories {
