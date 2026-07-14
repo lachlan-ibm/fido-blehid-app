@@ -26,7 +26,6 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
-
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.ctap.CtapBle;
 import com.isfs.blekey.ctap.CtapTxn;
@@ -714,7 +713,7 @@ public class FIDOBLEService {
                     return;
                 }
                 
-                BluetoothDevice bondedDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                BluetoothDevice bondedDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
                 if (bondedDevice == null || !bondedDevice.getAddress().equals(device.getAddress())) {
                     return;
                 }

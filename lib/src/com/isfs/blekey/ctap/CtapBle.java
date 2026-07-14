@@ -16,9 +16,8 @@ import org.slf4j.LoggerFactory;
  * BLE FIDO CTAP2 framing protocol implementation per CTAP spec §11.4.4.
  * 
  * This class handles BLE-specific framing that differs from USB HID:
- * - Variable frame size based on MTU (vs fixed 64 bytes for USB)
- * - No channel ID (per-device state vs 4-byte CID)
- * - Different fragmentation format (first + sequence vs init + continuation)
+ * - Variable frame size based on MTU
+ * - No channel ID (per-device state)
  * 
  * Frame Format:
  * - Request:  [CMD(1)] [HLEN(1)] [DATA(0-512)]

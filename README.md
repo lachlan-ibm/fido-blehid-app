@@ -1,25 +1,29 @@
 <!--
  Copyright IBM 2025
 -->
-# FIDO BLE HID Authenticator
+# Android App Passkey Authenticator
 
-A FIDO2 authenticator implementation that works over Bluetooth Low Energy (BLE) using the Human Interface Device (HID) protocol. This project enables passkey authentication on mobile devices, allowing them to act as security keys for passwordless authentication.
+A FIDO2 authenticator implementation that works over Bluetooth (BT) using the Human Interface Device (HID) protocol. This project enables passkey authentication on mobile devices, allowing them to act as security keys for passwordless authentication.
 
-## Overview
+## Overview / Why use this app
 
-This project implements a FIDO2 authenticator that can be used for passwordless authentication using the WebAuthn standard. The authenticator communicates with relying parties (websites/services) using the CTAP2 (Client to Authenticator Protocol) over BLE HID transport.
+This project implements a FIDO2 authenticator that can be used for passwordless authentication using the WebAuthn/CTAP2 standards.
 
 Key features:
 - FIDO2 WebAuthn authenticator implementation
-- BLE HID transport layer
-- Android application for mobile devices
-- Support for resident keys (passkeys)
-- Attestation support
-- Digital Credentials
+- BLE transport layer (FIDO GATT)
+- Support for resident keys
+- Attestation format support (packed, anon-ca, tpm)
+- Digital Credentials Prototype
   - Receive and store verifiable credentials (SD-JWT format)
   - Present credentials with selective disclosure
   - Biometric-protected credential management
   - OIDC4VCI and OIDC4VP protocol support
+  - Bind credentials to passkey/attestation
+
+The android application communicates with relying parties (websites/services) using the CTAP2 (Client to Authenticator Protocol) over BT HID transport; or using the FIDO GATT profile from the CTAP2 specification.
+
+The allows an android device to connect to a large number of browsers/clients and offer Passkey authentication without a user having to set-up their device/OS to support Passkeys. By 
 
 ## Project Structure
 
@@ -29,79 +33,13 @@ The project is organized into the following main components:
 
 Core implementation of the FIDO2 authenticator and digital credentials:
 
-- `com.isfs.blekey.authenticator`: Core authenticator implementation
-  - `Fido2Authenticator.java`: Main authenticator class
-  - `AuthenticatorAPI.java`: API interface
-  - `AuthenticatorCmd.java`: Command handling
-  - `PinSubCmd.java`: PIN protocol implementation
-
-- `com.isfs.blekey.ctap`: CTAP protocol implementation
-  - `CtapHid.java`: HID transport layer
-  - `CtapTxn.java`: Transaction handling
-  - `CtapHidCmd.java`: Command definitions
-  - `Ctap2StatusCode.java`: Status codes
-
-- `com.isfs.blekey.credential`: Digital credentials (NEW)
-  - `VerifiableCredential.java`: Credential data model
-  - `DigitalCredentialFormat.java`: Format definitions
-  - `DigitalCredentialMetadata.java`: Credential metadata
-  - `jwt/`: JWT operations (builder, parser, key binding)
-  - `sdjwt/`: Selective Disclosure JWT support
-  - `status/`: Credential status checking
-
-- `com.isfs.blekey.oidc`: OIDC protocol implementation (NEW)
-  - `Oidc4VciClient.java`: Credential issuance client
-  - `Oidc4VpHandler.java`: Credential presentation handler
-  - `OidcAuthorizationClient.java`: Authorization flow
-  - `PresentationDefinition.java`: Presentation requests
-
-- `com.isfs.blekey.data`: Data models
-  - `Passkey.java`: Passkey representation
-
-- `com.isfs.blekey.util`: Utility classes
-  - `Cbor.java`: CBOR encoding/decoding
-  - `KeyUtils.java`: Cryptographic key utilities
-  - `CertUtils.java`: Certificate utilities
-  - `DataMapper.java`: Data conversion utilities
-  - `BleUtils.java`: Bluetooth utilities
-  - `FileUtils.java`: File handling utilities
-  - `HolderBindingKeyManager.java`: Holder binding key derivation (NEW)
-  - `http/`: HTTP client with retry support (NEW)
 
 ### Android App (`app/`)
 
-Android application that implements the BLE HID service:
+Android application that implements the BT HID and FIDO GATT services:
 
-- `com.isfs.blekey`: Main application
-  - `MainActivity.java`: Main activity
-  - `ForegroundNotificationService.java`: Background service
 
-- `com.isfs.blekey.activity`: UI activities
-  - `ManageActivity.java`: Credential management
-  - `ResidentCredentialsActivity.java`: Passkey management
-  - `CredentialIssuanceActivity.java`: Credential issuance UI (NEW)
-  - `CredentialPresentationActivity.java`: Credential presentation UI (NEW)
-  - `CredentialHandlerActivity.java`: Deep link handler (NEW)
-
-- `com.isfs.blekey.hidsvc`: HID service implementation
-  - `HIDService.java`: BLE service
-  - `HIDPasskey.java`: FIDO HID implementation
-
-- `com.isfs.blekey.util`: Android utilities
-  - `AndroidHolderBindingKeyManager.java`: Android Keystore integration (NEW)
-  - `AndroidKeystoreManager.java`: Keystore operations (NEW)
-  - `BiometricAuthHelper.java`: Biometric authentication (NEW)
-
-### Tests (`lib/test/`)
-
-Unit tests for the authenticator implementation:
-
-- `com.isfs.blekey.authenticator`: Test classes
-  - `Fido2AuthenticatorTest.java`: Basic tests
-  - `Fido2AuthenticatorMockTest.java`: Tests with mocks
-  - `Fido2AuthenticatorIntegrationTest.java`: Integration tests
-
-## Build System
+## Development
 
 The project uses Gradle for building:
 
@@ -110,7 +48,7 @@ The project uses Gradle for building:
 - `app/build.gradle`: Android app configuration
 - `copyright-hook.gradle`: Copyright header management
 
-## CI/CD Integration
+### CI/CD Integration
 
 The project includes GitHub Actions workflows for continuous integration:
 
@@ -126,47 +64,15 @@ The project includes GitHub Actions workflows for continuous integration:
 - Gradle 8.1.1 or higher
 - Android SDK with API level 34 installed
 
-### VS Code / Bob IDE Setup
+### IDE Setup
 
-If you're using VS Code or Bob IDE for development, you need to configure the Java Language Server to properly recognize the Android project:
+Configuring the Java Language Server to properly recognize the Android project can be tricky/fragile:
 
 #### Fixing "Missing system library" Error
 
 If you encounter `java.lang.IllegalStateException: Missing system library` errors, follow these steps:
 
-1. **Enable Android Support** in `.vscode/settings.json`:
-   ```json
-   {
-     "java.jdt.ls.androidSupport.enabled": "on"
-   }
-   ```
-
-2. **Configure Eclipse Plugin** in `app/build.gradle`:
-   ```gradle
-   apply plugin: 'eclipse'
-
-   eclipse {
-       classpath {
-           containers 'org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17'
-           file.whenMerged { cp ->
-               def entries = cp.entries
-               
-               // Add main source directory
-               def src = new org.gradle.plugins.ide.eclipse.model.SourceFolder('src/main/java', null)
-               entries.add(src)
-               
-               // Add Android SDK android.jar
-               def androidJar = new org.gradle.plugins.ide.eclipse.model.Library(
-                   fileReferenceFactory.fromPath("${android.sdkDirectory}/platforms/${android.compileSdkVersion}/android.jar")
-               )
-               androidJar.sourcePath = fileReferenceFactory.fromPath("${android.sdkDirectory}/sources/${android.compileSdkVersion}")
-               entries.add(androidJar)
-           }
-       }
-   }
-   ```
-
-3. **Run the Classpath Regeneration Script**:
+**Run the Classpath Regeneration Script**:
    ```bash
    cd app && bash regenrate_classpath.sh
    ```
@@ -179,30 +85,11 @@ If you encounter `java.lang.IllegalStateException: Missing system library` error
    
    **Important**: The Gradle `eclipse` plugin is disabled in `app/build.gradle` to prevent automatic regeneration of `.classpath` on file edits, which was overwriting manual configurations.
 
-4. **Verify .classpath Structure**:
-   
-   The generated `app/.classpath` should have this structure:
-   ```xml
-   <?xml version="1.0" encoding="UTF-8"?>
-   <classpath>
-       <classpathentry kind="output" path="bin/default"/>
-       <classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17"/>
-       <classpathentry kind="src" path="src/main/java"/>
-       <classpathentry sourcepath="/home/lowkey/Android/sources/android-34" kind="lib" path="/home/lowkey/Android/platforms/android-34/android.jar"/>
-       <classpathentry kind="con" path="org.eclipse.buildship.core.gradleclasspathcontainer"/>
-   </classpath>
-   ```
-   
-   **Key points**:
-   - Remove any duplicate `JRE_CONTAINER` entries
-   - Ensure the JRE path does NOT have a trailing slash (`/JavaSE-17` not `/JavaSE-17/`)
-   - Keep the Gradle classpath container at the end
-
-5. **CRITICAL: Reload VS Code Window**: Press `Ctrl+Shift+P` → "Developer: Reload Window"
+**CRITICAL: Reload VS Code Window**: Press `Ctrl+Shift+P` → "Developer: Reload Window"
    
    **⚠️ IMPORTANT**: The Java Language Server will NOT pick up classpath changes until you reload the VS Code window. Even though the Gradle build succeeds, IDE errors will persist until you perform this reload step. This is a required breakpoint in the troubleshooting process.
 
-6. **If Errors Persist After Reload**: Clean the Java Language Server workspace cache
+**If Errors Persist After Reload**: Clean the Java Language Server workspace cache
    
    If you still see errors like "Cannot find the class file for java.lang.invoke.StringConcatFactory" or references to non-existent library paths after reloading:
    
@@ -215,7 +102,7 @@ If you encounter `java.lang.IllegalStateException: Missing system library` error
 
 This configuration ensures the Java Language Server can properly resolve Java system libraries and Android dependencies while keeping the project managed by Gradle (not in "unmanaged" mode).
 
-### Building the Project
+#### Building the Project
 
 To build the entire project:
 
@@ -234,8 +121,6 @@ To build the Android app:
 ```bash
 ./gradlew :app:build
 ```
-
-### Running Tests
 
 #### Unit Tests
 
@@ -301,11 +186,12 @@ For detailed information about the UX testing framework, see:
 - [`app/PHASE4_TESTING_README.md`](app/PHASE4_TESTING_README.md) - Complete testing guide
 - [`app/UX_TESTING_AUTOMATION_PLAN.md`](app/UX_TESTING_AUTOMATION_PLAN.md) - Automation plan
 
-### Network Security Configuration for Testing
+#### Network Security Configuration for Testing
 
 The app uses a debug-only network security configuration to allow HTTP testing with local mock servers while maintaining secure defaults for release builds.
 
-#### Configuration Strategy
+Configuration Strategy
+----------------------
 
 **Debug Build Only:**
 - File: [`app/src/debug/res/xml/network_security_config.xml`](app/src/debug/res/xml/network_security_config.xml)
@@ -318,7 +204,8 @@ The app uses a debug-only network security configuration to allow HTTP testing w
 - Cleartext traffic: **BLOCKED** (Android 9+ default)
 - Trust anchors: System certificates only (default)
 
-#### How It Works
+How It Works
+-------------
 
 Android's build system automatically selects the correct configuration:
 - **Debug builds** (`./gradlew assembleDebug`): Uses debug-specific config allowing localhost HTTP
@@ -328,7 +215,8 @@ The [`AndroidManifest.xml`](app/src/main/AndroidManifest.xml) references `@xml/n
 - `app/src/debug/res/xml/network_security_config.xml` for debug builds
 - Android's default secure policy for release builds (no file needed)
 
-#### Security Considerations
+Security Considerations
+----------------------
 
 1. **Debug builds only** - Cleartext exception only applies to debug builds
 2. **Release builds are secure by default** - Android 9+ blocks cleartext traffic automatically
@@ -354,17 +242,6 @@ To see what changes would be made without actually making them:
 
 For more information about the copyright management system, see [COPYRIGHT.md](COPYRIGHT.md).
 
-## Important Changes
-
-### HKDF-Based Passkey Seed Generation
-
-**Version 1.0.0+** introduces a breaking change to passkey seed generation:
-
-- **What Changed**: Replaced non-standard cryptographic construction with RFC 5869 HKDF (HMAC-based Key Derivation Function)
-- **Impact**: Existing credentials encrypted with old seeds cannot be decrypted with new seeds
-- **Action Required**: Users must re-register all credentials after upgrading
-
-This change improves security by using a standardized, well-reviewed key derivation function instead of the previous custom implementation.
 
 ## Usage
 
