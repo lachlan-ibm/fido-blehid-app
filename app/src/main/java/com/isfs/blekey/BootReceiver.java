@@ -152,7 +152,10 @@ public class BootReceiver extends BroadcastReceiver {
      */
     private boolean isAutoStartEnabled(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean enabled = prefs.getBoolean(KEY_AUTO_START, false);
+        // Default is true to match ServerActivity.setupAutoStartSwitch() which also reads this
+        // preference with default=true.  A mismatch would cause the switch to appear ON while
+        // the boot receiver would not actually start the service after a reboot.
+        boolean enabled = prefs.getBoolean(KEY_AUTO_START, true);
         Log.d(TAG, "Auto-start enabled: " + enabled);
         return enabled;
     }

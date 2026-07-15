@@ -4,14 +4,8 @@
 package com.isfs.blekey.activity;
 
 import com.isfs.blekey.BootReceiver;
-import com.isfs.blekey.authenticator.AuthenticatorAPI;
-import com.isfs.blekey.ctap.Ctap2StatusCode;
-import com.isfs.blekey.ctap.CtapHid;
-import com.isfs.blekey.ctap.CtapTxn;
-import com.isfs.blekey.fidoble.KeepaliveManager;
 import com.isfs.blekey.hidsvc.BTHIDService;
 import com.isfs.blekey.hidsvc.HIDForegroundService;
-import com.isfs.blekey.hidsvc.HIDPasskey;
 
 import androidx.appcompat.widget.SwitchCompat;
 import android.widget.CompoundButton;
@@ -35,13 +29,12 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.Manifest;
+import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
 import android.content.DialogInterface.OnDismissListener;
-import android.app.Notification;
-import android.app.PendingIntent;
 import android.content.ServiceConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -59,8 +52,6 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
@@ -73,13 +64,24 @@ import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.hidsvc.DeviceStateManager;
 import com.isfs.blekey.MainActivity;
 
+import androidx.annotation.Nullable;
+
 /**
  * Activity responsible for managing the Bluetooth HID passkey service.
  * This activity checks for Bluetooth availability and compatibility,
  * then initializes and manages the classic Bluetooth HID service for
  * passkey functionality.
+ *
+ * <p>UP state (pending context, keepalive, wake lock, timeout) is owned by
+ * {@link HIDForegroundService}.  This activity is a pure UI responder: it
+ * receives {@link HIDForegroundService.UpActivityDelegate#showUpDialog} on the
+ * main thread, shows the dialog, and calls back via the service's
+ * {@code deliverUp*()} methods.</p>
  */
-public class ServerActivity extends AppCompatActivity {
+public class ServerActivity extends AppCompatActivity
+        implements HIDForegroundService.UpActivityDelegate,
+                   HIDForegroundService.CancelListener,
+                   HIDForegroundService.TimeoutListener {
 
     private final String TAG = ServerActivity.class.getCanonicalName();
 
@@ -341,24 +343,11 @@ public class ServerActivity extends AppCompatActivity {
     private DeviceStateManager stateManager;
 
     // -------------------------------------------------------------------------
-    // User Presence state
+    // User Presence — UI-only state (all pending state lives in HIDForegroundService)
     // -------------------------------------------------------------------------
 
     private boolean isInForeground = false;
-    private KeepaliveManager keepaliveManager;
-
-    /** txn for the currently-pending UP request; null when idle. */
-    private volatile CtapTxn pendingUpTxn          = null;
-    private byte[]            pendingApprovedBytes  = null;
-    private byte[]            pendingDeniedBytes    = null;
-
     private AlertDialog userPresenceDialog = null;
-    private final android.os.Handler uiHandler =
-        new android.os.Handler(android.os.Looper.getMainLooper());
-    private Runnable timeoutRunnable = null;
-
-    private static final int UP_TIMEOUT_MS      = 15_000;
-    private static final int UP_NOTIFICATION_ID = 4200;
 
     /**
      * Reconciles device states by comparing persisted state with current BT state.
@@ -587,7 +576,7 @@ public class ServerActivity extends AppCompatActivity {
             HIDForegroundService.LocalBinder binder = (HIDForegroundService.LocalBinder) service;
             foregroundService = binder.getService();
             serviceBound = true;
-            
+
             passkeyService = foregroundService.getHidService();
             if (passkeyService != null) {
                 passkeyService.setConnectionListener(new PasskeyConnectionListener());
@@ -596,49 +585,19 @@ public class ServerActivity extends AppCompatActivity {
                 reconcileDeviceStates();
             }
 
-            // Keepalive sender: write frames directly through BTHIDService
-            keepaliveManager = new KeepaliveManager(frame -> {
-                if (passkeyService != null) passkeyService.sendInputReport(frame);
-            });
+            // Register this activity as the UI delegate so the service can call
+            // showUpDialog() when a UP ceremony begins while we are visible.
+            foregroundService.setActivityDelegate(ServerActivity.this);
 
-            // UP callback — invoked on CTAP processing thread
-            AuthenticatorAPI.setUserPresenceCallback((rpId, txn, approvedBytes, deniedBytes) -> {
-                if (pendingUpTxn != null) {
-                    // Concurrent request — reject immediately without blocking
-                    Log.w(TAG, "UP: concurrent request, rejecting");
-                    HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
-                    if (pk != null) pk.sendDeferredResponse(txn, deniedBytes);
-                    return;
-                }
-                pendingUpTxn         = txn;
-                pendingApprovedBytes = approvedBytes;
-                pendingDeniedBytes   = deniedBytes;
-
-                byte[] cid = txn.getCid();
-                String cidKey = bytesToHex(cid);
-                keepaliveManager.startKeepalive(cidKey, KeepaliveManager.STATUS_PROCESSING);
-
-                uiHandler.post(() -> {
-                    keepaliveManager.updateStatus(cidKey, KeepaliveManager.STATUS_UP_NEEDED);
-                    showUserPresencePrompt();
-                });
-            });
-
-            // Cancel hook — CTAP cancel frame already injects KEEPALIVE_CANCEL into the
-            // deferred CtapHid; we just clean up the UI side here
-            CtapHid.setOnCancelCallback(() -> uiHandler.post(() -> {
-                dismissDialogIfShowing();
-                cancelTimeout();
-                stopUpKeepalive();
-                clearPendingUpState();
-            }));
+            // If a UP request arrived while we were unbound, show the dialog now.
+            if (foregroundService.hasPendingUpRequest() && userPresenceDialog == null) {
+                showUserPresenceDialog();
+            }
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             Log.d(TAG, "Service disconnected");
-            AuthenticatorAPI.setUserPresenceCallback(null);
-            if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
             serviceBound = false;
             foregroundService = null;
             passkeyService = null;
@@ -1212,9 +1171,33 @@ public class ServerActivity extends AppCompatActivity {
         if (serviceBound && passkeyService != null && stateManager != null) {
             reconcileDeviceStates();
         }
-        // If UP was requested while we were backgrounded, show the dialog now
-        if (pendingUpTxn != null && userPresenceDialog == null) {
-            showUserPresencePrompt();
+        // If a UP request arrived while we were backgrounded, show the dialog now.
+        if (foregroundService != null
+                && foregroundService.hasPendingUpRequest()
+                && userPresenceDialog == null) {
+            showUserPresenceDialog();
+        }
+    }
+
+    /**
+     * Called when this singleTop activity is re-launched while already on the back stack —
+     * specifically when the user taps the UP notification from the lock screen / shade.
+     *
+     * NOTE: onNewIntent fires BEFORE onResume, so isInForeground is still false here.
+     * Do NOT call showUserPresencePrompt() directly — it will re-post the notification
+     * instead of showing the dialog because the foreground flag hasn't been set yet.
+     * Simply cancel the stale notification; onResume fires immediately after and its
+     * existing guard (pendingUpTxn != null && userPresenceDialog == null) will show
+     * the dialog once isInForeground is true.
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        Log.d(TAG, "onNewIntent — UP notification tap");
+        // Cancel the stale notification; onResume fires next and will show the dialog
+        // (isInForeground is still false here so we must not call showUserPresenceDialog()).
+        if (foregroundService != null && foregroundService.hasPendingUpRequest()) {
+            foregroundService.cancelUpNotification();
         }
     }
 
@@ -1227,77 +1210,86 @@ public class ServerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        AuthenticatorAPI.setUserPresenceCallback(null);
-        cancelTimeout();
+        // Do NOT clear the AuthenticatorAPI callback — that is now owned by HIDForegroundService.
         dismissDialogIfShowing();
-        if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
+        if (foregroundService != null) {
+            foregroundService.setActivityDelegate(null);
+        }
         unbindFromService();
     }
 
     // -------------------------------------------------------------------------
-    // UP helpers
+    // HIDForegroundService.UpActivityDelegate
     // -------------------------------------------------------------------------
 
-    private void showUserPresencePrompt() {
-        if (!isInForeground) {
-            postUpNotification();
-            return;
+    /**
+     * Called by {@link HIDForegroundService} on the main thread when a UP ceremony
+     * begins.  If we are currently visible, show the dialog immediately; otherwise
+     * the service has already posted a notification and we will show the dialog in
+     * {@link #onResume()}.
+     */
+    @Override
+    public void showUpDialog(@Nullable String rpId, boolean isGetInfo) {
+        if (isInForeground) {
+            showUserPresenceDialog();
+        } else {
+            // Activity is paused (backgrounded) but not destroyed — activityDelegate is still
+            // set so UpHandler called us instead of postUpNotification().  Post the notification
+            // ourselves so the user sees the heads-up / lock-screen alert.
+            if (foregroundService != null) {
+                foregroundService.postUpNotificationPublic();
+            }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // HIDForegroundService.CancelListener
+    // -------------------------------------------------------------------------
+
+    /** Called by the service when a CTAP cancel frame arrives. */
+    @Override
+    public void onUpCancelled() {
         dismissDialogIfShowing();
+    }
+
+    // -------------------------------------------------------------------------
+    // HIDForegroundService.TimeoutListener
+    // -------------------------------------------------------------------------
+
+    /** Called by the service when the UP timeout fires. */
+    @Override
+    public void onUpTimeout() {
+        dismissDialogIfShowing();
+        Toast.makeText(this, R.string.up_timeout_toast, Toast.LENGTH_SHORT).show();
+    }
+
+    // -------------------------------------------------------------------------
+    // UP dialog helpers
+    // -------------------------------------------------------------------------
+
+    private void showUserPresenceDialog() {
+        dismissDialogIfShowing();
+        // AlertDialog lays out buttons left-to-right as: Negative | Neutral | Positive.
+        // Assigning Allow→Negative and Deny→Positive produces the desired visual order:
+        //   [Allow]  [Allow (U2F only)]  [Deny]
         userPresenceDialog = new AlertDialog.Builder(this)
             .setTitle(getString(R.string.up_getinfo_title))
             .setMessage(getString(R.string.up_getinfo_message))
-            .setPositiveButton(R.string.up_allow,  (d, w) -> deliverApproved())
-            .setNegativeButton(R.string.up_deny,   (d, w) -> deliverDenied())
+            .setNegativeButton(R.string.up_allow,             (d, w) -> {
+                dismissDialogIfShowing();
+                if (foregroundService != null) foregroundService.deliverUpApproved();
+            })
+            .setNeutralButton(R.string.up_allow_ctap1_compat, (d, w) -> {
+                dismissDialogIfShowing();
+                if (foregroundService != null) foregroundService.deliverUpApprovedCtap1Compat();
+            })
+            .setPositiveButton(R.string.up_deny,              (d, w) -> {
+                dismissDialogIfShowing();
+                if (foregroundService != null) foregroundService.deliverUpDenied();
+            })
             .setCancelable(false)
             .create();
         userPresenceDialog.show();
-        timeoutRunnable = this::deliverTimeout;
-        uiHandler.postDelayed(timeoutRunnable, UP_TIMEOUT_MS);
-    }
-
-    private void deliverApproved() {
-        cancelTimeout();
-        dismissDialogIfShowing();
-        cancelUpNotification();
-        if (pendingUpTxn != null) {
-            pendingUpTxn.setUserPresent(true);
-            HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
-            if (pk != null) pk.sendDeferredResponse(pendingUpTxn, pendingApprovedBytes);
-        }
-        stopUpKeepalive();
-        clearPendingUpState();
-    }
-
-    private void deliverDenied() {
-        cancelTimeout();
-        dismissDialogIfShowing();
-        cancelUpNotification();
-        if (pendingUpTxn != null) {
-            HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
-            if (pk != null) pk.sendDeferredResponse(pendingUpTxn, pendingDeniedBytes);
-        }
-        stopUpKeepalive();
-        clearPendingUpState();
-    }
-
-    private void deliverTimeout() {
-        dismissDialogIfShowing();
-        cancelUpNotification();
-        if (pendingUpTxn != null) {
-            HIDPasskey pk = foregroundService != null ? foregroundService.getHIDPasskey() : null;
-            if (pk != null) pk.sendDeferredResponse(pendingUpTxn,
-                AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.USER_ACTION_TIMEOUT));
-        }
-        Toast.makeText(this, R.string.up_timeout_toast, Toast.LENGTH_SHORT).show();
-        stopUpKeepalive();
-        clearPendingUpState();
-    }
-
-    private void stopUpKeepalive() {
-        if (pendingUpTxn != null && keepaliveManager != null) {
-            keepaliveManager.stopKeepalive(bytesToHex(pendingUpTxn.getCid()));
-        }
     }
 
     private void dismissDialogIfShowing() {
@@ -1305,47 +1297,6 @@ public class ServerActivity extends AppCompatActivity {
             userPresenceDialog.dismiss();
         }
         userPresenceDialog = null;
-    }
-
-    private void cancelTimeout() {
-        if (timeoutRunnable != null) {
-            uiHandler.removeCallbacks(timeoutRunnable);
-            timeoutRunnable = null;
-        }
-    }
-
-    private void clearPendingUpState() {
-        pendingUpTxn         = null;
-        pendingApprovedBytes = null;
-        pendingDeniedBytes   = null;
-    }
-
-    private void postUpNotification() {
-        Intent intent = new Intent(this, ServerActivity.class)
-            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification n = new NotificationCompat.Builder(this,
-                com.isfs.blekey.ForegroundNotificationService.CHANNEL_ID)
-            .setSmallIcon(R.drawable.bee)
-            .setContentTitle(getString(R.string.up_notification_title))
-            .setContentText(getString(R.string.up_notification_text))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pi)
-            .build();
-        NotificationManagerCompat.from(this).notify(UP_NOTIFICATION_ID, n);
-    }
-
-    private void cancelUpNotification() {
-        NotificationManagerCompat.from(this).cancel(UP_NOTIFICATION_ID);
-    }
-
-    private static String bytesToHex(byte[] b) {
-        if (b == null) return "";
-        StringBuilder sb = new StringBuilder(b.length * 2);
-        for (byte x : b) sb.append(String.format("%02x", x));
-        return sb.toString();
     }
 }
 

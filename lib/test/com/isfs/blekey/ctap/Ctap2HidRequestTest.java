@@ -170,7 +170,10 @@ public class Ctap2HidRequestTest {
         // When getInfo defers, this callback immediately loads the approved response back
         // into the waiting CtapHid so the drain loop in the test works normally.
         com.isfs.blekey.authenticator.AuthenticatorAPI.setUserPresenceCallback(
-            (rpId, txn, approvedBytes, deniedBytes) -> {
+            context -> {
+                com.isfs.blekey.ctap.CtapTxn txn = context.getTxn();
+                byte[] approvedBytes = context.buildResponse(
+                    com.isfs.blekey.authenticator.UpRequestContext.Outcome.APPROVED);
                 com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
                 if (deferred != null) {
                     try {

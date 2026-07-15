@@ -57,22 +57,21 @@ public class AuthenticatorAPI {
      * Callback invoked when user presence evidence must be collected.
      * Implemented by the App layer; the lib layer has no OS/Platform dependencies.
      *
-     * <p>The lib pre-builds both possible response buffers and hands them to the
-     * app layer together with the live {@link CtapTxn}.  The app layer sends
-     * keepalive frames until the user acts, then calls
-     * {@code HIDPasskey.sendDeferredResponse(txn, approvedResponse)} or
-     * {@code HIDPasskey.sendDeferredResponse(txn, deniedResponse)} accordingly.
+     * <p>The lib creates an {@link UpRequestContext} describing the pending request
+     * and passes it to the callback.  The app layer sends keepalive frames until
+     * the user acts, then calls {@link UpRequestContext#buildResponse(UpRequestContext.Outcome)}
+     * and dispatches the result via {@code HIDPasskey.sendDeferredResponse(txn, bytes)}.
      * No runnables are involved — the app layer owns the decision and the send.</p>
      */
     public interface UserPresenceCallback {
         /**
-         * @param rpId            Relying-party ID (null for getInfo).
-         * @param txn             The live {@link CtapTxn} for this channel.
-         * @param approvedResponse Pre-built bytes to send when the user approves.
-         * @param deniedResponse  Pre-built bytes to send when the user denies.
+         * Called on the CTAP processing thread when user presence is needed.
+         * The implementation must post to the UI thread before showing any dialog.
+         *
+         * @param context  Immutable context; call {@link UpRequestContext#buildResponse}
+         *                 once the user acts.
          */
-        void onUserPresenceRequired(String rpId, CtapTxn txn,
-                                    byte[] approvedResponse, byte[] deniedResponse);
+        void onUserPresenceRequired(UpRequestContext context);
     }
 
     /** Shared callback — volatile so background threads see updates immediately. */
@@ -406,6 +405,57 @@ public class AuthenticatorAPI {
         return new byte[] {(byte) code.getCode()};
     }
 
+    // -------------------------------------------------------------------------
+    // Package-private response builders — called only by UpRequestContext
+    // -------------------------------------------------------------------------
+
+    /**
+     * Builds the full CTAP2 {@code getInfo} response (existing behaviour).
+     * Advertises FIDO_2_1 and FIDO_2_0, includes PIN/UV Auth Protocol 1 and clientPin.
+     */
+    static byte[] buildGetInfoCtap2Response() {
+        java.util.LinkedHashMap<String, Boolean> capabilities = new java.util.LinkedHashMap<>();
+        capabilities.put("rk", true);
+        capabilities.put("plat", true);
+        capabilities.put("clientPin", true);
+        java.util.LinkedHashMap<Integer, Object> info = new java.util.LinkedHashMap<>();
+        info.put(0x01, new String[]{"FIDO_2_1", "FIDO_2_0"});
+        info.put(0x02, new String[]{"hmac-secret"});
+        info.put(0x03, new byte[16]);
+        info.put(0x04, capabilities);
+        info.put(0x05, 4096);
+        info.put(0x06, new int[]{1}); // PIN/UV Auth Protocol 1
+        return success(Cbor.encode(info));
+    }
+
+    /**
+     * Builds the CTAP1-compat {@code getInfo} response.
+     * Omits {@code pinUvAuthProtocols} (key 0x06) and the {@code clientPin} option.
+     * Adds {@code "U2F_V2"} to the versions array so a U2F-only platform can use
+     * the authenticator without a PIN flow.
+     */
+    static byte[] buildGetInfoCtap1CompatResponse() {
+        java.util.LinkedHashMap<String, Boolean> capabilities = new java.util.LinkedHashMap<>();
+        capabilities.put("rk", true);
+        capabilities.put("plat", true);
+        // clientPin intentionally absent — tells platform to skip PIN flow entirely
+        java.util.LinkedHashMap<Integer, Object> info = new java.util.LinkedHashMap<>();
+        info.put(0x01, new String[]{"FIDO_2_1", "FIDO_2_0", "U2F_V2"});
+        info.put(0x02, new String[]{"hmac-secret"});
+        info.put(0x03, new byte[16]);
+        info.put(0x04, capabilities);
+        info.put(0x05, 4096);
+        // key 0x06 (pinUvAuthProtocols) intentionally absent
+        return success(Cbor.encode(info));
+    }
+
+    /**
+     * Builds the single-byte OPERATION_DENIED error response.
+     */
+    static byte[] buildDeniedResponse() {
+        return error(Ctap2StatusCode.OPERATION_DENIED);
+    }
+
     /**
      * Creates a success response with the specified payload.
      *
@@ -585,6 +635,8 @@ public class AuthenticatorAPI {
         int PUB_KEY_CRED_PARAMS = 0x04;
         int EXCLUDE_LIST = 0x05;
         int OPTIONS = 0x07;
+        int PIN_UV_AUTH_PARAM = 0x08;
+        int PIN_UV_AUTH_PROTOCOL = 0x09;
     }
 
     /**
@@ -771,7 +823,7 @@ public class AuthenticatorAPI {
      * Determines the credential type based on rk and uv flags.
      *
      * @param rk Resident key flag
-     * @param uv User verification flag
+     * @param uv User verification evidence
      * @param passkey The passkey (unused per user feedback)
      * @return CredentialValidationResult with the determined type or error
      */
@@ -828,7 +880,7 @@ public class AuthenticatorAPI {
 
         CredentialOptions options = parseOptions(req);
         // Determine credential type and validate constraints
-        return determineCredentialType(options.rk, options.uv, passkey);
+        return determineCredentialType(options.rk, options.uv || req.containsKey(MakeCredentialKeys.PIN_UV_AUTH_PARAM), passkey);
     }
 
 
@@ -1041,8 +1093,14 @@ public class AuthenticatorAPI {
     protected static byte[] makeCredential(CtapTxn txn, Map<Integer, Object> req) {
         logger.info("makeCredential: starting credential creation");
         
-        // Load authenticated session from openKeys if available
-        loadAuthenticatedSession(txn);
+        // Load authenticated session from openKeys if available.
+        // If no PIN session exists for this CID, clear any stale passkey that
+        // CtapHid.updateCidTransaction may have copied from a previous txn, so
+        // createAuthenticator correctly falls back to the platform key.
+        if (!loadAuthenticatedSession(txn)) {
+            logger.debug("makeCredential: no PIN session for CID — using platform key");
+            txn.setPasskey(null);
+        }
 
         // UP must have been collected during getInfo on this channel.
         // CTAP §6.1.2 step 14: cached UP satisfies the "up" option requirement.
@@ -1400,11 +1458,12 @@ public class AuthenticatorAPI {
             CtapTxn txn,
             Map<Integer, Object> req) throws Exception {
 
-        // Only verify PIN/UV when the RP requested UV (uv=true in options).
-        // For TWO_FACTOR (uv=false / omitted) no PIN token is expected.
+        // Verify the PIN token whenever a pinUvAuthParam was supplied (key 0x08),
+        // regardless of whether options.uv is explicitly set — presence of a PIN
+        // token is itself evidence of UV (CTAP2 §6.1.2).
         PinUvAuthResult pinUvResult;
         CredentialOptions options = parseOptions(req);
-        if (options.uv) {
+        if (options.uv || req.containsKey(MakeCredentialKeys.PIN_UV_AUTH_PARAM)) {
             pinUvResult = verifyPinUvAuth(req, txn);
             if (pinUvResult.errorCode != null) {
                 return error(pinUvResult.errorCode);
@@ -1660,8 +1719,14 @@ public class AuthenticatorAPI {
      protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
         logger.debug("getAssertion");
         
-        // Load authenticated session from openKeys if available
-        loadAuthenticatedSession(txn);
+        // Load authenticated session from openKeys if available.
+        // If no PIN session exists for this CID, clear any stale passkey that
+        // CtapHid.updateCidTransaction may have copied from a previous txn, so
+        // createAuthenticator correctly falls back to the platform key.
+        if (!loadAuthenticatedSession(txn)) {
+            logger.debug("getAssertion: no PIN session for CID — clearing stale passkey, using platform key");
+            txn.setPasskey(null);
+        }
 
         // UP must have been collected during getInfo on this channel.
         // CTAP §6.2.2 step 9: cached UP satisfies the "up" option requirement.
@@ -1685,10 +1750,37 @@ public class AuthenticatorAPI {
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
 
-        // Initialize authenticator with a valid credential
+        // Initialize authenticator with a valid credential.
+        // Credentials may have been created under the platform key (no-UV path) or
+        // under the passkey private key (PIN-verified path).  Try the key that was
+        // selected above first; if every credential fails GCM decryption, reconfigure
+        // with the other key and try again before giving up.
         Map<String, byte[]> selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
         if (selectedCredential == null) {
-            logger.debug("Fido2Authenticator initialization failed with cred list");
+            logger.debug("getAssertion: first key exhausted all credentials — retrying with fallback key");
+            boolean usedPasskey = txn.getPasskey() != null;
+            if (usedPasskey) {
+                // First attempt used passkey key — retry with platform key
+                logger.debug("getAssertion: retrying with platform key");
+                configureCredentialAnchor(authenticator, KeyUtils.getPlatformKey(), extractRpIdBytes(rpIdValue));
+            } else {
+                // First attempt used platform key — retry with each available passkey from openKeys
+                logger.debug("getAssertion: retrying with passkey keys from open sessions");
+                for (Map.Entry<byte[], Passkey> entry : openKeys.entrySet()) {
+                    configureCredentialAnchor(authenticator, entry.getValue().getPrivateKey(), extractRpIdBytes(rpIdValue));
+                    selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
+                    if (selectedCredential != null) {
+                        logger.debug("getAssertion: fallback passkey key succeeded");
+                        return generateSignedAssertion(req, authenticator, selectedCredential);
+                    }
+                }
+                logger.debug("getAssertion: all fallback passkey keys exhausted");
+                return error(Ctap2StatusCode.NO_CREDENTIALS);
+            }
+            selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
+        }
+        if (selectedCredential == null) {
+            logger.debug("getAssertion: all keys exhausted, no matching credential found");
             return error(Ctap2StatusCode.NO_CREDENTIALS);
         }
         return generateSignedAssertion(req, authenticator, selectedCredential);
@@ -1709,27 +1801,11 @@ public class AuthenticatorAPI {
             logger.warn("getInfo: no UserPresenceCallback registered — OPERATION_DENIED");
             return error(Ctap2StatusCode.OPERATION_DENIED);
         }
-        Map<String, Boolean> capabilities = Map.of("rk", true,
-                                                   "plat", true,
-                                                   "clientPin", true);
-        Map<Integer, Object> info = Map.of(
-            0x01, new String[] {"FIDO_2_1", "FIDO_2_0"},
-            0x02, new String[] {"hmac-secret"}, //extensions
-            0x03, new byte[16], //AAGUID - must be 16-byte bytestring per CTAP2 spec
-            0x04, capabilities,
-            0x05, 4096, // maxMsgSize
-            0x06, new int[] {1} //PIN/UV Auth Protocol One
-        );
-        // approved: multi-frame CBOR response — framed via HIDPasskey.sendDeferredResponse(txn, buf)
-        final byte[] approvedResponse = success(Cbor.encode(info));
-        // denied: always a single status byte
-        final byte[] deniedResponse   = error(Ctap2StatusCode.OPERATION_DENIED);
 
-        // Pass both buffers to the app layer together with the live txn.
-        // The app layer sends keepalives until the user acts, then calls:
-        //   HIDPasskey.sendDeferredResponse(txn, approvedResponse) — approve (drains all frames)
-        //   HIDPasskey.sendDeferredResponse(txn, deniedResponse)   — deny/timeout/cancel (single frame)
-        userPresenceCallback.onUserPresenceRequired(null, txn, approvedResponse, deniedResponse);
+        // Pass context to the app layer — the app layer builds the appropriate
+        // response at decision time via UpRequestContext.buildResponse(outcome).
+        userPresenceCallback.onUserPresenceRequired(
+            new UpRequestContext(null, txn, /* isGetInfo= */ true));
 
         // Return null to signal CtapHid that the response is deferred.
         return null;

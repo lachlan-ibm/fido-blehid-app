@@ -1,6 +1,6 @@
 #!/bin/bash
 # build-and-install.sh
-# Builds debug APK and installs to paired ADB device
+# Builds debug APK and installs to paired ADB device, preserving app data.
 # Requires: Android SDK with Gradle wrapper in project root
 
 set -e
@@ -64,22 +64,10 @@ echo "APK: $APK_PATH"
 APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
 echo "Size: $APK_SIZE"
 
-# Uninstall old version if it exists
+# Install APK, replacing in-place to preserve app data and files
 echo
-echo "Checking if app is already installed..."
-if adb shell pm list packages | grep -q "$PACKAGE_NAME"; then
-    echo "App is already installed - removing old version..."
-    adb uninstall "$PACKAGE_NAME" || true
-    sleep 1
-    echo "✓ Old version removed"
-else
-    echo "App not currently installed"
-fi
-
-# Install APK (fresh install after uninstall)
-echo
-echo "Installing debug APK to device..."
-if adb install "$APK_PATH"; then
+echo "Installing debug APK to device (preserving app data)..."
+if adb install -r "$APK_PATH"; then
     echo "✓ Installation successful"
 else
     echo
@@ -87,7 +75,7 @@ else
     echo
     echo "Common issues:"
     echo "  1. Device storage full"
-    echo "  2. Signature mismatch (uninstall old version first)"
+    echo "  2. Signature mismatch - run 'adb uninstall $PACKAGE_NAME' then retry"
     echo "  3. ADB connection lost"
     exit 1
 fi
