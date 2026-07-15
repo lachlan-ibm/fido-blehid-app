@@ -4,7 +4,6 @@
 package com.isfs.blekey.data;
 
 import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -351,16 +350,6 @@ public class PasskeyBranchTest {
         byte[] validHash = Arrays.copyOfRange(testPinHash, 0, HALF_HASH);
         Passkey result3 = Passkey.openKey(validHash);
         assertNull("Should return null when no passkey files found", result3);
-    }
-    
-    /**
-     * Test getKeystoreManager() accessor (line 164).
-     * Tests retrieval of keystore manager.
-     */
-    @Test
-    public void testGetKeystoreManager() {
-        KeystoreManager manager = Passkey.getKeystoreManager();
-        assertNotNull("Keystore manager should not be null", manager);
     }
     
     /**

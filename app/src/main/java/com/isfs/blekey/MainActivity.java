@@ -79,12 +79,12 @@ public class MainActivity extends AppCompatActivity {
     }
     
     /**
-     * Initializes the root key pair needed for passkey encryption.
-     * This should be done once when the app starts.
+     * Initializes the root key pair needed for passkey operations.
+     * This should be done first when the app starts.
      */
     private void initializeRootKeyPair() {
         try {
-            // Set FIDO2_HOME to the app's files directory if not set
+            // Set FIDO2_HOME to the app's files directory if missing
             String fido2Home = System.getProperty("FIDO2_HOME");
             if (fido2Home == null) {
                 fido2Home = getFilesDir().getAbsolutePath();
@@ -92,15 +92,11 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, "Set FIDO2_HOME to: " + fido2Home);
             }
             
-            // Get the platform key path
+            // Get the file based platform key path
             String platformKeyPath = fido2Home +
                                     java.nio.file.FileSystems.getDefault().getSeparator() + "platform.key";
-            
-            // Initialize the root key pair using the public method
-            Passkey.ensureRootKeyPair(platformKeyPath, null);
-
-            // Initialize the Android Keystore manager for passkey encryption
             Passkey.setKeystoreManager(new AndroidKeystoreManager());
+            Passkey.ensureRootKeyPair(platformKeyPath, null);
 
             Log.i(TAG, "Root key pair initialized successfully");
 

@@ -28,6 +28,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.util.KeyUtils;
+import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.authenticator.AuthenticatorCmd;
 import com.isfs.blekey.authenticator.PinSubCmd;
 import com.isfs.blekey.authenticator.TestConfig;
@@ -140,6 +141,18 @@ public class Ctap2HidRequestTest {
         
         // Add our new transaction to the map using String key
         currentMap.put(cidKey(channelId), txn);
+
+        // Simulate the authenticated session that updateAuthenticationState() would create
+        // after a real PIN ceremony. AuthenticatorAPI.makeCredential calls
+        // loadAuthenticatedSession() which looks up openKeys by CID — without this
+        // entry it finds nothing and nulls out the passkey, causing PIN_REQUIRED.
+        java.lang.reflect.Field openKeysField =
+                AuthenticatorAPI.class.getDeclaredField("openKeys");
+        openKeysField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<byte[], Passkey> openKeys =
+                (Map<byte[], Passkey>) openKeysField.get(null);
+        openKeys.put(channelId, passkey);
     }
     
     @BeforeEach

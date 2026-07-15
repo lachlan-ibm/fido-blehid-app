@@ -1718,7 +1718,7 @@ public class AuthenticatorAPI {
      */
      protected static byte[] getAssertion(CtapTxn txn, Map<Integer, Object> req) {
         logger.debug("getAssertion");
-        
+
         // Load authenticated session from openKeys if available.
         // If no PIN session exists for this CID, clear any stale passkey that
         // CtapHid.updateCidTransaction may have copied from a previous txn, so

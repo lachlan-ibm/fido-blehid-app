@@ -147,7 +147,23 @@ public class Passkey {
      * This should be set during application initialization
      */
     private static KeystoreManager keystoreManager;
-    
+
+    /**
+     * Lazily-initialised, cached StashCipher instance.
+     * Built once from the current keystoreManager / root key pair so the TEE
+     * is interrogated only on the first use.  Invalidated whenever the
+     * keystoreManager is replaced via {@link #setKeystoreManager}.
+     */
+    private static StashCipher stashCipher;
+
+    /** Returns the shared {@link StashCipher}, creating it on first call. */
+    private static StashCipher getStashCipher() {
+        if (stashCipher == null) {
+            stashCipher = StashCipher.create(keystoreManager, rootPublicKey, rootPrivateKey);
+        }
+        return stashCipher;
+    }
+
     /**
      * Sets the platform-specific keystore manager.
      * This should be called during application initialization before any passkey operations.
@@ -156,16 +172,8 @@ public class Passkey {
      */
     public static void setKeystoreManager(KeystoreManager manager) {
         keystoreManager = manager;
+        stashCipher = null; // invalidate cached cipher so it is rebuilt with the new manager
         logger.info("KeystoreManager set: {}", manager != null ? manager.getClass().getSimpleName() : "null");
-    }
-    
-    /**
-     * Gets the current keystore manager.
-     *
-     * @return The current KeystoreManager instance, or null if not set
-     */
-    public static KeystoreManager getKeystoreManager() {
-        return keystoreManager;
     }
     
     /**
@@ -366,10 +374,9 @@ public class Passkey {
                 return null;
             }
             byte[] upperHashObf = FileUtils.readFileBytes(stashFile);
-            
+
             logger.debug("Decrypting upperHash from stash file...");
-            byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
-                        KeyUtils.ksmDecrypt(upperHashObf, keystoreManager) : KeyUtils.ecdhDecrypt(upperHashObf, rootPrivateKey);
+            byte[] upperHash = getStashCipher().decrypt(upperHashObf);
             logger.debug("upperHash decrypted, length: {}", upperHash != null ? upperHash.length : "null");
             if (upperHash != null) {
                 logger.debug("upperHash (hex): {}", bytesToHex(upperHash));
@@ -553,6 +560,30 @@ public class Passkey {
     }
 
 
+    private static boolean validatePinHash(byte[] pinHash, File passkeyFile) {
+        // If we only have 16 bytes (lower hash), reconstruct the full 32-byte PIN hash
+        // by reading the cached upper hash from the companion .stash file
+        if (pinHash != null && pinHash.length == 16) {
+            logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
+            try {
+                byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(passkeyFile));
+                byte[] upperHash = getStashCipher().decrypt(upperHashEnc);
+                
+                if (upperHash != null && upperHash.length == HALF_HASH) {
+                    pinHash = getCachedPinHash(upperHash, pinHash);
+                    logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", pinHash.length);
+                } else {
+                    logger.error("writeKey: Failed to decrypt upper hash from stash file");
+                    return false;
+                }
+            } catch (Exception e) {
+                logger.error("writeKey: Error reconstructing PIN hash from stash file", e);
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Writes a passkey to a file, encrypting it with the provided PIN hash using the two-layer encryption scheme.
      *
@@ -571,27 +602,8 @@ public class Passkey {
      */
     public static boolean writeKey(Passkey passkey, byte[] pinHash, File passkeyFile) {
         try {
-            // If we only have 16 bytes (lower hash), reconstruct the full 32-byte PIN hash
-            // by reading the cached upper hash from the companion .stash file
-            if (pinHash != null && pinHash.length == 16) {
-                logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
-                try {
-                    byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(passkeyFile));
-                    byte[] upperHash = keystoreManager.isKeystoreAvailable() ?
-                                KeyUtils.ksmDecrypt(upperHashEnc, keystoreManager) :
-                                KeyUtils.ecdhDecrypt(upperHashEnc, rootPrivateKey);
-                    
-                    if (upperHash != null && upperHash.length == HALF_HASH) {
-                        pinHash = getCachedPinHash(upperHash, pinHash);
-                        logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", pinHash.length);
-                    } else {
-                        logger.error("writeKey: Failed to decrypt upper hash from stash file");
-                        return false;
-                    }
-                } catch (Exception e) {
-                    logger.error("writeKey: Error reconstructing PIN hash from stash file", e);
-                    return false;
-                }
+            if (!validatePinHash(pinHash, passkeyFile)) {
+                return false;
             }
             
             // Validate inputs (now with potentially reconstructed 32-byte hash)
@@ -599,24 +611,16 @@ public class Passkey {
                 return false;
             }
             
-            // Split the PIN hash into upperHash and lowerHash
             byte[][] hashParts = splitPinHash(pinHash);
             byte[] upperHash = hashParts[0];
-            
-            // Serialize passkey data to CBOR
             byte[] passkeyData = serializePasskey(passkey, pinHash);
+            byte[] pinHashCiphertext = getStashCipher().encrypt(upperHash);
             
-            // Encrypt upper hash with KSM if available, then ECDH as fallback
-            byte[] pinHashCiphertext = keystoreManager.isKeystoreAvailable() ?
-                        KeyUtils.ksmEncrypt(upperHash, keystoreManager) : KeyUtils.ecdhEncrypt(upperHash, rootPublicKey);
-            
-            // Write .passkey — body only, no header prefix
             try (FileOutputStream fos = new FileOutputStream(passkeyFile)) {
                 fos.write(passkeyData);
                 fos.flush();
             }
             
-            // Write .stash — ciphertext only
             File stashFile = FileUtils.getStashFile(passkeyFile);
             try (FileOutputStream sfos = new FileOutputStream(stashFile)) {
                 sfos.write(pinHashCiphertext);

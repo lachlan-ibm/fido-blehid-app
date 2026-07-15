@@ -1381,61 +1381,6 @@ public class KeyUtils {
         }
     }
 
-    /**
-     * Encrypts the data using ECDH with the keystore manager's public key.
-     * This provides encryption for PIN hash caching using hardware-backed keys when available.
-     *
-     * @param plaintext The bytes to encrypt
-     * @param keystoreManager The platform-specific keystore manager (may be null)
-     * @return byte[] containing the ECDH-encrypted ciphertext
-     * @throws IOException if encryption fails
-     */
-    public static byte[] ksmEncrypt(
-            byte[] plaintext,
-            KeystoreManager keystoreManager) throws IOException {
-        
-        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
-            try {
-                // Get the public key from the keystore manager
-                PublicKey publicKey = keystoreManager.getEC256PublicKey();
-                // Use standard ECDH encryption
-                byte[] encrypted = ecdhEncrypt(plaintext, publicKey);
-                logger.debug("Encrypted plaintext with keystore EC key (length: {})", plaintext.length);
-                return encrypted;
-            } catch (Exception e) {
-                logger.warn("Failed to encrypt with keystore key", e);
-                throw new IOException("Keystore encryption failed", e);
-            }
-        } else {
-            logger.debug("KeystoreManager not available, cannot encrypt");
-            throw new IOException("KeystoreManager not available");
-        }
-    }
-    
-    /**
-     * Decrypts the data using ECDH with the keystore manager's private key.
-     *
-     * @param ciphertext The encrypted data
-     * @param keystoreManager The platform-specific keystore manager (may be null)
-     * @return The decrypted plaintext
-     * @throws Exception if decryption fails
-     */
-    public static byte[] ksmDecrypt(
-            byte[] ciphertext,
-            KeystoreManager keystoreManager) throws Exception {
-        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
-            try {
-                // Get the private key from the keystore manager
-                PrivateKey privateKey = keystoreManager.getEC256PrivateKey();
-                // Use standard ECDH decryption
-                return ecdhDecrypt(ciphertext, privateKey);
-            } catch (Exception e) {
-                logger.debug("Keystore key decryption failed", e);
-                return null;
-            }
-        }
-        return null;
-    }
 
     private static final String PLATFORM_KEY = "platform.key";
 
