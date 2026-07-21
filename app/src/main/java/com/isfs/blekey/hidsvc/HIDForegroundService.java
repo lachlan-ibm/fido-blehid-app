@@ -25,9 +25,14 @@ import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
-import com.isfs.blekey.MainActivity;
 import com.isfs.blekey.R;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import com.isfs.blekey.authenticator.AuthenticatorAPI.SecureStorageCallback;
+import com.isfs.blekey.data.AppConfig;
+import com.isfs.blekey.util.KeyUtils;
+
+import java.nio.charset.StandardCharsets;
+import java.security.PrivateKey;
 import com.isfs.blekey.authenticator.AuthenticatorAPI.UserPresenceCallback;
 import com.isfs.blekey.authenticator.UpRequestContext;
 import com.isfs.blekey.authenticator.UpRequestContext.Outcome;
@@ -101,6 +106,14 @@ public class HIDForegroundService extends Service {
     // -------------------------------------------------------------------------
 
     /**
+     * Delegate interface that {@code ServerActivity} must implement to handle
+     * biometric prompts for the TEE platform key gate.
+     */
+    public interface BiometricDelegate {
+        void showBiometricPrompt(AuthenticatorAPI.PlatformKeyContext ctx);
+    }
+
+    /**
      * Callback interface for the bound {@code ServerActivity}.
      *
      * <p>The service calls {@link #showUpDialog} on the UI thread when the
@@ -138,10 +151,16 @@ public class HIDForegroundService extends Service {
     // Service lifecycle
     // -------------------------------------------------------------------------
 
+    /** True after applyAppConfig() has run at least once through the bio callback. */
+    private boolean appConfigLoaded = false;
+
     @Override
     public void onCreate() {
         super.onCreate();
         Log.d(TAG, "onCreate");
+        // applyAppConfig() is deferred: called inside SecureStorageHandler on first
+        // bio success, because KeyAgreement.init(platformKey) requires prior bio auth
+        // once the key is bio-gated.
         createNotificationChannel();
         createUpNotificationChannel();
         registerBatteryReceiver();
@@ -195,6 +214,11 @@ public class HIDForegroundService extends Service {
         // Register the UP callback here so it survives activity destruction.
         AuthenticatorAPI.setUserPresenceCallback(new UpHandler());
 
+        // Register TEE / biometric gate callbacks.
+        AuthenticatorAPI.setSecureStorageCallback(new SecureStorageHandler());
+        AuthenticatorAPI.setDeferredResponseSender(
+            (txn, response) -> sendDeferred(txn, response));
+
         // Cancel hook — CTAP cancel frame injects KEEPALIVE_CANCEL into the deferred CtapHid;
         // we clean up the service-side state and ask the delegate to dismiss its dialog.
         CtapHid.setOnCancelCallback(() -> upHandler.post(() -> {
@@ -212,6 +236,8 @@ public class HIDForegroundService extends Service {
     public void onDestroy() {
         Log.d(TAG, "onDestroy");
         AuthenticatorAPI.setUserPresenceCallback(null);
+        AuthenticatorAPI.setSecureStorageCallback(null);
+        AuthenticatorAPI.setDeferredResponseSender(null);
         if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
         unregisterBatteryReceiver();
         if (hidService != null) {
@@ -297,6 +323,41 @@ public class HIDForegroundService extends Service {
     // -------------------------------------------------------------------------
     // UpHandler — inner class: bridges CTAP thread → service state → UI
     // -------------------------------------------------------------------------
+
+    /**
+     * Handles the TEE / biometric gate for the platform key.
+     * Posts to the UI thread and delegates to the activity's BiometricDelegate.
+     * On the first successful bio, also runs applyAppConfig() so ECDH decryption
+     * of the stored HKDF info has a valid auth window.
+     */
+    private final class SecureStorageHandler implements SecureStorageCallback {
+
+        @Override
+        public void onPlatformKeyRequired(AuthenticatorAPI.PlatformKeyContext ctx) {
+            upHandler.post(() -> {
+                UpActivityDelegate d = activityDelegate;
+                if (d instanceof BiometricDelegate) {
+                    ((BiometricDelegate) d).showBiometricPrompt(
+                        new AuthenticatorAPI.PlatformKeyContext(
+                            ctx.getSignature(),
+                            () -> {
+                                // Bio succeeded — auth window is open.
+                                if (!appConfigLoaded) {
+                                    applyAppConfig(); // safe: ECDH auth gate is now open
+                                    appConfigLoaded = true;
+                                }
+                                ctx.onUnlocked(); // continue the CTAP ceremony
+                            },
+                            ctx::onFailed
+                        )
+                    );
+                } else {
+                    // Activity not visible — cannot show BiometricPrompt from background.
+                    ctx.onFailed();
+                }
+            });
+        }
+    }
 
     private final class UpHandler implements UserPresenceCallback {
         @Override
@@ -493,6 +554,36 @@ public class HIDForegroundService extends Service {
     // Notification channel for UP alerts
     // -------------------------------------------------------------------------
 
+    /**
+     * Loads, decrypts, and applies the HKDF info string from SharedPreferences.
+     *
+     * <p>The stored value is ECDH-encrypted with the platform key and Base64-encoded
+     * (written by {@code AdvancedConfigActivity}). Falls back to
+     * {@link AppConfig#DEFAULT_INFO} if no value is stored or decryption fails.
+     */
+    private void applyAppConfig() {
+        android.content.SharedPreferences prefs =
+                getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE);
+        String stored = prefs.getString("hkdf_info", null);
+        String info = AppConfig.DEFAULT_INFO;
+        if (stored != null) {
+            try {
+                PrivateKey platformKey = KeyUtils.getPlatformKey();
+                if (platformKey == null) {
+                    Log.e(TAG, "Platform key unavailable; using default HKDF info");
+                } else {
+                    byte[] ciphertext = android.util.Base64.decode(stored, android.util.Base64.NO_WRAP);
+                    byte[] plaintext = KeyUtils.ecdhDecrypt(ciphertext, platformKey);
+                    info = new String(plaintext, StandardCharsets.UTF_8);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to decrypt HKDF info; using default", e);
+            }
+        }
+        AuthenticatorAPI.setAppConfig(new AppConfig(info));
+        Log.d(TAG, "AppConfig applied: hkdf_info length=" + info.length());
+    }
+
     private void createUpNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
@@ -519,7 +610,7 @@ public class HIDForegroundService extends Service {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "FIDO Classic HID Service",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_MIN  // silent, no status-bar icon
             );
             channel.setDescription("Keeps FIDO classic Bluetooth HID service running");
             channel.setShowBadge(false);
@@ -532,25 +623,18 @@ public class HIDForegroundService extends Service {
     }
 
     /**
-     * Creates the persistent notification shown while the service is running.
+     * Creates the persistent notification required by startForeground().
+     * IMPORTANCE_MIN keeps it silent and out of the status bar.
      */
     private Notification createNotification() {
-        Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            notificationIntent,
-            PendingIntent.FLAG_IMMUTABLE
-        );
-
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Passkey BT HID Active")
             .setContentText("Classic Bluetooth HID service is running")
             .setSmallIcon(R.drawable.bee)
-            .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setShowWhen(false)
             .build();
     }
 
@@ -613,43 +697,15 @@ public class HIDForegroundService extends Service {
         }
     }
 
-    /**
-     * Updates the notification to indicate low battery mode.
-     */
+    /** No-op: low-battery state is only logged; no notification update needed. */
     private void updateNotificationForLowBattery() {
-        Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            notificationIntent,
-            PendingIntent.FLAG_IMMUTABLE
-        );
-
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Passkey BT HID Active (Low Battery)")
-            .setContentText("Classic Bluetooth HID service running in low battery mode")
-            .setSmallIcon(R.drawable.bee)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build();
-
-        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(NOTIFICATION_ID, notification);
-        }
+        // Intentionally empty — the foreground notification is IMPORTANCE_MIN and not
+        // user-visible, so there is nothing meaningful to update.
     }
 
-    /**
-     * Updates the notification to normal state.
-     */
+    /** No-op: normal battery recovery; log already captured in handleBatteryLevel. */
     private void updateNotification() {
-        Notification notification = createNotification();
-        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(NOTIFICATION_ID, notification);
-        }
+        // Intentionally empty — see updateNotificationForLowBattery.
     }
 
     // -------------------------------------------------------------------------

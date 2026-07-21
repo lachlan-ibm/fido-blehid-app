@@ -17,6 +17,7 @@ import com.isfs.blekey.activity.ServerActivity;
 import com.isfs.blekey.activity.QRScannerActivity;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.AndroidKeystoreManager;
+import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.CameraPermissionHelper;
 
 
@@ -92,11 +93,13 @@ public class MainActivity extends AppCompatActivity {
                 Log.i(TAG, "Set FIDO2_HOME to: " + fido2Home);
             }
             
-            // Get the file based platform key path
-            String platformKeyPath = fido2Home +
-                                    java.nio.file.FileSystems.getDefault().getSeparator() + "platform.key";
-            Passkey.setKeystoreManager(new AndroidKeystoreManager());
-            Passkey.ensureRootKeyPair(platformKeyPath, null);
+            AndroidKeystoreManager keystoreManager = new AndroidKeystoreManager();
+            KeyUtils.setKeystoreManager(keystoreManager);
+            if (!keystoreManager.isKeystoreAvailable()) {
+                String platformKeyPath = fido2Home +
+                        java.nio.file.FileSystems.getDefault().getSeparator() + "platform.key";
+                KeyUtils.ensureRootKeyPair(platformKeyPath, null);
+            }
 
             Log.i(TAG, "Root key pair initialized successfully");
 

@@ -181,7 +181,7 @@ public class CreatePasskeyActivity extends AppCompatActivity {
         }
 
         // Ensure KeystoreManager is initialized (guards against cold-start without MainActivity)
-        Passkey.setKeystoreManager(new AndroidKeystoreManager());
+        KeyUtils.setKeystoreManager(new AndroidKeystoreManager());
 
         // Generate PIN hash from password
         byte[] pinHash = KeyUtils.getPinHash(password);

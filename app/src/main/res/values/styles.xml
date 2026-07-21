@@ -44,4 +44,20 @@
         <item name="colorError">@color/magenta_40</item>
         <item name="colorOnError">@color/ibm_white</item>
     </style>
+    <!-- Material Components theme — used only for activities that need Material widgets
+         (e.g. TextInputLayout). All other activities use AppTheme.NoActionBar above. -->
+    <style name="AppTheme.MaterialNoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ibm_blue</item>
+        <item name="colorPrimaryVariant">@color/cyan_30</item>
+        <item name="colorOnPrimary">@color/ibm_white</item>
+        <item name="colorSecondary">@color/purple_40</item>
+        <item name="colorSecondaryVariant">@color/magenta_40</item>
+        <item name="colorOnSecondary">@color/ibm_white</item>
+        <item name="android:colorBackground">@color/ibm_white</item>
+        <item name="colorOnBackground">@color/ibm_black</item>
+        <item name="colorSurface">@color/cool_gray_10</item>
+        <item name="colorOnSurface">@color/ibm_black</item>
+        <item name="colorError">@color/magenta_40</item>
+        <item name="colorOnError">@color/ibm_white</item>
+    </style>
 </resources>

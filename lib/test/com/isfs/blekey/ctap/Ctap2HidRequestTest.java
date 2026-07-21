@@ -80,11 +80,11 @@ public class Ctap2HidRequestTest {
      * Helper method to set the root key pair in the Passkey class using reflection
      */
     private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-        java.lang.reflect.Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        java.lang.reflect.Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         rootPublicKeyField.set(null, publicKey);
         
-        java.lang.reflect.Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        java.lang.reflect.Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
         rootPrivateKeyField.setAccessible(true);
         rootPrivateKeyField.set(null, privateKey);
     }
@@ -163,7 +163,7 @@ public class Ctap2HidRequestTest {
         System.setProperty("FIDO2_HOME", tempDir.getAbsolutePath());
         
         // Initialize KeystoreManager for Passkey operations
-        com.isfs.blekey.data.Passkey.setKeystoreManager(
+        KeyUtils.setKeystoreManager(
             com.isfs.blekey.authenticator.TestHelper.createMockKeystoreManager());
         
         // Generate and set root key pair for Passkey encryption
@@ -198,11 +198,44 @@ public class Ctap2HidRequestTest {
                 }
             });
 
+        // Stub SecureStorageCallback: platform key is not TEE-backed in tests so
+        // onUnlocked() can be called immediately — no real biometric needed.
+        com.isfs.blekey.authenticator.AuthenticatorAPI.setSecureStorageCallback(
+            ctx -> ctx.onUnlocked());
+
+        // Stub DeferredResponseSender: inject the response back into the deferred
+        // CtapHid the same way HIDPasskey.sendDeferredResponse() does on device.
+        com.isfs.blekey.authenticator.AuthenticatorAPI.setDeferredResponseSender(
+            (txn, response) -> {
+                com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
+                if (deferred != null) {
+                    try {
+                        deferred.injectDeferredResponse(response);
+                    } catch (java.io.IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            });
+
         // Write a platform.key PEM file into FIDO2_HOME so that
         // KeyUtils.getPlatformKey() finds it during makeCredential.
         KeyPair platformKeyPair = KeyUtils.generateKeyPair("EC", 256);
         java.io.File platKeyFile = new java.io.File(tempDir, "platform.key");
         com.isfs.blekey.util.FileUtils.writePrivatePEM(platformKeyPair.getPrivate(), platKeyFile);
+
+        // The mock KeystoreManager is non-null, so getPlatformKey() calls
+        // keystoreManager.getEC256PrivateKey() first and never reaches the
+        // file-based fallback.  Stub it to return the key we just wrote.
+        // lenient() suppresses UnnecessaryStubbingException for tests that
+        // don't exercise the makeCredential/getAssertion paths.
+        org.mockito.Mockito.lenient()
+            .when(KeyUtils.getKeystoreManager().getEC256PrivateKey())
+            .thenReturn(platformKeyPair.getPrivate());
+        // Stub the public key from the same pair so the ECDH self-agreement in
+        // derivePasskeySeedDeferred uses matching keys (privKey × ownPubKey).
+        org.mockito.Mockito.lenient()
+            .when(KeyUtils.getKeystoreManager().getEC256PublicKey())
+            .thenReturn(platformKeyPair.getPublic());
 
         // Create a test passkey and add it to the assignedCids map
         com.isfs.blekey.data.Passkey passkey = createTestPasskey();

@@ -136,6 +136,18 @@
     <string name="bluetooth_permission_rationale">This app needs Bluetooth permission to connect to paired devices and provide passkey functionality. Without this permission, the app cannot function.</string>
     <string name="grant_permission">Grant Permission</string>
     <string name="open_settings">Open Settings</string>
+    <!-- Advanced Configuration strings -->
+    <string name="adv_config_title">Advanced Configuration</string>
+    <string name="adv_config_row_label">Advanced configuration</string>
+    <string name="adv_config_button_desc">Open advanced configuration</string>
+    <string name="adv_config_hkdf_info_label">HKDF Domain Separation String (info)</string>
+    <string name="adv_config_hkdf_info_hint">e.g. FIDO2-PASSKEY-SEED</string>
+    <string name="adv_config_hkdf_warning">⚠ Changing this value invalidates all existing credentials. All relying parties must be re-enrolled after saving.</string>
+    <string name="adv_config_hkdf_info_too_short">Info string must be at least %1$d characters</string>
+    <string name="adv_config_save_confirm_title">Confirm change</string>
+    <string name="adv_config_save_confirm_message">This will invalidate all credentials issued under the current value. Continue?</string>
+    <string name="save">Save</string>
+
     <!-- User Presence dialog strings -->
     <string name="up_getinfo_title">Authentication Request</string>
     <string name="up_getinfo_message">A device is requesting authentication. Choose a response.</string>
@@ -145,4 +157,8 @@
     <string name="up_timeout_toast">Authentication request timed out</string>
     <string name="up_notification_title">Touch required</string>
     <string name="up_notification_text">Tap to approve the authentication request</string>
+
+    <!-- Biometric prompt for TEE-gated platform key -->
+    <string name="bio_prompt_title">Confirm your identity</string>
+    <string name="bio_prompt_subtitle">Required to access your passkey</string>
 </resources>

@@ -7,10 +7,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.UnsupportedEncodingException;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.file.FileSystems;
 import java.security.KeyPair;
 import java.security.KeyStore;
 import java.security.PrivateKey;
@@ -35,7 +33,6 @@ import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.Cbor;
-import com.isfs.blekey.util.KeystoreManager;
 
 /**
  * Represents a FIDO2 passkey with secure storage capabilities.
@@ -120,188 +117,10 @@ public class Passkey {
      */
     private static final Logger logger = LoggerFactory.getLogger(Passkey.class);
     
-    /**
-     * Default names for file objects
-     */
-    private static final String PLATFORM_KEY = "platform.key";
     private static final String DEFAULT_PASSKEY = "default.passkey";
-    
-    /**
-     * Constants for key generation
-     */
-    private static final String KEY_ALGORITHM = "ECDSA";
-    private static final int KEY_SIZE = 256;
 
     private static final int PIN_HASH_SIZE = 32;
     private static final int HALF_HASH = PIN_HASH_SIZE / 2;
-    
-    /**
-     * Root key for ECDH encryption/decryption
-     * In a real implementation, this would be securely stored and accessed
-     */
-    private static PublicKey rootPublicKey;
-    private static PrivateKey rootPrivateKey;
-    
-    /**
-     * Platform-specific keystore manager for app key encryption
-     * This should be set during application initialization
-     */
-    private static KeystoreManager keystoreManager;
-
-    /**
-     * Lazily-initialised, cached StashCipher instance.
-     * Built once from the current keystoreManager / root key pair so the TEE
-     * is interrogated only on the first use.  Invalidated whenever the
-     * keystoreManager is replaced via {@link #setKeystoreManager}.
-     */
-    private static StashCipher stashCipher;
-
-    /** Returns the shared {@link StashCipher}, creating it on first call. */
-    private static StashCipher getStashCipher() {
-        if (stashCipher == null) {
-            stashCipher = StashCipher.create(keystoreManager, rootPublicKey, rootPrivateKey);
-        }
-        return stashCipher;
-    }
-
-    /**
-     * Sets the platform-specific keystore manager.
-     * This should be called during application initialization before any passkey operations.
-     *
-     * @param manager The KeystoreManager implementation for the current platform
-     */
-    public static void setKeystoreManager(KeystoreManager manager) {
-        keystoreManager = manager;
-        stashCipher = null; // invalidate cached cipher so it is rebuilt with the new manager
-        logger.info("KeystoreManager set: {}", manager != null ? manager.getClass().getSimpleName() : "null");
-    }
-    
-    /**
-     * Initialize the root key pair from a PKCS8 file containing an EC private key
-     * This should be called during application initialization
-     *
-     * @param pkcs8File Path to the PKCS8 file containing the EC private key
-     * @param password Password for the encrypted PKCS8 file, or null if the file is not encrypted
-     * @return true if successful, false if the file doesn't exist or contains an invalid key
-     */
-    public static boolean initRootKeyPair(String pkcs8File, String password) {
-        try {
-            // Read the private key from the PKCS8 file with optional password
-            PrivateKey privateKey = FileUtils.readPrivatePEM(new File(pkcs8File), password);
-            
-            // Verify it's an EC private key
-            if (!(privateKey instanceof java.security.interfaces.ECPrivateKey)) {
-                logger.error("Private key in {} is not an EC key", pkcs8File);
-                return false;
-            }
-            
-            // Generate the corresponding public key
-            PublicKey publicKey = KeyUtils.getPubKey((java.security.interfaces.ECPrivateKey) privateKey);
-            
-            // Set the root key pair
-            rootPublicKey = publicKey;
-            rootPrivateKey = privateKey;
-            
-            logger.info("Root key pair initialized from file: {}", pkcs8File);
-            return true;
-        } catch (Exception e) {
-            logger.error("Failed to read private key from file: {}", pkcs8File, e);
-            return false;
-        }
-    }
-    
-    /**
-     * Ensures a root key pair is available for ECDH encryption/decryption.
-     * Tries to read from the specified PKCS8 file first, falls back to default location,
-     * and finally throws an exception if no key can be loaded.
-     *
-     * @param keyPath Path to the PKCS8 file, or null to use the default location
-     * @param password Password for the encrypted PKCS8 file, or null if the file is not encrypted
-     */
-    public static void ensureRootKeyPair(String keyPath, String password) {
-        if (rootPublicKey != null && rootPrivateKey != null) {
-            return; // Key pair already initialized
-        }
-        
-        // Resolve the key file path
-        String resolvedKeyPath = resolveKeyFilePath(keyPath);
-        File keyFile = new File(resolvedKeyPath);
-        
-        // Try to load existing key or generate a new one
-        if (keyFile.exists()) {
-            loadExistingKey(resolvedKeyPath, password);
-        } else {
-            generateAndSaveNewKey(resolvedKeyPath);
-        }
-        
-        // Verify key was loaded or generated
-        if (rootPublicKey == null || rootPrivateKey == null) {
-            throw new RuntimeException("Failed to read or generate platform key pair");
-        }
-    }
-    
-    /**
-     * Resolves the key file path, using the provided path or the default location.
-     *
-     * @param keyPath Custom key path or null for default
-     * @return The resolved key file path
-     */
-    private static String resolveKeyFilePath(String keyPath) {
-        if (keyPath != null) {
-            return keyPath;
-        }
-        
-        String fido2Home = FileUtils.getFido2Home();
-        if (fido2Home == null || fido2Home.isEmpty()) {
-            throw new RuntimeException("FIDO2_HOME environment variable or system property is not set");
-        }
-        
-        return fido2Home + FileSystems.getDefault().getSeparator() + PLATFORM_KEY;
-    }
-    
-    /**
-     * Loads an existing key from the specified path.
-     *
-     * @param keyPath Path to the key file
-     * @param password Password for the encrypted key file, or null if not encrypted
-     */
-    private static void loadExistingKey(String keyPath, String password) {
-        try {
-            boolean keyLoaded = initRootKeyPair(keyPath, password);
-            if (!keyLoaded) {
-                logger.warn("Failed to initialize root key pair from {}", keyPath);
-            }
-        } catch (Exception e) {
-            logger.warn("Failed to read platform key from {}", keyPath, e);
-        }
-    }
-    
-    /**
-     * Generates a new key pair and saves it to the specified path.
-     *
-     * @param keyPath Path to save the new key
-     */
-    private static void generateAndSaveNewKey(String keyPath) {
-        try {
-            logger.info("Platform key not found, generating a new one at {}", keyPath);
-            
-            // Generate a new EC key pair
-            KeyPair keyPair = KeyUtils.generateKeyPair(KEY_ALGORITHM, KEY_SIZE);
-            File keyFile = new File(keyPath);
-            FileUtils.writePrivatePEM(keyPair.getPrivate(), keyFile);
-            
-            rootPublicKey = keyPair.getPublic();
-            rootPrivateKey = keyPair.getPrivate();
-            
-            logger.info("Generated and saved new platform key at: {}", keyPath);
-        } catch (IOException e) {
-            logger.error("Failed to write platform key to file: {}", keyPath, e);
-            throw new RuntimeException("Failed to write platform key to file: " + keyPath, e);
-        } catch (Exception e) {
-            logger.error("Failed to generate platform key", e);
-            throw new RuntimeException("Failed to generate platform key", e);
-        }
-    }
 
     /**
      * Constructs a new Passkey with the specified components.
@@ -376,7 +195,7 @@ public class Passkey {
             byte[] upperHashObf = FileUtils.readFileBytes(stashFile);
 
             logger.debug("Decrypting upperHash from stash file...");
-            byte[] upperHash = getStashCipher().decrypt(upperHashObf);
+            byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashObf);
             logger.debug("upperHash decrypted, length: {}", upperHash != null ? upperHash.length : "null");
             if (upperHash != null) {
                 logger.debug("upperHash (hex): {}", bytesToHex(upperHash));
@@ -567,7 +386,7 @@ public class Passkey {
             logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
             try {
                 byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(passkeyFile));
-                byte[] upperHash = getStashCipher().decrypt(upperHashEnc);
+                byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashEnc);
                 
                 if (upperHash != null && upperHash.length == HALF_HASH) {
                     pinHash = getCachedPinHash(upperHash, pinHash);
@@ -614,7 +433,7 @@ public class Passkey {
             byte[][] hashParts = splitPinHash(pinHash);
             byte[] upperHash = hashParts[0];
             byte[] passkeyData = serializePasskey(passkey, pinHash);
-            byte[] pinHashCiphertext = getStashCipher().encrypt(upperHash);
+            byte[] pinHashCiphertext = KeyUtils.getStashCipher().encrypt(upperHash);
             
             try (FileOutputStream fos = new FileOutputStream(passkeyFile)) {
                 fos.write(passkeyData);
@@ -933,7 +752,7 @@ public class Passkey {
             }
             
             // Generate PKI for the passkey
-            KeyPair keyPair = KeyUtils.generateKeyPair(KEY_ALGORITHM, KEY_SIZE);
+            KeyPair keyPair = KeyUtils.generateKeyPair("ECDSA", 256);
             X509Certificate cert = CertUtils.generateCaCert("CN=IBeePasskey", keyPair, 9999, true);
             
             // Create the passkey
@@ -969,7 +788,7 @@ public class Passkey {
                 }
             }
             // Initialize root key pair from specified location or default
-            ensureRootKeyPair(platKeyPath, keyPassword);
+            KeyUtils.ensureRootKeyPair(platKeyPath, keyPassword);
     }
 
     private static File collectPasskeyFileInfo(Scanner scanner) {

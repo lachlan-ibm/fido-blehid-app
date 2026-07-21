@@ -62,7 +62,7 @@ public class PasskeyMainTest {
         rootKeyPair = KeyUtils.generateKeyPair("EC", 521);
         
         // Initialize KeystoreManager for Passkey operations
-        Passkey.setKeystoreManager(com.isfs.blekey.authenticator.TestHelper.createMockKeystoreManager());
+        KeyUtils.setKeystoreManager(com.isfs.blekey.authenticator.TestHelper.createMockKeystoreManager());
     }
     
     @After
@@ -73,11 +73,11 @@ public class PasskeyMainTest {
         System.setIn(originalIn);
         
         // Reset static fields to prevent test pollution
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         rootPublicKeyField.set(null, null);
         
-        Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
         rootPrivateKeyField.setAccessible(true);
         rootPrivateKeyField.set(null, null);
         
@@ -101,11 +101,11 @@ public class PasskeyMainTest {
      * Helper method to set the root key pair in the Passkey class using reflection
      */
     private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         rootPublicKeyField.set(null, publicKey);
         
-        Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
         rootPrivateKeyField.setAccessible(true);
         rootPrivateKeyField.set(null, privateKey);
     }
@@ -186,7 +186,7 @@ public class PasskeyMainTest {
                 .thenCallRealMethod();
             
             // Initialize root key pair within mock scope so rootPublicKey is set
-            Passkey.ensureRootKeyPair(null, null);
+            KeyUtils.ensureRootKeyPair(null, null);
             
             // Create a passkey file first with a unique name
             passkeyFile = getUniquePasskeyFile("manage_test");

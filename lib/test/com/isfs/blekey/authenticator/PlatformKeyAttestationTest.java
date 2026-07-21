@@ -15,6 +15,7 @@ import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.KeyUtils;
@@ -45,6 +47,8 @@ public class PlatformKeyAttestationTest {
     private KeyPair testPasskeyPair;
     private KeyPair testPlatformKeyPair;
     private File tempDir;
+    /** Captures the deferred response delivered via DeferredResponseSender in unit tests. */
+    private final AtomicReference<byte[]> capturedResponse = new AtomicReference<>();
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -67,6 +71,26 @@ public class PlatformKeyAttestationTest {
         platKeyPairField.setAccessible(true);
         savedPlatKeyPair = (KeyPair) platKeyPairField.get(null);
         platKeyPairField.set(null, testPlatformKeyPair);
+
+        // Stub SecureStorageCallback: platform key is not TEE-backed in tests.
+        // Call onUnlocked() immediately so makeCredential/getAssertion can proceed.
+        AuthenticatorAPI.setSecureStorageCallback(ctx -> ctx.onUnlocked());
+
+        // Stub DeferredResponseSender: try the CtapHid path first (Ctap2HidRequestTest
+        // pattern); fall back to capturing in capturedResponse for direct-call tests.
+        capturedResponse.set(null);
+        AuthenticatorAPI.setDeferredResponseSender((txn, response) -> {
+            com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
+            if (deferred != null) {
+                try {
+                    deferred.injectDeferredResponse(response);
+                } catch (java.io.IOException e) {
+                    throw new RuntimeException(e);
+                }
+            } else {
+                capturedResponse.set(response);
+            }
+        });
     }
 
     @AfterEach
@@ -74,6 +98,8 @@ public class PlatformKeyAttestationTest {
         Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
         platKeyPairField.setAccessible(true);
         platKeyPairField.set(null, savedPlatKeyPair);
+        AuthenticatorAPI.setSecureStorageCallback(null);
+        AuthenticatorAPI.setDeferredResponseSender(null);
         System.clearProperty("FIDO2_HOME");
     }
 
@@ -92,7 +118,7 @@ public class PlatformKeyAttestationTest {
         Fido2Authenticator authenticator = new Fido2Authenticator();
         authenticator.setSymKeys(KeyUtils.getPasskeySeed(
             MessageDigest.getInstance("SHA-256").digest("example.com".getBytes()),
-            testPlatformKeyPair.getPrivate()));
+            testPlatformKeyPair.getPrivate().getEncoded(), AppConfig.getDefault()));
 
         byte[] clientDataHash = MessageDigest.getInstance("SHA-256").digest("test".getBytes());
         byte[] authData = new byte[37];
@@ -131,7 +157,7 @@ public class PlatformKeyAttestationTest {
         Fido2Authenticator authenticator = new Fido2Authenticator();
         authenticator.setSymKeys(KeyUtils.getPasskeySeed(
             MessageDigest.getInstance("SHA-256").digest("example.com".getBytes()),
-            testPlatformKeyPair.getPrivate()));
+            testPlatformKeyPair.getPrivate().getEncoded(), AppConfig.getDefault()));
 
         byte[] clientDataHash = MessageDigest.getInstance("SHA-256").digest("test".getBytes());
         byte[] authData = new byte[37];
@@ -172,8 +198,10 @@ public class PlatformKeyAttestationTest {
         CtapTxn txn = new CtapTxn();
         txn.setUserPresent(true);
 
-        byte[] response = AuthenticatorAPI.makeCredential(txn, req);
+        // makeCredential is always deferred now; response arrives via DeferredResponseSender.
+        AuthenticatorAPI.makeCredential(txn, req);
 
+        byte[] response = capturedResponse.get();
         assertNotNull(response, "Response must not be null");
         // The response must NOT be PIN_REQUIRED (0x36) — that's the key assertion.
         // PIN check is skipped for uv=false; any other failure (e.g. missing disk

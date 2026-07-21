@@ -30,7 +30,7 @@ import java.security.spec.ECGenParameterSpec;
 public class AndroidHolderBindingKeyManager {
     
     private static final String TAG = "AndroidHolderBindingKeyManager";
-    private static final String MASTER_KEY_ALIAS = "digital_credentials_master_key";
+    private static final String MASTER_KEY_ALIAS = "platform_key";
     private static final String ANDROID_KEYSTORE = "AndroidKeyStore";
     
     /**
@@ -104,59 +104,32 @@ public class AndroidHolderBindingKeyManager {
             );
         }
         
-        // Detect if running on emulator (case-insensitive fuzzy matching)
-        String fingerprint = Build.FINGERPRINT.toLowerCase();
-        String model = Build.MODEL.toLowerCase();
-        String manufacturer = Build.MANUFACTURER.toLowerCase();
-        String product = Build.PRODUCT.toLowerCase();
-        String hardware = Build.HARDWARE.toLowerCase();
-        //TODO remove emulator weakening
-        boolean isEmulator = fingerprint.contains("generic") ||
-                            fingerprint.contains("unknown") ||
-                            model.contains("sdk") ||
-                            model.contains("emulator") ||
-                            manufacturer.contains("genymotion") ||
-                            product.contains("sdk") ||
-                            product.contains("vbox") ||
-                            hardware.contains("goldfish") ||
-                            hardware.contains("ranchu");
-        
-        // Only try StrongBox on real devices with Android 9+
-        boolean useStrongBox = !isEmulator &&
-                               android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P;
-        
-        if (useStrongBox) {
-            try {
-                builder.setIsStrongBoxBacked(true);
-                keyPairGenerator.initialize(builder.build());
-                KeyPair keyPair = keyPairGenerator.generateKeyPair();
-                Log.i(TAG, "Master key generated successfully using StrongBox");
-                return keyPair.getPrivate();
-            } catch (StrongBoxUnavailableException e) {
-                Log.w(TAG, "StrongBox not available, falling back to TEE", e);
-                // Rebuild without StrongBox
-                builder = new KeyGenParameterSpec.Builder(
-                    MASTER_KEY_ALIAS,
-                    KeyProperties.PURPOSE_SIGN
-                )
-                .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
-                .setDigests(KeyProperties.DIGEST_SHA256)
-                .setUserAuthenticationRequired(true);
-                
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    builder.setUserAuthenticationParameters(
-                        0,
-                        KeyProperties.AUTH_BIOMETRIC_STRONG
-                    );
-                }
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to generate master key with StrongBox", e);
+        try {
+            builder.setIsStrongBoxBacked(true);
+            keyPairGenerator.initialize(builder.build());
+            KeyPair keyPair = keyPairGenerator.generateKeyPair();
+            Log.i(TAG, "Master key generated successfully using StrongBox");
+            return keyPair.getPrivate();
+        } catch (StrongBoxUnavailableException e) {
+            Log.w(TAG, "StrongBox not available, falling back to TEE", e);
+            // Rebuild without StrongBox
+            builder = new KeyGenParameterSpec.Builder(
+                MASTER_KEY_ALIAS,
+                KeyProperties.PURPOSE_SIGN
+            )
+            .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256)
+            .setUserAuthenticationRequired(true);
+            
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                builder.setUserAuthenticationParameters(
+                    0,
+                    KeyProperties.AUTH_BIOMETRIC_STRONG
+                );
             }
-        } else {
-            Log.d(TAG, "Using TEE for master key (debug build or StrongBox not requested)");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to generate master key with StrongBox", e);
         }
-        
-        // Generate key with TEE (or after StrongBox fallback)
         keyPairGenerator.initialize(builder.build());
         KeyPair keyPair = keyPairGenerator.generateKeyPair();
         

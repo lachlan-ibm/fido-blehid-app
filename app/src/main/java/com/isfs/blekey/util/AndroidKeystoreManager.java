@@ -3,8 +3,10 @@
  */
 package com.isfs.blekey.util;
 
+import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.security.keystore.StrongBoxUnavailableException;
 import java.security.KeyStore;
 import java.security.KeyPairGenerator;
 import java.security.KeyPair;
@@ -38,22 +40,38 @@ public class AndroidKeystoreManager implements KeystoreManager {
         
         if (!keyStore.containsAlias(EC_KEYSTORE_ALIAS)) {
             logger.info("EC256 key not found, generating new key pair in Android Keystore");
-            
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                throw new IllegalStateException(
+                    "Platform key requires Android R (API 30) or higher.");
+            }
+
             KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE);
-            
-            KeyGenParameterSpec keySpec = new KeyGenParameterSpec.Builder(
+
+            KeyGenParameterSpec.Builder builder = new KeyGenParameterSpec.Builder(
                 EC_KEYSTORE_ALIAS,
                 KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_VERIFY | KeyProperties.PURPOSE_AGREE_KEY)
-                .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1")) // P-256 curve
+                .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
                 .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
-                .setUserAuthenticationRequired(false)
-                .build();
-            
-            keyPairGenerator.initialize(keySpec);
+                .setUserAuthenticationRequired(true)
+                .setUserAuthenticationParameters(15, KeyProperties.AUTH_BIOMETRIC_STRONG);
+
+            // Prefer StrongBox; fall back to TEE.
+            try {
+                builder.setIsStrongBoxBacked(true);
+                keyPairGenerator.initialize(builder.build());
+                KeyPair keyPair = keyPairGenerator.generateKeyPair();
+                logger.info("Platform key generated in StrongBox");
+                return keyPair;
+            } catch (StrongBoxUnavailableException e) {
+                logger.warn("StrongBox unavailable, falling back to TEE", e);
+                builder.setIsStrongBoxBacked(false);
+            }
+
+            keyPairGenerator.initialize(builder.build());
             KeyPair keyPair = keyPairGenerator.generateKeyPair();
-            
-            logger.info("Successfully generated new EC256 key pair in Android Keystore");
+            logger.info("Platform key generated in TEE");
             return keyPair;
         } else {
             logger.debug("Using existing EC256 key pair from Android Keystore");

@@ -380,44 +380,50 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
             showError("Passkey information not available");
             return;
         }
-        
+
         // Final expiration check before processing
         if (credentialOffer != null && credentialOffer.isExpired()) {
             showError("Credential offer has expired");
             return;
         }
-        
+
         stopExpirationCountdown();
-        
-        // Authenticate with biometrics before accessing master key
-        biometricAuthHelper.authenticateForIssuance(new BiometricAuthHelper.AuthenticationCallback() {
-            @Override
-            public void onAuthenticationSucceeded() {
-                Log.i(TAG, "Biometric authentication succeeded, proceeding with credential issuance");
-                setUiStateForProcessing(true);
-                executorService.execute(CredentialIssuanceActivity.this::processCredentialOffer);
-            }
-            
-            @Override
-            public void onAuthenticationFailed(String errorMessage) {
-                Log.e(TAG, "Biometric authentication failed: " + errorMessage);
-                runOnUiThread(() -> {
-                    showError("Authentication failed: " + errorMessage);
-                    setUiStateForProcessing(false);
-                });
-            }
-            
-            @Override
-            public void onAuthenticationCancelled() {
-                Log.i(TAG, "Biometric authentication cancelled by user");
-                runOnUiThread(() -> {
-                    Toast.makeText(CredentialIssuanceActivity.this,
-                                 "Authentication cancelled",
-                                 Toast.LENGTH_SHORT).show();
-                    setUiStateForProcessing(false);
-                });
-            }
-        });
+
+        // Must open a CryptoObject-bound biometric prompt so the TEE auth window
+        // is open when processCredentialOffer() calls into Passkey/KeyUtils operations
+        // that use the bio-gated platform key.
+        biometricAuthHelper.authenticate(
+            getString(R.string.bio_prompt_title),
+            "Authenticate to receive the credential",
+            new BiometricAuthHelper.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(
+                        androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                    Log.i(TAG, "Biometric authentication succeeded, proceeding with credential issuance");
+                    setUiStateForProcessing(true);
+                    // TEE window is open — safe to process the credential offer.
+                    executorService.execute(CredentialIssuanceActivity.this::processCredentialOffer);
+                }
+
+                @Override
+                public void onAuthenticationFailed(String errorMessage) {
+                    Log.e(TAG, "Biometric authentication failed: " + errorMessage);
+                    runOnUiThread(() -> {
+                        showError(getString(R.string.authentication_required));
+                        setUiStateForProcessing(false);
+                    });
+                }
+
+                @Override
+                public void onAuthenticationCancelled() {
+                    Log.i(TAG, "Biometric authentication cancelled by user");
+                    runOnUiThread(() -> {
+                        Toast.makeText(CredentialIssuanceActivity.this,
+                            getString(R.string.cancel), Toast.LENGTH_SHORT).show();
+                        setUiStateForProcessing(false);
+                    });
+                }
+            });
     }
     
     private void processCredentialOffer() {

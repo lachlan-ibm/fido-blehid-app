@@ -227,25 +227,30 @@ public class CredentialPresentationActivity extends AppCompatActivity {
             Toast.makeText(this, "No credential selected", Toast.LENGTH_SHORT).show();
             return;
         }
-        
-        biometricAuthHelper.authenticateForPresentation(new BiometricAuthHelper.AuthenticationCallback() {
-            @Override
-            public void onAuthenticationSucceeded() {
-                performPresentation();
-            }
-            
-            @Override
-            public void onAuthenticationFailed(String errorMessage) {
-                Toast.makeText(CredentialPresentationActivity.this, 
-                    R.string.authentication_required, Toast.LENGTH_LONG).show();
-            }
-            
-            @Override
-            public void onAuthenticationCancelled() {
-                Toast.makeText(CredentialPresentationActivity.this, 
-                    "Authentication cancelled", Toast.LENGTH_SHORT).show();
-            }
-        });
+
+        biometricAuthHelper.authenticate(
+            "Authenticate to Share Credential",
+            "Verify your identity to share your credential",
+            new BiometricAuthHelper.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(
+                        androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                    // TEE window is open — safe to derive holder binding key.
+                    performPresentation();
+                }
+
+                @Override
+                public void onAuthenticationFailed(String errorMessage) {
+                    Toast.makeText(CredentialPresentationActivity.this,
+                        R.string.authentication_required, Toast.LENGTH_LONG).show();
+                }
+
+                @Override
+                public void onAuthenticationCancelled() {
+                    Toast.makeText(CredentialPresentationActivity.this,
+                        getString(R.string.cancel), Toast.LENGTH_SHORT).show();
+                }
+            });
     }
     
     private void performPresentation() {

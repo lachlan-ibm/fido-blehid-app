@@ -63,7 +63,7 @@ public class PasskeyTest {
     public void setUp() throws Exception {
         // Initialize mock KeystoreManager for Passkey encryption operations
         KeystoreManager mockKeystoreManager = TestHelper.createMockKeystoreManager();
-        Passkey.setKeystoreManager(mockKeystoreManager);
+        KeyUtils.setKeystoreManager(mockKeystoreManager);
         
         // Generate a test PIN hash (32 bytes)
         testPinHash = new byte[32];
@@ -88,11 +88,11 @@ public class PasskeyTest {
      * Helper method to set the root key pair in the Passkey class using reflection
      */
     private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         rootPublicKeyField.set(null, publicKey);
         
-        Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
         rootPrivateKeyField.setAccessible(true);
         rootPrivateKeyField.set(null, privateKey);
     }
@@ -156,7 +156,7 @@ public class PasskeyTest {
         // so that ECDH encryption is used instead of KSM encryption
         KeystoreManager mockKsm = mock(KeystoreManager.class);
         when(mockKsm.isKeystoreAvailable()).thenReturn(false);
-        Passkey.setKeystoreManager(mockKsm);
+        KeyUtils.setKeystoreManager(mockKsm);
         
         byte[] pinHash = KeyUtils.getPinHash("nonce");
         List<Map<String, byte[]>> resCreds = new ArrayList<>();
@@ -227,7 +227,7 @@ public class PasskeyTest {
         // so that ECDH encryption is used instead of KSM encryption
         KeystoreManager mockKsm = mock(KeystoreManager.class);
         when(mockKsm.isKeystoreAvailable()).thenReturn(false);
-        Passkey.setKeystoreManager(mockKsm);
+        KeyUtils.setKeystoreManager(mockKsm);
         
         // Generate a passkey
         Passkey generatedPasskey = Passkey.generatePasskey(testPinHash, tempPasskeyFile);
@@ -268,7 +268,7 @@ public class PasskeyTest {
         // so that ECDH encryption is used instead of KSM encryption
         KeystoreManager mockKsm = mock(KeystoreManager.class);
         when(mockKsm.isKeystoreAvailable()).thenReturn(false);
-        Passkey.setKeystoreManager(mockKsm);
+        KeyUtils.setKeystoreManager(mockKsm);
         
         // Create a passkey
         Passkey passkey = createTestPasskey();
@@ -494,7 +494,7 @@ public class PasskeyTest {
         // so that ECDH encryption is used instead of KSM encryption
         KeystoreManager mockKsm = mock(KeystoreManager.class);
         when(mockKsm.isKeystoreAvailable()).thenReturn(false);
-        Passkey.setKeystoreManager(mockKsm);
+        KeyUtils.setKeystoreManager(mockKsm);
         
         // Create a passkey
         Passkey passkey = createTestPasskey();
@@ -585,7 +585,7 @@ public class PasskeyTest {
         public void setUp() throws Exception {
             // Initialize mock KeystoreManager for Passkey encryption operations
             KeystoreManager mockKeystoreManager = TestHelper.createMockKeystoreManager();
-            Passkey.setKeystoreManager(mockKeystoreManager);
+            KeyUtils.setKeystoreManager(mockKeystoreManager);
             
             // Generate a test PIN hash (32 bytes)
             testPinHash = new byte[32];
@@ -607,11 +607,11 @@ public class PasskeyTest {
          * Helper method to set the root key pair in the Passkey class using reflection
          */
         private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-            Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+            Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
             rootPublicKeyField.setAccessible(true);
             rootPublicKeyField.set(null, publicKey);
             
-            Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+            Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
             rootPrivateKeyField.setAccessible(true);
             rootPrivateKeyField.set(null, privateKey);
         }
@@ -726,7 +726,7 @@ public class PasskeyTest {
         public void setUp() throws Exception {
             // Initialize mock KeystoreManager for Passkey encryption operations
             KeystoreManager mockKeystoreManager = TestHelper.createMockKeystoreManager();
-            Passkey.setKeystoreManager(mockKeystoreManager);
+            KeyUtils.setKeystoreManager(mockKeystoreManager);
             
             // Create a temporary file for passkey storage
             tempPasskeyFile = tempFolder.newFile("test_pinhash_" + pinHashSize + ".passkey");
@@ -744,11 +744,11 @@ public class PasskeyTest {
          * Helper method to set the root key pair in the Passkey class using reflection
          */
         private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-            Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+            Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
             rootPublicKeyField.setAccessible(true);
             rootPublicKeyField.set(null, publicKey);
             
-            Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+            Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
             rootPrivateKeyField.setAccessible(true);
             rootPrivateKeyField.set(null, privateKey);
         }

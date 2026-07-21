@@ -61,7 +61,7 @@
                 android:tint="@color/device_connected" />
         </LinearLayout>
 
-        <!-- Auto-start toggle -->
+        <!-- Advanced configuration row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -73,14 +73,18 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/auto_start_on_boot"
+                android:text="@string/adv_config_row_label"
                 android:textSize="16sp"
                 android:textColor="@color/text_primary" />
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/autoStartSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
+            <ImageButton
+                android:id="@+id/advancedConfigButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_cog"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/adv_config_button_desc"
+                android:tint="@color/ibm_blue" />
         </LinearLayout>
 
         <TextView

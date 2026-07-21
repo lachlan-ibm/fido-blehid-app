@@ -49,7 +49,7 @@ public class PasskeyBranchTest {
     public void setUp() throws Exception {
         // Initialize mock KeystoreManager
         KeystoreManager mockKeystoreManager = TestHelper.createMockKeystoreManager();
-        Passkey.setKeystoreManager(mockKeystoreManager);
+        KeyUtils.setKeystoreManager(mockKeystoreManager);
         
         // Generate test PIN hash
         testPinHash = new byte[PIN_HASH_SIZE];
@@ -73,11 +73,11 @@ public class PasskeyBranchTest {
      * Helper method to set root key pair using reflection.
      */
     private void setRootKeyPair(PublicKey publicKey, PrivateKey privateKey) throws Exception {
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         rootPublicKeyField.set(null, publicKey);
         
-        Field rootPrivateKeyField = Passkey.class.getDeclaredField("rootPrivateKey");
+        Field rootPrivateKeyField = KeyUtils.class.getDeclaredField("rootPrivateKey");
         rootPrivateKeyField.setAccessible(true);
         rootPrivateKeyField.set(null, privateKey);
     }
@@ -111,12 +111,12 @@ public class PasskeyBranchTest {
         FileUtils.writePrivatePEM(rootKeyPair.getPrivate(), keyFile);
         
         // Call ensureRootKeyPair with the key file path
-        Method ensureRootKeyPair = Passkey.class.getDeclaredMethod("ensureRootKeyPair", String.class, String.class);
+        Method ensureRootKeyPair = KeyUtils.class.getDeclaredMethod("ensureRootKeyPair", String.class, String.class);
         ensureRootKeyPair.setAccessible(true);
         ensureRootKeyPair.invoke(null, keyFile.getAbsolutePath(), null);
         
         // Verify keys were loaded
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         PublicKey loadedPublicKey = (PublicKey) rootPublicKeyField.get(null);
         assertNotNull("Root public key should be loaded", loadedPublicKey);
@@ -128,7 +128,7 @@ public class PasskeyBranchTest {
      */
     @Test
     public void testResolveKeyFilePathEdgeCases() throws Exception {
-        Method resolveKeyFilePath = Passkey.class.getDeclaredMethod("resolveKeyFilePath", String.class);
+        Method resolveKeyFilePath = KeyUtils.class.getDeclaredMethod("resolveRootKeyFilePath", String.class);
         resolveKeyFilePath.setAccessible(true);
         
         // Test with custom path
@@ -366,17 +366,17 @@ public class PasskeyBranchTest {
         setRootKeyPair(null, null);
         
         // Initialize from file
-        boolean result = Passkey.initRootKeyPair(keyFile.getAbsolutePath(), null);
+        boolean result = KeyUtils.initRootKeyPair(keyFile.getAbsolutePath(), null);
         assertTrue("Should successfully initialize root key pair", result);
         
         // Verify keys were set
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         PublicKey loadedPublicKey = (PublicKey) rootPublicKeyField.get(null);
         assertNotNull("Root public key should be set", loadedPublicKey);
         
         // Test with non-existent file
-        boolean result2 = Passkey.initRootKeyPair("/nonexistent/path/key.pem", null);
+        boolean result2 = KeyUtils.initRootKeyPair("/nonexistent/path/key.pem", null);
         assertFalse("Should return false for non-existent file", result2);
     }
     
@@ -386,7 +386,7 @@ public class PasskeyBranchTest {
      */
     @Test
     public void testLoadExistingKey() throws Exception {
-        Method loadExistingKey = Passkey.class.getDeclaredMethod("loadExistingKey", String.class, String.class);
+        Method loadExistingKey = KeyUtils.class.getDeclaredMethod("loadExistingRootKey", String.class, String.class);
         loadExistingKey.setAccessible(true);
         
         // Create a temporary key file
@@ -400,7 +400,7 @@ public class PasskeyBranchTest {
         loadExistingKey.invoke(null, keyFile.getAbsolutePath(), null);
         
         // Verify keys were loaded
-        Field rootPublicKeyField = Passkey.class.getDeclaredField("rootPublicKey");
+        Field rootPublicKeyField = KeyUtils.class.getDeclaredField("rootPublicKey");
         rootPublicKeyField.setAccessible(true);
         PublicKey loadedPublicKey = (PublicKey) rootPublicKeyField.get(null);
         assertNotNull("Root public key should be loaded", loadedPublicKey);

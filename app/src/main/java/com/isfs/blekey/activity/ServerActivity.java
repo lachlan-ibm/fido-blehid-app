@@ -7,10 +7,6 @@ import com.isfs.blekey.BootReceiver;
 import com.isfs.blekey.hidsvc.BTHIDService;
 import com.isfs.blekey.hidsvc.HIDForegroundService;
 
-import androidx.appcompat.widget.SwitchCompat;
-import android.widget.CompoundButton;
-import android.content.SharedPreferences;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,7 +25,6 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.Manifest;
-import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -61,8 +56,11 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AlertDialog.Builder;
 
 import com.isfs.blekey.util.FileUtils;
+import com.isfs.blekey.util.BiometricAuthHelper;
 import com.isfs.blekey.hidsvc.DeviceStateManager;
 import com.isfs.blekey.MainActivity;
+import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import androidx.biometric.BiometricPrompt;
 
 import androidx.annotation.Nullable;
 
@@ -80,6 +78,7 @@ import androidx.annotation.Nullable;
  */
 public class ServerActivity extends AppCompatActivity
         implements HIDForegroundService.UpActivityDelegate,
+                   HIDForegroundService.BiometricDelegate,
                    HIDForegroundService.CancelListener,
                    HIDForegroundService.TimeoutListener {
 
@@ -249,6 +248,7 @@ public class ServerActivity extends AppCompatActivity
                 upsertDevice(addr, name, DeviceStatus.CONNECTED);
                 saveDeviceState(addr, name, DeviceStatus.CONNECTED);
                 appendLog(getString(R.string.log_device_connected, name));
+                updateBtStatusIcon();
                 
                 // Initiate HID connection after Bluetooth profile connection
                 if (passkeyService != null) {
@@ -274,6 +274,7 @@ public class ServerActivity extends AppCompatActivity
                 upsertDevice(addr, name, DeviceStatus.DISCONNECTED);
                 saveDeviceState(addr, name, DeviceStatus.DISCONNECTED);
                 appendLog(getString(R.string.log_device_disconnected, name));
+                updateBtStatusIcon();
             });
         }
 
@@ -290,6 +291,7 @@ public class ServerActivity extends AppCompatActivity
                 upsertDevice(addr, name, DeviceStatus.ERROR);
                 saveDeviceState(addr, name, DeviceStatus.ERROR);
                 appendLog("[ERROR] " + name);
+                updateBtStatusIcon();
             });
         }
 
@@ -306,6 +308,7 @@ public class ServerActivity extends AppCompatActivity
                 upsertDevice(addr, name, DeviceStatus.HID_ENUMERATED);
                 saveDeviceState(addr, name, DeviceStatus.HID_ENUMERATED);
                 appendLog(name + ": HID service discovered");
+                updateBtStatusIcon();
             });
         }
 
@@ -322,6 +325,7 @@ public class ServerActivity extends AppCompatActivity
                 upsertDevice(addr, name, DeviceStatus.HID_ACTIVE);
                 saveDeviceState(addr, name, DeviceStatus.HID_ACTIVE);
                 appendLog(name + ": HID ready for input");
+                updateBtStatusIcon();
             });
         }
     }
@@ -348,6 +352,9 @@ public class ServerActivity extends AppCompatActivity
 
     private boolean isInForeground = false;
     private AlertDialog userPresenceDialog = null;
+
+    /** Used to show biometric prompts for TEE-gated platform key operations. */
+    private BiometricAuthHelper biometricHelper;
 
     /**
      * Reconciles device states by comparing persisted state with current BT state.
@@ -585,6 +592,9 @@ public class ServerActivity extends AppCompatActivity
                 reconcileDeviceStates();
             }
 
+            // Reflect service-up state in BT icon (amber = advertising, no device yet)
+            updateBtStatusIcon();
+
             // Register this activity as the UI delegate so the service can call
             // showUpDialog() when a UP ceremony begins while we are visible.
             foregroundService.setActivityDelegate(ServerActivity.this);
@@ -642,7 +652,6 @@ public class ServerActivity extends AppCompatActivity
     private TextView noDevicesText;
     private TextView activityLogText;
     private TextView bleDeviceNameText;
-    private SwitchCompat autoStartSwitch;
     private android.widget.ImageView btStatusIcon;
 
     /** Ordered map: device address -> DeviceItem, preserves insertion order. */
@@ -662,11 +671,12 @@ public class ServerActivity extends AppCompatActivity
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_server);
 
+        biometricHelper = new BiometricAuthHelper(this);
+
         devicesList = findViewById(R.id.devicesList);
         noDevicesText = findViewById(R.id.noDevicesText);
         activityLogText = findViewById(R.id.activityLogText);
         bleDeviceNameText = findViewById(R.id.bleDeviceNameText);
-        autoStartSwitch = findViewById(R.id.autoStartSwitch);
         btStatusIcon = findViewById(R.id.btStatusIcon);
         updateBleDeviceNameDisplay();
         updateBtStatusIcon();
@@ -677,7 +687,8 @@ public class ServerActivity extends AppCompatActivity
         // Initialize state manager
         stateManager = new DeviceStateManager(this);
 
-        setupAutoStartSwitch();
+        findViewById(R.id.advancedConfigButton).setOnClickListener(v ->
+                startActivity(new Intent(this, AdvancedConfigActivity.class)));
 
         findViewById(R.id.backButton).setOnClickListener(view -> {
             unbindFromService();
@@ -756,31 +767,47 @@ public class ServerActivity extends AppCompatActivity
      * Starts the HID foreground service and binds to it.
      */
     private void startHIDForegroundService() {
+        if (serviceBound) return;
+
         Intent serviceIntent = new Intent(this, HIDForegroundService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {
             startService(serviceIntent);
         }
-        
-        if (autoStartSwitch != null && autoStartSwitch.isChecked()) {
-            BootReceiver.enableAutoStart(this);
-        }
+        BootReceiver.enableAutoStart(this);
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
     }
     
     /**
-     * Updates the Bluetooth status icon based on adapter state.
+     * Updates the Bluetooth status icon colour to reflect service/advertising state:
+     *  - Green  (device_connected)    — HID service is running and at least one device is active
+     *  - Amber  (device_error)        — BT on, service running, but no device connected yet
+     *  - Grey   (device_disconnected) — BT off / service not available
      */
     private void updateBtStatusIcon() {
         if (btStatusIcon == null) return;
-        
-        boolean btEnabled = BTHIDService.isBluetoothEnabled(this);
-        if (btEnabled) {
-            btStatusIcon.setColorFilter(getColor(R.color.device_connected));
-        } else {
-            btStatusIcon.setColorFilter(getColor(R.color.device_error));
+
+        if (!BTHIDService.isBluetoothEnabled(this)) {
+            btStatusIcon.setColorFilter(getColor(R.color.device_disconnected));
+            return;
         }
+
+        // Determine if any device is connected/active via the service
+        boolean anyConnected = false;
+        if (passkeyService != null) {
+            for (DeviceItem item : deviceItems) {
+                if (item.status == DeviceStatus.HID_ACTIVE
+                        || item.status == DeviceStatus.HID_ENUMERATED
+                        || item.status == DeviceStatus.CONNECTED) {
+                    anyConnected = true;
+                    break;
+                }
+            }
+        }
+
+        btStatusIcon.setColorFilter(getColor(
+                anyConnected ? R.color.device_connected : R.color.device_error));
     }
 
     /**
@@ -1135,30 +1162,6 @@ public class ServerActivity extends AppCompatActivity
     }
 
     /**
-     * Sets up the auto-start toggle switch.
-     */
-    private void setupAutoStartSwitch() {
-        if (autoStartSwitch == null) return;
-        
-        SharedPreferences prefs = getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE);
-        boolean autoStartEnabled = prefs.getBoolean("auto_start_enabled", true);
-        autoStartSwitch.setChecked(autoStartEnabled);
-        
-        autoStartSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                if (isChecked) {
-                    BootReceiver.enableAutoStart(ServerActivity.this);
-                    appendLog("Auto-start enabled");
-                } else {
-                    BootReceiver.disableAutoStart(ServerActivity.this);
-                    appendLog("Auto-start disabled");
-                }
-            }
-        });
-    }
-
-    /**
      * Called when the activity returns to the foreground.
      * Reconciles device states to handle changes that occurred while in background
      * (e.g., device unpaired, disconnected, etc.)
@@ -1168,6 +1171,7 @@ public class ServerActivity extends AppCompatActivity
         super.onResume();
         isInForeground = true;
         Log.d(TAG, "onResume - reconciling device states");
+        updateBtStatusIcon();
         if (serviceBound && passkeyService != null && stateManager != null) {
             reconcileDeviceStates();
         }
@@ -1240,6 +1244,36 @@ public class ServerActivity extends AppCompatActivity
                 foregroundService.postUpNotificationPublic();
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // HIDForegroundService.BiometricDelegate
+    // -------------------------------------------------------------------------
+
+    /**
+     * Called on the UI thread by {@link HIDForegroundService.SecureStorageHandler} when a
+     * CTAP command needs the bio-gated platform key.
+     */
+    @Override
+    public void showBiometricPrompt(AuthenticatorAPI.PlatformKeyContext ctx) {
+        biometricHelper.authenticate(
+            getString(R.string.bio_prompt_title),
+            getString(R.string.bio_prompt_subtitle),
+            new BiometricAuthHelper.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                    ctx.onUnlocked();
+                }
+                @Override
+                public void onAuthenticationFailed(String errorMessage) {
+                    ctx.onFailed();
+                }
+                @Override
+                public void onAuthenticationCancelled() {
+                    ctx.onFailed();
+                }
+            }
+        );
     }
 
     // -------------------------------------------------------------------------

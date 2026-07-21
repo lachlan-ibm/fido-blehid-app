@@ -29,6 +29,7 @@ import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.oidc.CredentialOffer;
 import com.isfs.blekey.oidc.IssuerMetadata;
 import com.isfs.blekey.oidc.OidcException;
+import com.isfs.blekey.util.BiometricAuthHelper;
 import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.http.HttpClient;
@@ -175,6 +176,7 @@ public class ManageActivity extends AppCompatActivity {
     private String rpId;
     private File selectedPasskeyFile;
     private int selectedPosition = -1;
+    private BiometricAuthHelper biometricAuthHelper;
     
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
@@ -193,8 +195,10 @@ public class ManageActivity extends AppCompatActivity {
         // Register activity result launcher for credential issuance
         registerCredentialIssuanceLauncher();
         
+        biometricAuthHelper = new BiometricAuthHelper(this);
+
         initializeUIComponents();
-        
+
         handleCredentialFlowIntent(getIntent());
         loadPasskeys();
         setupEventListeners();
@@ -858,30 +862,55 @@ public class ManageActivity extends AppCompatActivity {
     
     /**
      * Validates the entered password and launches the appropriate activity.
-     * Uses SHA-256 to hash the password to decrypt the passkey file.
+     * Opens a biometric prompt to set the TEE auth window before calling Passkey.openKey().
      */
     private void validatePassword() {
         String enteredPassword = passwordInput.getText().toString();
         byte[] pinHash = KeyUtils.getPinHash(enteredPassword);
-        
+
+        biometricAuthHelper.authenticate(
+            getString(R.string.bio_prompt_title),
+            getString(R.string.bio_prompt_subtitle),
+            new BiometricAuthHelper.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(
+                        androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                    // TEE auth window is now open — safe to call Passkey.openKey().
+                    runOnUiThread(() -> completePasswordValidation(pinHash));
+                }
+
+                @Override
+                public void onAuthenticationFailed(String errorMessage) {
+                    runOnUiThread(() -> Toast.makeText(ManageActivity.this,
+                        R.string.authentication_required, Toast.LENGTH_LONG).show());
+                }
+
+                @Override
+                public void onAuthenticationCancelled() {
+                    runOnUiThread(() -> Toast.makeText(ManageActivity.this,
+                        getString(R.string.cancel), Toast.LENGTH_SHORT).show());
+                }
+            });
+    }
+
+    /**
+     * Called on the UI thread after the CryptoObject biometric succeeds.
+     * TEE auth window is open — safe to call Passkey.openKey() / writeKey().
+     */
+    private void completePasswordValidation(byte[] pinHash) {
         Passkey passkey = Passkey.openKey(pinHash, selectedPasskeyFile);
-        
+
         if (passkey == null) {
             handleInvalidPassword();
             return;
         }
-        
-        // Update the passkey file header with the current PIN hash
-        // This ensures the cached upper hash matches the current PIN
-        // This is critical after app reinstalls or when the header is out of date
+
         Log.d(TAG, "Updating passkey header after successful unlock");
         boolean updated = Passkey.writeKey(passkey, pinHash, selectedPasskeyFile);
         if (!updated) {
             Log.w(TAG, "Failed to update passkey header, but passkey is still usable");
-        } else {
-            Log.d(TAG, "Passkey header updated successfully");
         }
-        
+
         Toast.makeText(this, getString(R.string.wallet_unlocked), Toast.LENGTH_SHORT).show();
         hideKeyboard();
         launchAppropriateActivity(pinHash);

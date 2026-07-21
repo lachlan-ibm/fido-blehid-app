@@ -102,6 +102,14 @@
             android:screenOrientation="portrait"
             android:theme="@style/AppTheme.NoActionBar" />
             
+        <!-- Advanced Configuration Activity -->
+        <activity
+            android:name=".activity.AdvancedConfigActivity"
+            android:label="@string/adv_config_title"
+            android:exported="false"
+            android:parentActivityName=".activity.ServerActivity"
+            android:theme="@style/AppTheme.MaterialNoActionBar" />
+
         <!-- Deep Link Handler for QR Code Scanning -->
         <activity
             android:name="com.isfs.blekey.activity.CredentialHandlerActivity"
@@ -134,12 +142,6 @@
             </intent-filter>
         </activity>
             
-        <!-- Notify when a device connects to the app -->
-        <service
-            android:name=".ForegroundNotificationService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
-
         <!-- HID Foreground Service for persistent classic Bluetooth HID device -->
         <service
             android:name=".hidsvc.HIDForegroundService"

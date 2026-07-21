@@ -139,12 +139,19 @@ public class TestHelper {
      */
     public static KeystoreManager createMockKeystoreManager() throws Exception {
         KeystoreManager mock = mock(KeystoreManager.class);
-        
+
         // Configure mock to return false for keystore availability
         // This forces the code to use ECDH encryption with the platform key,
         // which produces consistent 230-byte headers for 16-byte plaintext
         when(mock.isKeystoreAvailable()).thenReturn(false);
-        
+
+        // Provide a real EC key pair so derivePasskeySeedDeferred can perform
+        // the ECDH self-agreement (privKey × ownPubKey) that replaced getEncoded().
+        // Both halves must come from the same pair so the agreement is consistent.
+        KeyPair ecKeyPair = KeyPairGenerator.getInstance("EC").generateKeyPair();
+        when(mock.getEC256PrivateKey()).thenReturn(ecKeyPair.getPrivate());
+        when(mock.getEC256PublicKey()).thenReturn(ecKeyPair.getPublic());
+
         return mock;
     }
 }

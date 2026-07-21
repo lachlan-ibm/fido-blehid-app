@@ -203,6 +203,15 @@ public class CtapHid {
                 txn.setUserPresent(true);
                 logger.debug("Preserved userPresent=true when updating CID transaction");
             }
+            // Preserve bio-verified state and cached IKM so subsequent commands skip re-challenge.
+            if (existingTxn.isBioVerified()) {
+                txn.setBioVerified(true);
+                logger.debug("Preserved bioVerified=true when updating CID transaction");
+            }
+            if (existingTxn.getPlatformIkm() != null) {
+                txn.setPlatformIkm(existingTxn.getPlatformIkm());
+                logger.debug("Preserved platformIkm when updating CID transaction");
+            }
         } else {
             logger.warn("=== PIN HASH TRACKING: No existing transaction found for CID!");
         }

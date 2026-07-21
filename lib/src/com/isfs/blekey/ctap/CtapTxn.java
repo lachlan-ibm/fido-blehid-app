@@ -76,6 +76,20 @@ public class CtapTxn {
     private boolean userPresent = false;
 
     /**
+     * True once the platform key TEE auth window has been successfully opened on
+     * this channel. Allows makeCredential / getAssertion / getTkn to skip bio re-challenge.
+     */
+    private boolean bioVerified = false;
+
+    /**
+     * Raw ECDH IKM derived during the first bio-gate opening on this channel.
+     * Cached so subsequent CTAP commands can recompute the HKDF seed without re-bio.
+     * Null until the first successful bio-gate on this CID.
+     * Must NOT be serialised to disk.
+     */
+    private byte[] platformIkm = null;
+
+    /**
      * The CtapHid instance whose response is deferred pending user presence.
      * Null when no deferred command is outstanding.
      */
@@ -306,6 +320,34 @@ public class CtapTxn {
     public void setUserPresent(boolean v) {
         this.userPresent = v;
     }
+
+    /**
+     * Returns true if the platform key TEE auth window has been opened on this channel.
+     *
+     * @return true if bio-verified
+     */
+    public boolean isBioVerified() { return bioVerified; }
+
+    /**
+     * Sets the bio-verified flag.
+     *
+     * @param v true to mark the channel as bio-verified
+     */
+    public void setBioVerified(boolean v) { this.bioVerified = v; }
+
+    /**
+     * Gets the cached ECDH IKM for this channel.
+     *
+     * @return A copy of the platform IKM, or null if not yet derived
+     */
+    public byte[] getPlatformIkm() { return platformIkm != null ? platformIkm.clone() : null; }
+
+    /**
+     * Caches the ECDH IKM for this channel.
+     *
+     * @param ikm The IKM to cache (defensive copy is made)
+     */
+    public void setPlatformIkm(byte[] ikm) { this.platformIkm = ikm != null ? ikm.clone() : null; }
 
     /**
      * Stores the deferred CtapHid command awaiting user presence resolution.

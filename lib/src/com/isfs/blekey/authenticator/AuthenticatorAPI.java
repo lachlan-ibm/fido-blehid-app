@@ -11,6 +11,10 @@ import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.ByteUtils;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.data.Passkey;
 
 import java.io.File;
@@ -25,6 +29,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Signature;
 import java.security.interfaces.ECPrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -87,6 +92,71 @@ public class AuthenticatorAPI {
         userPresenceCallback = cb;
     }
 
+    // -------------------------------------------------------------------------
+    // SecureStorageCallback — TEE / biometric gate for the platform key
+    // -------------------------------------------------------------------------
+
+    /**
+     * Callback fired when the platform key is needed for HKDF derivation.
+     * The app layer must show a biometric prompt bound to the supplied Signature,
+     * then call {@link PlatformKeyContext#onUnlocked()} or {@link PlatformKeyContext#onFailed()}.
+     */
+    public interface SecureStorageCallback {
+        void onPlatformKeyRequired(PlatformKeyContext ctx);
+    }
+
+    /** Context passed to {@link SecureStorageCallback}. */
+    public static final class PlatformKeyContext {
+        private final Runnable onUnlocked;
+        private final Runnable onFailed;
+        private final java.security.Signature signature;
+        private final AtomicBoolean delivered = new AtomicBoolean(false);
+
+        public PlatformKeyContext(Signature sig, Runnable onUnlocked, Runnable onFailed) {
+            this.signature  = sig;
+            this.onUnlocked = onUnlocked;
+            this.onFailed   = onFailed;
+        }
+
+        /** The Signature pre-initialised with the platform key — wrap in a CryptoObject. */
+        public java.security.Signature getSignature() { return signature; }
+
+        /** Call once biometric succeeds (from UI thread is fine). */
+        public void onUnlocked() {
+            if (delivered.compareAndSet(false, true)) onUnlocked.run();
+        }
+
+        /** Call on failure or cancellation. */
+        public void onFailed() {
+            if (delivered.compareAndSet(false, true)) onFailed.run();
+        }
+    }
+
+    private static volatile SecureStorageCallback secureStorageCallback = null;
+
+    public static void setSecureStorageCallback(SecureStorageCallback cb) {
+        secureStorageCallback = cb;
+    }
+
+    // -------------------------------------------------------------------------
+    // DeferredResponseSender — send-back shim (keeps lib free of Android APIs)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Thin send-back shim passed into every deferred CTAP operation.
+     * Implemented by HIDForegroundService; keeps AuthenticatorAPI free of any
+     * reference to HIDPasskey or Android APIs.
+     */
+    public interface DeferredResponseSender {
+        void send(CtapTxn txn, byte[] response);
+    }
+
+    private static volatile DeferredResponseSender deferredResponseSender = null;
+
+    public static void setDeferredResponseSender(DeferredResponseSender sender) {
+        deferredResponseSender = sender;
+    }
+
     /**
      * Public wrapper over the private {@link #error(Ctap2StatusCode)} method.
      * Used by the Android layer when it needs to build an error response byte
@@ -116,6 +186,24 @@ public class AuthenticatorAPI {
      */
     private static Map<byte[], Passkey> openKeys = new HashMap<>();
 
+    /** App configuration used for all credential key derivation. Thread-safe via volatile. */
+    private static volatile AppConfig appConfig = AppConfig.getDefault();
+
+    /**
+     * Sets the App configuration.  Call from the app layer before any CTAP ceremony begins,
+     * typically in {@code HIDForegroundService.onCreate()} after loading SharedPreferences.
+     *
+     * @param config non-null config; passing null resets to the built-in default.
+     */
+    public static void setAppConfig(AppConfig config) {
+        appConfig = (config != null) ? config : AppConfig.getDefault();
+    }
+
+    /** Returns the active App configuration. */
+    public static AppConfig getAppConfig() {
+        return appConfig;
+    }
+
     /**
      * Supported COSE algorithm identifiers.
      * ES256 (-7) is the primary algorithm for FIDO2.
@@ -132,10 +220,10 @@ public class AuthenticatorAPI {
      * ThreadLocal cache for HmacSHA256 Mac instances to avoid expensive getInstance() calls.
      * Each thread gets its own instance, eliminating synchronization overhead.
      */
-    private static final ThreadLocal<javax.crypto.Mac> HMAC_SHA256 =
+    private static final ThreadLocal<Mac> HMAC_SHA256 =
         ThreadLocal.withInitial(() -> {
             try {
-                return javax.crypto.Mac.getInstance("HmacSHA256");
+                return Mac.getInstance("HmacSHA256");
             } catch (NoSuchAlgorithmException e) {
                 throw new RuntimeException("HmacSHA256 algorithm not available", e);
             }
@@ -636,7 +724,7 @@ public class AuthenticatorAPI {
         int EXCLUDE_LIST = 0x05;
         int OPTIONS = 0x07;
         int PIN_UV_AUTH_PARAM = 0x08;
-        int PIN_UV_AUTH_PROTOCOL = 0x09;
+        //int PIN_UV_AUTH_PROTOCOL = 0x09;
     }
 
     /**
@@ -1116,12 +1204,297 @@ public class AuthenticatorAPI {
             return error(validation.errorCode);
         }
         logger.debug("Creating credential of type: {}", validation.type);
-        
-        try {
-            return executeMakeCredential(validation, txn, req);
-        } catch (Exception e) {
-            logger.error("makeCredential exception: {}", e.getMessage(), e);
+
+        // All makeCredential paths touch the platform key (HKDF seed derivation or
+        // attestation key). Defer the entire operation behind the biometric gate.
+        PrivateKey platformKey = KeyUtils.getPlatformKey();
+        if (platformKey == null) return error(Ctap2StatusCode.OTHER);
+
+        byte[] rpIdBytes = extractRpIdBytes(req.get(MakeCredentialKeys.RP));
+        final CredentialValidationResult valFinal = validation;
+        final Map<Integer, Object> reqFinal = req;
+
+        derivePasskeySeedDeferred(txn, platformKey, rpIdBytes,
+            seed -> {
+                try {
+                    byte[] response = executeMakeCredential(valFinal, txn, reqFinal);
+                    if (deferredResponseSender != null) deferredResponseSender.send(txn, response);
+                } catch (Exception e) {
+                    logger.error("makeCredential deferred resume failed", e);
+                    if (deferredResponseSender != null)
+                        deferredResponseSender.send(txn, error(Ctap2StatusCode.OTHER));
+                }
+            },
+            () -> {
+                if (deferredResponseSender != null)
+                    deferredResponseSender.send(txn, error(Ctap2StatusCode.OPERATION_DENIED));
+            }
+        );
+        return null; // deferred — CtapHid must not send a synchronous reply
+    }
+
+    /**
+     * Executes makeCredential after the biometric gate has opened.
+     * Verifies the PIN token if supplied, then builds and returns the credential response.
+     */
+    private static byte[] executeMakeCredential(
+            CredentialValidationResult validation,
+            CtapTxn txn,
+            Map<Integer, Object> req) throws Exception {
+
+        // Verify the PIN token whenever a pinUvAuthParam was supplied (key 0x08),
+        // regardless of whether options.uv is explicitly set — presence of a PIN
+        // token is itself evidence of UV (CTAP2 §6.1.2).
+        PinUvAuthResult pinUvResult;
+        CredentialOptions options = parseOptions(req);
+        if (options.uv || req.containsKey(MakeCredentialKeys.PIN_UV_AUTH_PARAM)) {
+            pinUvResult = verifyPinUvAuth(req, txn);
+            if (pinUvResult.errorCode != null) {
+                return error(pinUvResult.errorCode);
+            }
+        } else {
+            pinUvResult = PinUvAuthResult.NO_VERIFICATION;
+        }
+        logger.info("executeMakeCredential: req.uv={}; user verified={}", options.uv, pinUvResult.userVerified);
+        AttestationMaterial attestation = loadAttestationMaterial(validation.type, txn);
+        Fido2Authenticator authenticator = validateAndCreateAuthenticator(txn, req);
+        if (authenticator == null) {
             return error(Ctap2StatusCode.OTHER);
+        }
+        CredentialCreationResult credentialResult = buildCredentialData(req, authenticator, attestation);
+        if (!credentialResult.isSuccess()) {
+            return error(credentialResult.errorCode);
+        }
+        Ctap2StatusCode storeError = handleResidentCredentialStorage(
+            validation.type, req, authenticator, txn);
+        if (storeError != null) {
+            return error(storeError);
+        }
+        return buildMakeCredentialResponse(
+            credentialResult.authenticatorData,
+            credentialResult.attestationStatement
+        );
+    }
+
+    private static Fido2Authenticator validateAndCreateAuthenticator(
+            CtapTxn txn,
+            Map<Integer, Object> req) {
+        try {
+            Fido2Authenticator a = new Fido2Authenticator();
+            byte[] rpIdBytes = extractRpIdBytes(req.get(MakeCredentialKeys.RP));
+
+            if (txn.getPasskey() != null) { // UV / resident path: seed from the .passkey key.
+                configureCredentialAnchor(a, txn.getPasskey().getPrivateKey(), rpIdBytes);
+            } else { // Use the ECDH IKM that derivePasskeySeedDeferred cached on txn after bio.
+                a.setSymKeys(KeyUtils.getPasskeySeed(rpIdBytes, txn.getPlatformIkm(), appConfig));
+            }
+            return a;
+
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            logger.error("Authenticator creation failed: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            logger.error("Unexpected error creating authenticator", e);
+            throw new RuntimeException("Failed to create authenticator: " + e.getMessage(), e);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // openPlatformKeyDeferred — shared TEE gate for getTkn, makeCredential, getAssertion
+    // -------------------------------------------------------------------------
+
+    /**
+     * Opens the platform key TEE auth window, derives and caches the ECDH IKM on {@code txn},
+     * then invokes {@code onUnlocked} synchronously on the bio callback thread.
+     *
+     * <p>If the CID is already bio-verified (IKM cached on {@code txn}), {@code onUnlocked}
+     * is called immediately on the calling thread without a new biometric prompt.</p>
+     *
+     * <p>Returns {@code true} always (response is deferred like
+     * {@link #derivePasskeySeedDeferred}); callers must send responses via
+     * {@link DeferredResponseSender#send}.</p>
+     */
+    private static boolean openPlatformKeyDeferred(
+            CtapTxn txn,
+            Runnable onUnlocked,
+            Runnable onFailed) {
+
+        // Fast path: already verified on this CID — skip bio prompt entirely.
+        if (txn != null && txn.isBioVerified() && txn.getPlatformIkm() != null) {
+            logger.debug("openPlatformKeyDeferred: CID already bio-verified — skipping bio prompt");
+            onUnlocked.run();
+            return true;
+        }
+
+        if (secureStorageCallback == null) {
+            logger.warn("openPlatformKeyDeferred: no SecureStorageCallback — denying");
+            onFailed.run();
+            return true;
+        }
+
+        PrivateKey privKey = KeyUtils.getPlatformKey();
+        if (privKey == null) { onFailed.run(); return true; }
+
+        java.security.PublicKey pubKey;
+        try {
+            pubKey = KeyUtils.getKeystoreManager().getEC256PublicKey();
+        } catch (Exception e) {
+            logger.error("openPlatformKeyDeferred: failed to retrieve public key", e);
+            onFailed.run();
+            return true;
+        }
+
+        java.security.Signature sig;
+        try {
+            sig = java.security.Signature.getInstance("SHA256withECDSA");
+        } catch (Exception e) {
+            logger.error("openPlatformKeyDeferred: failed to get Signature instance", e);
+            onFailed.run();
+            return true;
+        }
+
+        secureStorageCallback.onPlatformKeyRequired(new PlatformKeyContext(
+            sig,
+            () -> {
+                // TEE window is now open — initSign is safe only from here.
+                try {
+                    sig.initSign(privKey);
+                } catch (Exception e) {
+                    logger.error("openPlatformKeyDeferred: initSign failed after bio auth", e);
+                    onFailed.run();
+                    return;
+                }
+                // Derive and cache IKM so subsequent commands on the same CID skip re-bio.
+                try {
+                    javax.crypto.KeyAgreement ka = javax.crypto.KeyAgreement.getInstance("ECDH");
+                    ka.init(privKey);
+                    ka.doPhase(pubKey, true);
+                    byte[] ikm = ka.generateSecret();
+                    if (txn != null) {
+                        txn.setPlatformIkm(ikm);
+                        txn.setBioVerified(true);
+                    }
+                } catch (Exception e) {
+                    logger.warn("openPlatformKeyDeferred: IKM derivation failed (non-fatal)", e);
+                    // TEE window is still open even if ECDH caching failed; proceed.
+                }
+                onUnlocked.run();
+            },
+            onFailed
+        ));
+        return true;
+    }
+
+    /**
+     * Defers HKDF seed derivation behind a biometric gate.
+     *
+     * <p>If {@code txn} already has a cached platform IKM (bio-verified on this CID),
+     * the seed is derived immediately on the calling thread without a new biometric prompt.</p>
+     *
+     * <p>Pre-initialises a {@link java.security.Signature} with the bio-gated platform key
+     * (safe before auth), fires {@link SecureStorageCallback}, and resumes in the
+     * {@code onSeed} lambda after the user authenticates.</p>
+     *
+     * <p>If {@code secureStorageCallback} is null the request is denied immediately —
+     * there is no synchronous fallback.</p>
+     */
+    private static boolean derivePasskeySeedDeferred(
+            CtapTxn txn,
+            PrivateKey privKey,
+            byte[] rpIdBytes,
+            Consumer<String> onSeed,
+            Runnable onError) {
+
+        // Fast path: if a prior command on this CID already derived the IKM, reuse it
+        // without another biometric challenge.
+        if (txn != null && txn.isBioVerified() && txn.getPlatformIkm() != null) {
+            logger.debug("derivePasskeySeedDeferred: CID already bio-verified — using cached IKM");
+            try {
+                String seed = KeyUtils.getPasskeySeed(rpIdBytes, txn.getPlatformIkm(), appConfig);
+                if (seed != null) { onSeed.accept(seed); return true; }
+                else              { onError.run();        return true; }
+            } catch (Exception e) {
+                logger.warn("derivePasskeySeedDeferred: cached-IKM seed derivation failed — falling through to bio", e);
+                // Fall through to full bio path
+            }
+        }
+
+        if (secureStorageCallback == null) {
+            logger.warn("derivePasskeySeedDeferred: no SecureStorageCallback — denying");
+            onError.run();
+            return true;
+        }
+
+        // Fetch the public key now, before the async callback, so the lambda
+        // captures a plain PublicKey (no TEE access needed after bio succeeds).
+        java.security.PublicKey pubKey;
+        try {
+            pubKey = KeyUtils.getKeystoreManager().getEC256PublicKey();
+        } catch (Exception e) {
+            logger.error("derivePasskeySeedDeferred: failed to retrieve platform public key", e);
+            onError.run();
+            return true;
+        }
+
+        try {
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withECDSA");
+            sig.initSign(privKey); // safe before auth on a bio-gated key
+
+            secureStorageCallback.onPlatformKeyRequired(new PlatformKeyContext(
+                sig,
+                () -> {
+                    // Bio succeeded — TEE auth window is now open.
+                    // Step 1: Reconstruct full 32-byte PIN hash while TEE window is open.
+                    // Must happen BEFORE ka.init() consumes the auth window's operation count.
+                    byte[] currentPinHash = txn != null ? txn.getPinHash() : null;
+                    if (currentPinHash != null && currentPinHash.length == 16) {
+                        try {
+                            java.io.File pkFile = resolvePasskeyFile(txn);
+                            if (pkFile != null) {
+                                byte[] upperHashEnc = FileUtils.readFileBytes(
+                                    FileUtils.getStashFile(pkFile));
+                                byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashEnc);
+                                if (upperHash != null && upperHash.length == 16) {
+                                    byte[] fullHash = new byte[32];
+                                    System.arraycopy(currentPinHash, 0, fullHash, 0, 16);
+                                    System.arraycopy(upperHash,      0, fullHash, 16, 16);
+                                    txn.setPinHash(fullHash);
+                                    logger.debug("derivePasskeySeedDeferred: reconstructed full 32-byte PIN hash");
+                                }
+                            }
+                        } catch (Exception e) {
+                            logger.warn("derivePasskeySeedDeferred: could not reconstruct full PIN hash (non-fatal)", e);
+                        }
+                    }
+
+                    // Step 2: Derive IKM via ECDH self-agreement (consumes TEE auth window use).
+                    try {
+                        javax.crypto.KeyAgreement ka = javax.crypto.KeyAgreement.getInstance("ECDH");
+                        ka.init(privKey);             // uses the TEE auth window
+                        ka.doPhase(pubKey, true);
+                        byte[] ikm = ka.generateSecret();
+
+                        // Step 3: Cache IKM on txn so subsequent commands on this CID skip bio.
+                        if (txn != null) {
+                            txn.setPlatformIkm(ikm);
+                            txn.setBioVerified(true);
+                        }
+
+                        String seed = KeyUtils.getPasskeySeed(rpIdBytes, ikm, appConfig);
+                        if (seed != null) onSeed.accept(seed);
+                        else              onError.run();
+                    } catch (Exception e) {
+                        logger.error("derivePasskeySeedDeferred: ECDH self-agreement failed", e);
+                        onError.run();
+                    }
+                },
+                onError
+            ));
+            return true;
+        } catch (Exception e) {
+            logger.error("derivePasskeySeedDeferred: failed to init Signature", e);
+            onError.run();
+            return true;
         }
     }
 
@@ -1302,35 +1675,6 @@ public class AuthenticatorAPI {
         return clientDataHash;
     }
 
-    /**
-     * Logs detailed RP value information for debugging.
-     *
-     * @param rpValue The RP value to log (can be Map, String, or byte[])
-     */
-    private static void logRpValueDetails(Object rpValue) {
-        if (!logger.isInfoEnabled()) {
-            return;
-        }
-        
-        logger.info("=== makeCredential: Extracted RP value (0x02) ===");
-        logger.info("RP value type: {}", rpValue != null ? rpValue.getClass().getName() : "null");
-        
-        if (rpValue instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> rpMap = (Map<String, Object>) rpValue;
-            logger.info("RP map keys: {}", rpMap.keySet());
-            Object idObj = rpMap.get("id");
-            logger.info("RP id type: {}", idObj != null ? idObj.getClass().getName() : "null");
-            logger.info("RP id value: {}", idObj);
-        } else if (rpValue instanceof String) {
-            logger.info("RP string value: {}", rpValue);
-        } else if (rpValue instanceof byte[]) {
-            byte[] rpBytes = (byte[]) rpValue;
-            logger.info("RP byte array length: {}", rpBytes.length);
-            logger.info("RP byte array (hex): {}", ByteUtils.bytesToHex(rpBytes));
-        }
-    }
-
     private static X509Certificate loadAnonCA(CtapTxn txn){
         //TODO generate correct annon ca cert from spec
         return (txn.getPasskey() == null) ? null : txn.getPasskey().getCertificate();
@@ -1394,22 +1738,6 @@ public class AuthenticatorAPI {
         }
     }
 
-    /**
-     * Validates and creates the authenticator for credential creation.
-     *
-     * @param txn The CTAP transaction
-     * @param req The request parameters
-     * @return The authenticator, or null if creation fails
-     */
-    private static Fido2Authenticator validateAndCreateAuthenticator(
-            CtapTxn txn,
-            Map<Integer, Object> req) {
-        
-        Object rpValue = req.get(MakeCredentialKeys.RP);
-        logRpValueDetails(rpValue);
-        
-        return createAuthenticator(txn, rpValue);
-    }
 
     /**
      * Builds the credential data including authenticator data and attestation statement.
@@ -1453,45 +1781,6 @@ public class AuthenticatorAPI {
         return new CredentialCreationResult(authenticatorData, attestationStatement);
     }
 
-    private static byte[] executeMakeCredential(
-            CredentialValidationResult validation,
-            CtapTxn txn,
-            Map<Integer, Object> req) throws Exception {
-
-        // Verify the PIN token whenever a pinUvAuthParam was supplied (key 0x08),
-        // regardless of whether options.uv is explicitly set — presence of a PIN
-        // token is itself evidence of UV (CTAP2 §6.1.2).
-        PinUvAuthResult pinUvResult;
-        CredentialOptions options = parseOptions(req);
-        if (options.uv || req.containsKey(MakeCredentialKeys.PIN_UV_AUTH_PARAM)) {
-            pinUvResult = verifyPinUvAuth(req, txn);
-            if (pinUvResult.errorCode != null) {
-                return error(pinUvResult.errorCode);
-            }
-        } else {
-            pinUvResult = PinUvAuthResult.NO_VERIFICATION;
-        }
-        logger.info("executeMakeCredential: req.uv={}; user verified={}", options.uv, pinUvResult.userVerified);
-        AttestationMaterial attestation = loadAttestationMaterial(validation.type, txn);
-        Fido2Authenticator authenticator = validateAndCreateAuthenticator(txn, req);
-        if (authenticator == null) {
-            return error(Ctap2StatusCode.OTHER);
-        }
-        CredentialCreationResult credentialResult = buildCredentialData(req, authenticator, attestation);
-        if (!credentialResult.isSuccess()) {
-            return error(credentialResult.errorCode);
-        }
-        Ctap2StatusCode storeError = handleResidentCredentialStorage(
-            validation.type, req, authenticator, txn);
-        if (storeError != null) {
-            return error(storeError);
-        }
-        return buildMakeCredentialResponse(
-            credentialResult.authenticatorData,
-            credentialResult.attestationStatement
-        );
-    }
-
     /**
      * Retrieves the passkey from openKeys and populates the transaction.
      * If an authenticated session exists for this CID, sets the passkey in the transaction.
@@ -1511,37 +1800,6 @@ public class AuthenticatorAPI {
         }
         logger.debug("No authenticated session found for CID");
         return false;
-    }
-
-    /**
-     * Creates a Fido2Authenticator instance configured for the given transaction.
-     *
-     * @param txn The CTAP transaction context
-     * @param req The CTAP2 request parameters
-     * @return A configured Fido2Authenticator instance
-     * @throws IllegalArgumentException if request parameters are invalid
-     * @throws IllegalStateException if authenticator configuration fails
-     * @throws RuntimeException for unexpected errors
-     */
-    private static Fido2Authenticator createAuthenticator(CtapTxn txn, Object rpIdValue) {
-        try {
-            Fido2Authenticator a = new Fido2Authenticator();
-            byte[] rpIdBytes = extractRpIdBytes(rpIdValue);
-            
-            if (txn.getPasskey() != null) {
-                configureCredentialAnchor(a, txn.getPasskey().getPrivateKey(), rpIdBytes);
-            } else {
-                configureCredentialAnchor(a, KeyUtils.getPlatformKey(), rpIdBytes);
-            }
-            return a;
-            
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            logger.error("Authenticator creation failed: {}", e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            logger.error("Unexpected error creating authenticator", e);
-            throw new RuntimeException("Failed to create authenticator: " + e.getMessage(), e);
-        }
     }
     
     /**
@@ -1608,7 +1866,8 @@ public class AuthenticatorAPI {
      */
     private static void configureCredentialAnchor(Fido2Authenticator a, PrivateKey privKey, byte[] rpIdBytes) {
         logger.debug("Passkey private key: {}", privKey != null ? privKey.getAlgorithm() : "null");
-        String seed = KeyUtils.getPasskeySeed(rpIdBytes, privKey);
+        byte[] ikm = privKey != null ? privKey.getEncoded() : null;
+        String seed = KeyUtils.getPasskeySeed(rpIdBytes, ikm, appConfig);
         if (seed == null) {
             throw new IllegalStateException("Failed to generate seed from passkey");
         }
@@ -1642,7 +1901,7 @@ public class AuthenticatorAPI {
             Map<Integer, Object> req, Passkey passkey) {
         @SuppressWarnings("unchecked")
         ArrayList<Map<String, byte[]>> allowList = 
-                (ArrayList<Map<String, byte[]>>) req.get(0x03);
+                (ArrayList<Map<String, byte[]>>) req.get(GetAssertionKeys.ALLOW_LIST);
         
         if (allowList == null) {
             allowList = new ArrayList<>();
@@ -1735,55 +1994,87 @@ public class AuthenticatorAPI {
             return error(Ctap2StatusCode.OPERATION_DENIED);
         }
 
-        // Extract rpId string (parameter 0x01) for getAssertion
+        // Extract rpId (parameter 0x01) for getAssertion
         Object rpIdValue = req.get(GetAssertionKeys.RPID);
-        Fido2Authenticator authenticator = createAuthenticator(txn, rpIdValue);
-        if (authenticator == null) {
-            logger.debug("authenticator is null");
-            return error(Ctap2StatusCode.OTHER);
-        }
-        logger.debug("created authenticator");
-        // Process credentials from allowList and resident credentials
-        ArrayList<Map<String, byte[]>> credentials = processCredentials(req, txn.getPasskey());
-        if (credentials.isEmpty()) {
-            logger.debug("No credentials found");
-            return error(Ctap2StatusCode.NO_CREDENTIALS);
-        }
+        byte[] rpIdBytes = extractRpIdBytes(rpIdValue);
 
-        // Initialize authenticator with a valid credential.
-        // Credentials may have been created under the platform key (no-UV path) or
-        // under the passkey private key (PIN-verified path).  Try the key that was
-        // selected above first; if every credential fails GCM decryption, reconfigure
-        // with the other key and try again before giving up.
-        Map<String, byte[]> selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
-        if (selectedCredential == null) {
-            logger.debug("getAssertion: first key exhausted all credentials — retrying with fallback key");
-            boolean usedPasskey = txn.getPasskey() != null;
-            if (usedPasskey) {
-                // First attempt used passkey key — retry with platform key
-                logger.debug("getAssertion: retrying with platform key");
-                configureCredentialAnchor(authenticator, KeyUtils.getPlatformKey(), extractRpIdBytes(rpIdValue));
-            } else {
-                // First attempt used platform key — retry with each available passkey from openKeys
-                logger.debug("getAssertion: retrying with passkey keys from open sessions");
-                for (Map.Entry<byte[], Passkey> entry : openKeys.entrySet()) {
-                    configureCredentialAnchor(authenticator, entry.getValue().getPrivateKey(), extractRpIdBytes(rpIdValue));
-                    selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
-                    if (selectedCredential != null) {
-                        logger.debug("getAssertion: fallback passkey key succeeded");
-                        return generateSignedAssertion(req, authenticator, selectedCredential);
+        // The platform key is used in createAuthenticator (HKDF seed) and again in the
+        // fallback retry. Defer the entire operation behind the biometric gate so the
+        // single TEE auth window covers both uses via the captured seed string.
+        PrivateKey platformKey = KeyUtils.getPlatformKey();
+        if (platformKey == null) return error(Ctap2StatusCode.OTHER);
+
+        final Map<Integer, Object> reqFinal = req;
+        final Object rpIdValueFinal = rpIdValue;
+        final Passkey passkeySnap = txn.getPasskey(); // snapshot: may be null
+
+        derivePasskeySeedDeferred(txn, platformKey, rpIdBytes,
+            seed -> {
+                // seed = HKDF output from the single open TEE auth window.
+                // Use this seed string for every authenticator.setSymKeys() call.
+                // Do NOT call getPlatformKey() or getPasskeySeed() again here.
+                try {
+                    Fido2Authenticator authenticator = new Fido2Authenticator();
+                    authenticator.setSymKeys(seed);
+
+                    // Try passkey key first if available, then fall back to platform seed.
+                    if (passkeySnap != null) {
+                        configureCredentialAnchor(authenticator, passkeySnap.getPrivateKey(),
+                            extractRpIdBytes(rpIdValueFinal));
                     }
+
+                    ArrayList<Map<String, byte[]>> credentials =
+                        processCredentials(reqFinal, passkeySnap);
+                    if (credentials.isEmpty()) {
+                        if (deferredResponseSender != null)
+                            deferredResponseSender.send(txn, error(Ctap2StatusCode.NO_CREDENTIALS));
+                        return;
+                    }
+
+                    Map<String, byte[]> selectedCredential =
+                        initializeAuthenticatorWithCredential(authenticator, credentials);
+
+                    if (selectedCredential == null) {
+                        logger.debug("getAssertion: first key exhausted — retrying with platform seed");
+                        // Re-apply the platform seed (not the key); TEE window already closed.
+                        authenticator.setSymKeys(seed);
+                        selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
+                    }
+
+                    if (selectedCredential == null) {
+                        // Try each other open passkey session
+                        for (Map.Entry<byte[], Passkey> entry : openKeys.entrySet()) {
+                            configureCredentialAnchor(authenticator, entry.getValue().getPrivateKey(),
+                                extractRpIdBytes(rpIdValueFinal));
+                            selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
+                            if (selectedCredential != null) {
+                                logger.debug("getAssertion: open-session passkey succeeded");
+                                break;
+                            }
+                        }
+                    }
+
+                    if (selectedCredential == null) {
+                        logger.debug("getAssertion: all keys exhausted");
+                        if (deferredResponseSender != null)
+                            deferredResponseSender.send(txn, error(Ctap2StatusCode.NO_CREDENTIALS));
+                        return;
+                    }
+
+                    byte[] response = generateSignedAssertion(reqFinal, authenticator, selectedCredential);
+                    if (deferredResponseSender != null) deferredResponseSender.send(txn, response);
+                } catch (Exception e) {
+                    logger.error("getAssertion deferred resume failed", e);
+                    if (deferredResponseSender != null)
+                        deferredResponseSender.send(txn, error(Ctap2StatusCode.OTHER));
                 }
-                logger.debug("getAssertion: all fallback passkey keys exhausted");
-                return error(Ctap2StatusCode.NO_CREDENTIALS);
+            },
+            () -> {
+                if (deferredResponseSender != null)
+                    deferredResponseSender.send(txn, error(Ctap2StatusCode.OPERATION_DENIED));
             }
-            selectedCredential = initializeAuthenticatorWithCredential(authenticator, credentials);
-        }
-        if (selectedCredential == null) {
-            logger.debug("getAssertion: all keys exhausted, no matching credential found");
-            return error(Ctap2StatusCode.NO_CREDENTIALS);
-        }
-        return generateSignedAssertion(req, authenticator, selectedCredential);
+        );
+        return null; // deferred — CtapHid must not send a synchronous reply
     }
 
     /**
@@ -2051,15 +2342,18 @@ public class AuthenticatorAPI {
 
     /**
      * Handles the getToken PIN subcommand.
-     * Verifies the PIN and returns an authentication token.
+     * Deferred: gates on a TEE biometric challenge before calling Passkey.openKey()
+     * (which calls StashCipher.decrypt → KeyAgreement.init on the bio-gated platform key).
+     * Returns null to signal CtapHid that the response is deferred.
      *
      * @param txn The CTAP transaction
      * @param req The request parameters
-     * @return A byte array containing the response
+     * @return null (deferred) or a synchronous error response if early validation fails
      */
     private static byte[] getTkn(CtapTxn txn, Map<Integer, ?> req) {
         logger.debug("Processing PIN token request");
-        // Validate encrypted PIN hash
+
+        // Validate encrypted PIN hash and client key synchronously — no bio needed yet.
         PinHashValidationResult validation = validateAndExtractPinHash(req);
         if (!validation.isValid()) {
             return error(validation.getErrorCode());
@@ -2072,14 +2366,61 @@ public class AuthenticatorAPI {
         if (sharedSecret == null) {
             return error(Ctap2StatusCode.OTHER);
         }
-        
-        // Process PIN verification and generate token response
-        return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret);
+
+        // Must open the TEE auth window before calling Passkey.openKey() (which calls
+        // StashCipher.decrypt() → KeyAgreement.init(platformKey)).
+        final byte[] pinHashEncFinal = validation.getPinHashEnc();
+        final byte[] sharedSecretFinal = sharedSecret;
+
+        openPlatformKeyDeferred(
+            txn,
+            () -> {
+                // TEE window open — safe to decrypt the stash and open the passkey file.
+                // processPinVerificationAndGenerateToken also reconstructs the full 32-byte
+                // PIN hash while the TEE window is still open.
+                byte[] response = processPinVerificationAndGenerateToken(
+                    txn, pinHashEncFinal, sharedSecretFinal);
+                if (deferredResponseSender != null) deferredResponseSender.send(txn, response);
+            },
+            () -> {
+                if (deferredResponseSender != null)
+                    deferredResponseSender.send(txn, error(Ctap2StatusCode.OPERATION_DENIED));
+            }
+        );
+        return null; // deferred — CtapHid must not send a synchronous reply
     }
-    
+
+    /**
+     * Reconstructs the full 32-byte PIN hash from its two halves.
+     * Requires the TEE auth window to be open (calls StashCipher.decrypt).
+     * Must only be called from within an {@code onUnlocked} lambda.
+     *
+     * @param lowerHash 16-byte lower PIN hash (from CTAP PIN decryption)
+     * @param passkey   Opened passkey (provides the file path for the stash)
+     * @return Full 32-byte hash, or null if reconstruction fails
+     */
+    private static byte[] reconstructFullPinHash(byte[] lowerHash, Passkey passkey) {
+        if (lowerHash == null || lowerHash.length != 16 || passkey == null) return null;
+        try {
+            java.io.File pkFile = new java.io.File(
+                FileUtils.getFido2Home(), passkey.getFileName());
+            byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(pkFile));
+            byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashEnc);
+            if (upperHash == null || upperHash.length != 16) return null;
+            byte[] fullHash = new byte[32];
+            System.arraycopy(lowerHash, 0, fullHash, 0,  16);
+            System.arraycopy(upperHash,  0, fullHash, 16, 16);
+            return fullHash;
+        } catch (Exception e) {
+            logger.warn("reconstructFullPinHash: failed", e);
+            return null;
+        }
+    }
+
     /**
      * Processes PIN verification and generates the encrypted token response.
-     * Handles all cryptographic operations and state updates.
+     * Called from within the {@code openPlatformKeyDeferred} onUnlocked lambda so the
+     * TEE auth window is guaranteed open for both StashCipher.decrypt and Passkey.openKey.
      *
      * @param txn The CTAP transaction
      * @param pinHashEnc The encrypted PIN hash
@@ -2092,15 +2433,23 @@ public class AuthenticatorAPI {
             if (!pinVerification.isValid()) {
                 return error(pinVerification.getErrorCode());
             }
+
+            // Reconstruct full 32-byte PIN hash while TEE window is open.
+            // pinVerification.getPinHash() is the 16-byte lower hash from CTAP PIN protocol.
+            // The upper 16 bytes are read from the stash file (decrypt requires open TEE window).
+            byte[] pinHash = pinVerification.getPinHash(); // 16 bytes
+            byte[] fullPinHash = reconstructFullPinHash(pinHash, pinVerification.getPasskey());
+
             byte[] pinToken = new byte[PIN_TOKEN_SIZE];
             SECURE_RANDOM.nextBytes(pinToken);
             byte[] encryptedPinToken = performAesCbc(Cipher.ENCRYPT_MODE, pinToken, sharedSecret);
             logger.debug("Encrypted token: {}", encryptedPinToken);
-            updateAuthenticationState(txn, pinVerification.getPasskey(), pinToken, pinVerification.getPinHash());
+            updateAuthenticationState(txn, pinVerification.getPasskey(), pinToken,
+                fullPinHash != null ? fullPinHash : pinHash);
             return new PinTokenResponseBuilder()
                 .withPinToken(encryptedPinToken)
                 .build();
-            
+
         } catch (GeneralSecurityException e) {
             return handleCryptographicException(e);
         }

@@ -12,16 +12,19 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.util.Base64;
 
+import com.isfs.blekey.data.AppConfig;
+
 /**
  * Test suite for HKDF-based passkey seed generation in KeyUtils.
- * Tests the getPasskeySeed() method which now uses HKDF (RFC 5869) instead of
- * the previous non-standard cryptographic construction.
+ * Tests the getPasskeySeed() method which uses HKDF (RFC 5869) with an
+ * AppConfig-supplied info string for domain separation.
  */
 public class KeyUtilsHKDFTest {
 
     private KeyPair ecKeyPair;
     private byte[] testEntropy;
     private byte[] testEntropy2;
+    private AppConfig defaultConfig;
 
     @Before
     public void setUp() throws Exception {
@@ -32,6 +35,7 @@ public class KeyUtilsHKDFTest {
         // Create test entropy (simulating rpId bytes)
         testEntropy = "example.com".getBytes(StandardCharsets.UTF_8);
         testEntropy2 = "another.com".getBytes(StandardCharsets.UTF_8);
+        defaultConfig = AppConfig.getDefault();
     }
 
     /**
@@ -40,8 +44,8 @@ public class KeyUtilsHKDFTest {
      */
     @Test
     public void testDeterministicOutput() {
-        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
-        String seed2 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
+        String seed2 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("First seed should not be null", seed1);
         assertNotNull("Second seed should not be null", seed2);
@@ -53,7 +57,7 @@ public class KeyUtilsHKDFTest {
      */
     @Test
     public void testOutputFormat() {
-        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("Seed should not be null", seed);
         
@@ -73,8 +77,8 @@ public class KeyUtilsHKDFTest {
      */
     @Test
     public void testDifferentEntropy() {
-        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
-        String seed2 = KeyUtils.getPasskeySeed(testEntropy2, ecKeyPair.getPrivate());
+        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
+        String seed2 = KeyUtils.getPasskeySeed(testEntropy2, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("First seed should not be null", seed1);
         assertNotNull("Second seed should not be null", seed2);
@@ -88,8 +92,8 @@ public class KeyUtilsHKDFTest {
     public void testDifferentKeys() throws Exception {
         KeyPair keyPair2 = KeyUtils.generateKeyPair("EC", 256);
         
-        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
-        String seed2 = KeyUtils.getPasskeySeed(testEntropy, keyPair2.getPrivate());
+        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
+        String seed2 = KeyUtils.getPasskeySeed(testEntropy, keyPair2.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("First seed should not be null", seed1);
         assertNotNull("Second seed should not be null", seed2);
@@ -101,10 +105,8 @@ public class KeyUtilsHKDFTest {
      */
     @Test
     public void testNullEntropy() {
-        String seed = KeyUtils.getPasskeySeed(null, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(null, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
-        // HKDF should handle null salt gracefully or return null
-        // The implementation returns null on exception
         assertNull("Null entropy should result in null seed", seed);
     }
 
@@ -113,18 +115,28 @@ public class KeyUtilsHKDFTest {
      */
     @Test
     public void testNullKey() {
-        String seed = KeyUtils.getPasskeySeed(testEntropy, null);
+        String seed = KeyUtils.getPasskeySeed(testEntropy, (byte[]) null, defaultConfig);
         
         assertNull("Null key should result in null seed", seed);
     }
 
     /**
-     * Test 7: Empty Entropy - Handle empty entropy array
+     * Test 7: Null Handling - Proper error handling for null config
+     */
+    @Test
+    public void testNullConfig() {
+        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), null);
+        
+        assertNull("Null config should result in null seed", seed);
+    }
+
+    /**
+     * Test 8: Empty Entropy - Handle empty entropy array
      */
     @Test
     public void testEmptyEntropy() {
         byte[] emptyEntropy = new byte[0];
-        String seed = KeyUtils.getPasskeySeed(emptyEntropy, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(emptyEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         // HKDF should still work with empty salt
         assertNotNull("Empty entropy should still produce a seed", seed);
@@ -135,11 +147,11 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 8: Compatibility with SymmetricKey - Verify output works with SymmetricKey class
+     * Test 9: Compatibility with SymmetricKey - Verify output works with SymmetricKey class
      */
     @Test
     public void testSymmetricKeyCompatibility() {
-        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("Seed should not be null", seed);
         
@@ -154,27 +166,27 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 9: Multiple Iterations - Verify consistency across multiple calls
+     * Test 10: Multiple Iterations - Verify consistency across multiple calls
      */
     @Test
     public void testMultipleIterations() {
-        String firstSeed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+        String firstSeed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         // Call multiple times and verify all produce the same result
         for (int i = 0; i < 10; i++) {
-            String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+            String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
             assertEquals("Iteration " + i + " should produce same seed", firstSeed, seed);
         }
     }
 
     /**
-     * Test 10: Different Key Algorithms - Test with RSA key
+     * Test 11: Different Key Algorithms - Test with RSA key
      */
     @Test
     public void testRSAKey() throws Exception {
         KeyPair rsaKeyPair = KeyUtils.generateKeyPair("RSA", 2048);
         
-        String seed = KeyUtils.getPasskeySeed(testEntropy, rsaKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(testEntropy, rsaKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("RSA key should produce a valid seed", seed);
         
@@ -183,7 +195,7 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 11: Large Entropy - Test with large entropy values
+     * Test 12: Large Entropy - Test with large entropy values
      */
     @Test
     public void testLargeEntropy() {
@@ -192,7 +204,7 @@ public class KeyUtilsHKDFTest {
             largeEntropy[i] = (byte) (i % 256);
         }
         
-        String seed = KeyUtils.getPasskeySeed(largeEntropy, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(largeEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("Large entropy should produce a valid seed", seed);
         
@@ -201,13 +213,13 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 12: Entropy with Special Characters - Test with various byte values
+     * Test 13: Entropy with Special Characters - Test with various byte values
      */
     @Test
     public void testEntropyWithSpecialCharacters() {
         byte[] specialEntropy = new byte[]{0x00, 0x01, (byte) 0xFF, (byte) 0xFE, 0x7F, (byte) 0x80};
         
-        String seed = KeyUtils.getPasskeySeed(specialEntropy, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(specialEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         
         assertNotNull("Special entropy should produce a valid seed", seed);
         
@@ -216,7 +228,7 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 13: Seed Uniqueness - Verify seeds are sufficiently unique
+     * Test 14: Seed Uniqueness - Verify seeds are sufficiently unique
      */
     @Test
     public void testSeedUniqueness() throws Exception {
@@ -227,7 +239,7 @@ public class KeyUtilsHKDFTest {
         for (int i = 0; i < numTests; i++) {
             KeyPair kp = KeyUtils.generateKeyPair("EC", 256);
             byte[] entropy = ("test" + i + ".com").getBytes(StandardCharsets.UTF_8);
-            seeds[i] = KeyUtils.getPasskeySeed(entropy, kp.getPrivate());
+            seeds[i] = KeyUtils.getPasskeySeed(entropy, kp.getPrivate().getEncoded(), defaultConfig);
         }
         
         // Verify all seeds are unique
@@ -240,11 +252,11 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 14: Seed Entropy - Verify output has high entropy (no obvious patterns)
+     * Test 15: Seed Entropy - Verify output has high entropy (no obvious patterns)
      */
     @Test
     public void testSeedEntropy() {
-        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+        String seed = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
         byte[] decodedSeed = Base64.getUrlDecoder().decode(seed);
         
         // Check that not all bytes are the same
@@ -270,7 +282,7 @@ public class KeyUtilsHKDFTest {
     }
 
     /**
-     * Test 15: Thread Safety - Verify method is thread-safe
+     * Test 16: Thread Safety - Verify method is thread-safe
      */
     @Test
     public void testThreadSafety() throws Exception {
@@ -282,7 +294,7 @@ public class KeyUtilsHKDFTest {
         for (int i = 0; i < numThreads; i++) {
             final int index = i;
             threads[i] = new Thread(() -> {
-                results[index] = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate());
+                results[index] = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), defaultConfig);
             });
         }
         
@@ -304,11 +316,27 @@ public class KeyUtilsHKDFTest {
             assertEquals("Thread " + i + " should produce same result", firstResult, results[i]);
         }
     }
-    
+
+    /**
+     * Test 17: Different AppConfig info strings produce different seeds
+     */
+    @Test
+    public void testDifferentInfoStrings() {
+        AppConfig config1 = new AppConfig("DEPLOYMENT-ONE");
+        AppConfig config2 = new AppConfig("DEPLOYMENT-TWO");
+
+        String seed1 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), config1);
+        String seed2 = KeyUtils.getPasskeySeed(testEntropy, ecKeyPair.getPrivate().getEncoded(), config2);
+
+        assertNotNull("Seed with config1 should not be null", seed1);
+        assertNotNull("Seed with config2 should not be null", seed2);
+        assertNotEquals("Different info strings must produce different seeds", seed1, seed2);
+    }
+
     // ========== Additional HKDF Edge Case Tests ==========
     
     /**
-     * Test 16: HKDF with null salt
+     * Test 18: HKDF with null salt
      */
     @Test
     public void testHkdfNullSalt() throws Exception {
@@ -322,7 +350,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 17: HKDF with null info
+     * Test 19: HKDF with null info
      */
     @Test
     public void testHkdfNullInfo() throws Exception {
@@ -336,7 +364,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 18: HKDF with null IKM should throw exception
+     * Test 20: HKDF with null IKM should throw exception
      */
     @Test(expected = IllegalArgumentException.class)
     public void testHkdfNullIkm() throws Exception {
@@ -346,7 +374,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 19: HKDF with empty IKM should throw exception
+     * Test 21: HKDF with empty IKM should throw exception
      */
     @Test(expected = IllegalArgumentException.class)
     public void testHkdfEmptyIkm() throws Exception {
@@ -357,7 +385,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 20: HKDF with invalid length (0)
+     * Test 22: HKDF with invalid length (0)
      */
     @Test(expected = IllegalArgumentException.class)
     public void testHkdfInvalidLength() throws Exception {
@@ -368,7 +396,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 21: HKDF with negative length
+     * Test 23: HKDF with negative length
      */
     @Test(expected = IllegalArgumentException.class)
     public void testHkdfNegativeLength() throws Exception {
@@ -379,7 +407,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 22: HKDF determinism - same inputs produce same output
+     * Test 24: HKDF determinism - same inputs produce same output
      */
     @Test
     public void testHkdfDeterministic() throws Exception {
@@ -395,7 +423,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 23: HKDF with different output lengths
+     * Test 25: HKDF with different output lengths
      */
     @Test
     public void testHkdfDifferentLengths() throws Exception {
@@ -413,7 +441,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 24: HKDF with maximum allowed length
+     * Test 26: HKDF with maximum allowed length
      */
     @Test
     public void testHkdfMaxLength() throws Exception {
@@ -429,7 +457,7 @@ public class KeyUtilsHKDFTest {
     }
     
     /**
-     * Test 25: HKDF with length exceeding maximum should throw exception
+     * Test 27: HKDF with length exceeding maximum should throw exception
      */
     @Test(expected = IllegalArgumentException.class)
     public void testHkdfExceedMaxLength() throws Exception {

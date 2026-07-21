@@ -46,6 +46,8 @@ import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
 import java.util.Base64;
+import com.isfs.blekey.data.AppConfig;
+import com.isfs.blekey.data.StashCipher;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -73,6 +75,139 @@ import org.slf4j.LoggerFactory;
 public class KeyUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(KeyUtils.class);
+
+    // -----------------------------------------------------------------------
+    // KeystoreManager — owns the TEE-backed platform key
+    // -----------------------------------------------------------------------
+
+    private static KeystoreManager keystoreManager;
+
+    public static void setKeystoreManager(KeystoreManager manager) {
+        keystoreManager = manager;
+        stashCipher = null; // invalidate cached cipher so it is rebuilt with the new manager
+        logger.info("KeystoreManager set: {}", manager != null ? manager.getClass().getSimpleName() : "null");
+    }
+
+    public static KeystoreManager getKeystoreManager() {
+        return keystoreManager;
+    }
+
+    // -----------------------------------------------------------------------
+    // Root key pair — file-based ECDH fallback for stash encryption
+    // -----------------------------------------------------------------------
+
+    private static PublicKey rootPublicKey;
+    private static PrivateKey rootPrivateKey;
+
+    /**
+     * Initialize the root key pair from a PKCS8 file containing an EC private key.
+     * This should be called during application initialization.
+     *
+     * @param pkcs8File Path to the PKCS8 file containing the EC private key
+     * @param password  Password for the encrypted PKCS8 file, or null if not encrypted
+     * @return true if successful, false if the file doesn't exist or contains an invalid key
+     */
+    public static boolean initRootKeyPair(String pkcs8File, String password) {
+        try {
+            PrivateKey privateKey = FileUtils.readPrivatePEM(new File(pkcs8File), password);
+            if (!(privateKey instanceof java.security.interfaces.ECPrivateKey)) {
+                logger.error("Private key in {} is not an EC key", pkcs8File);
+                return false;
+            }
+            PublicKey publicKey = getPubKey((java.security.interfaces.ECPrivateKey) privateKey);
+            rootPublicKey = publicKey;
+            rootPrivateKey = privateKey;
+            stashCipher = null; // invalidate so it rebuilds with new root keys
+            logger.info("Root key pair initialized from file: {}", pkcs8File);
+            return true;
+        } catch (Exception e) {
+            logger.error("Failed to read private key from file: {}", pkcs8File, e);
+            return false;
+        }
+    }
+
+    /**
+     * Ensures a root key pair is available for ECDH encryption/decryption.
+     * Loads from the specified file, falls back to the default location, and
+     * generates a new key pair if none is found.
+     *
+     * @param keyPath  Path to the PKCS8 file, or null to use the default location
+     * @param password Password for the encrypted PKCS8 file, or null if not encrypted
+     */
+    public static void ensureRootKeyPair(String keyPath, String password) {
+        if (rootPublicKey != null && rootPrivateKey != null) {
+            return;
+        }
+        String resolvedKeyPath = resolveRootKeyFilePath(keyPath);
+        File keyFile = new File(resolvedKeyPath);
+        if (keyFile.exists()) {
+            loadExistingRootKey(resolvedKeyPath, password);
+        } else {
+            generateAndSaveNewRootKey(resolvedKeyPath);
+        }
+        if (rootPublicKey == null || rootPrivateKey == null) {
+            throw new RuntimeException("Failed to read or generate platform key pair");
+        }
+    }
+
+    private static final String ROOT_KEY_FILE = "platform.key";
+    private static final String ROOT_KEY_ALGORITHM = "ECDSA";
+    private static final int ROOT_KEY_SIZE = 256;
+
+    private static String resolveRootKeyFilePath(String keyPath) {
+        if (keyPath != null) {
+            return keyPath;
+        }
+        String fido2Home = FileUtils.getFido2Home();
+        if (fido2Home == null || fido2Home.isEmpty()) {
+            throw new RuntimeException("FIDO2_HOME environment variable or system property is not set");
+        }
+        return fido2Home + java.nio.file.FileSystems.getDefault().getSeparator() + ROOT_KEY_FILE;
+    }
+
+    private static void loadExistingRootKey(String keyPath, String password) {
+        try {
+            boolean keyLoaded = initRootKeyPair(keyPath, password);
+            if (!keyLoaded) {
+                logger.warn("Failed to initialize root key pair from {}", keyPath);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to read platform key from {}", keyPath, e);
+        }
+    }
+
+    private static void generateAndSaveNewRootKey(String keyPath) {
+        try {
+            logger.info("Platform key not found, generating a new one at {}", keyPath);
+            KeyPair keyPair = generateKeyPair(ROOT_KEY_ALGORITHM, ROOT_KEY_SIZE);
+            FileUtils.writePrivatePEM(keyPair.getPrivate(), new File(keyPath));
+            rootPublicKey = keyPair.getPublic();
+            rootPrivateKey = keyPair.getPrivate();
+            stashCipher = null;
+            logger.info("Generated and saved new platform key at: {}", keyPath);
+        } catch (java.io.IOException e) {
+            logger.error("Failed to write platform key to file: {}", keyPath, e);
+            throw new RuntimeException("Failed to write platform key to file: " + keyPath, e);
+        } catch (Exception e) {
+            logger.error("Failed to generate platform key", e);
+            throw new RuntimeException("Failed to generate platform key", e);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // StashCipher — lazily built from keystoreManager + root key pair
+    // -----------------------------------------------------------------------
+
+    private static StashCipher stashCipher;
+
+    /** Returns the shared {@link StashCipher}, creating it on first call. */
+    public static StashCipher getStashCipher() {
+        if (stashCipher == null) {
+            stashCipher = StashCipher.create(keystoreManager, rootPublicKey, rootPrivateKey);
+        }
+        return stashCipher;
+    }
+
     
     private static final String BOUNCY_CASTLE_PROVIDER_NAME = "BC";
     
@@ -1243,12 +1378,6 @@ public class KeyUtils {
     }
 
     /**
-     * Context string for HKDF key derivation.
-     * Used as the 'info' parameter to provide domain separation for FIDO2 passkey seeds.
-     */
-    private static final String HKDF_INFO_PASSKEY_SEED = "FIDO2-PASSKEY-SEED";
-
-    /**
      * Derives a passkey seed using HKDF (HMAC-based Key Derivation Function) as defined in RFC 5869.
      *
      * <p>HKDF provides a standardized, secure way to derive cryptographic keys from input key material.
@@ -1280,25 +1409,18 @@ public class KeyUtils {
      * be decrypted with seeds from this new implementation. Migration requires credential re-registration.
      *
      * @param entropy The entropy bytes (typically rpId bytes) used as salt for domain separation
-     * @param key The private key used as input keying material
+     * @param ikm The input key material
      * @return A Base64 URL-encoded 32-byte seed suitable for AES-256 key derivation, or null on error
      * @see <a href="https://www.rfc-editor.org/rfc/rfc5869">RFC 5869: HKDF</a>
      */
-    public static String getPasskeySeed(byte[] entropy, PrivateKey key) {
-        // Validate inputs
-        if (entropy == null || key == null) {
-            logger.error("HKDF key derivation failed: entropy and key must not be null");
+    public static String getPasskeySeed(byte[] entropy, byte[] ikm, AppConfig config) {
+        if (entropy == null || ikm == null || config == null) {
+            logger.error("HKDF key derivation failed: entropy, key, and config must not be null");
             return null;
         }
-        
         try {
-            // Extract input keying material from the private key
-            byte[] ikm = key.getEncoded();
-            // Use fixed context string for application-specific domain separation
-            byte[] info = HKDF_INFO_PASSKEY_SEED.getBytes(StandardCharsets.UTF_8);
-            byte[] okm = hkdf(ikm, entropy, info, 32);
-            
-            // Return Base64 URL-encoded seed (without padding)
+            byte[] info = config.getInfo().getBytes(StandardCharsets.UTF_8);
+            byte[] okm  = hkdf(ikm, entropy, info, 32);
             return Base64.getUrlEncoder().withoutPadding().encodeToString(okm);
         } catch (Exception e) {
             logger.error("HKDF key derivation failed: {}", e.getMessage(), e);
@@ -1382,10 +1504,16 @@ public class KeyUtils {
     }
 
 
-    private static final String PLATFORM_KEY = "platform.key";
-
     public static PrivateKey getPlatformKey() {
-        File platKeyFile = new File(FileUtils.getFido2Home() + File.separator + PLATFORM_KEY);
+        if (keystoreManager != null) {
+            try {
+                return keystoreManager.getEC256PrivateKey();
+            } catch (Exception e) {
+                logger.error("TEE platform key retrieval failed", e);
+            }
+        }
+        // File-based fallback (non-Android / tests)
+        File platKeyFile = new File(FileUtils.getFido2Home() + File.separator + ROOT_KEY_FILE);
         try {
             if (platKeyFile.exists()) {
                 return FileUtils.readPrivatePEM(platKeyFile);
