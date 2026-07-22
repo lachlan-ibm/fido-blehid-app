@@ -2,7 +2,7 @@
  Copyright IBM 2025
 -->
 <resources>
-    <string name="app_name">Aye Bt Key</string>
+    <string name="app_name">Aye.Bt.Key</string>
     <string name="requires_bl_enabled">This app requires bluetooth to be enabled.</string>
     <string name="device_not_supported">%1$s is not supported on this device. Aye Bee Key will exit.</string>
     <string name="not_supported">Not supported</string>
