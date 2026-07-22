@@ -208,6 +208,49 @@ public class KeyUtils {
         return stashCipher;
     }
 
+    /**
+     * Deletes the current platform key and immediately generates a fresh one.
+     *
+     * <p>TEE path: calls {@link KeystoreManager#deleteAppKey()} to erase the
+     * Android Keystore entry. The new key is created lazily on the next call to
+     * {@link KeystoreManager#getEC256PrivateKey()}.
+     *
+     * <p>File path: deletes {@code $FIDO2_HOME/platform.key} and calls
+     * {@link #generateAndSaveNewRootKey(String)} to produce a fresh PEM file,
+     * then reloads the static {@code rootPublicKey}/{@code rootPrivateKey} fields.
+     *
+     * <p>In both cases {@code stashCipher} is nulled so the next call to
+     * {@link #getStashCipher()} rebuilds with the new key.
+     *
+     * <p>All existing {@code .stash} files become permanently unreadable after
+     * this call.
+     *
+     * @throws RuntimeException if key deletion or generation fails
+     */
+    public static void resetPlatformKey() {
+        if (keystoreManager != null && keystoreManager.isKeystoreAvailable()) {
+            // TEE / StrongBox path
+            boolean deleted = keystoreManager.deleteAppKey();
+            if (!deleted) {
+                throw new RuntimeException("Failed to delete TEE platform key");
+            }
+            stashCipher = null;
+            logger.info("TEE platform key deleted; new key will be generated on first use");
+        } else {
+            // File-based path
+            String keyPath = resolveRootKeyFilePath(null);
+            File keyFile = new File(keyPath);
+            if (keyFile.exists() && !keyFile.delete()) {
+                throw new RuntimeException("Failed to delete platform key file: " + keyPath);
+            }
+            rootPublicKey  = null;
+            rootPrivateKey = null;
+            stashCipher    = null;
+            generateAndSaveNewRootKey(keyPath);
+            logger.info("File-based platform key regenerated at: {}", keyPath);
+        }
+    }
+
     
     private static final String BOUNCY_CASTLE_PROVIDER_NAME = "BC";
     

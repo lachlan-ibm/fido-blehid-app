@@ -8,9 +8,9 @@
     android:viewportHeight="512">
 
     <group
-        android:scaleX="0.64"
-        android:scaleY="0.64"
-        android:translateX="92.16"
+        android:scaleX="0.60"
+        android:scaleY="0.60"
+        android:translateX="102.16"
         android:translateY="92.16">
 
     <!-- KEY HEAD ARC -->

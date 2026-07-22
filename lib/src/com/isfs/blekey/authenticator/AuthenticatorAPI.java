@@ -2094,9 +2094,20 @@ public class AuthenticatorAPI {
         }
 
         // Pass context to the app layer — the app layer builds the appropriate
-        // response at decision time via UpRequestContext.buildResponse(outcome).
+        // response at decision time via UpRequestContext.buildResponse(outcome, cb).
+        // The single chained action pre-fetches the platform key IKM immediately
+        // after the user taps Allow, so subsequent getTkn/makeCredential/getAssertion
+        // calls hit the fast-path in openPlatformKeyDeferred without a second prompt.
         userPresenceCallback.onUserPresenceRequired(
-            new UpRequestContext(null, txn, /* isGetInfo= */ true));
+            new UpRequestContext(
+                null, txn, /* isGetInfo= */ true,
+                java.util.List.of((cb) -> openPlatformKeyDeferred(
+                    txn,
+                    () -> cb.done(null),
+                    () -> cb.done(buildErrorResponse(Ctap2StatusCode.OPERATION_DENIED))
+                ))
+            )
+        );
 
         // Return null to signal CtapHid that the response is deferred.
         return null;

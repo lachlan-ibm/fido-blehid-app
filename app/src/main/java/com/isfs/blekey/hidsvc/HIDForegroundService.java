@@ -276,10 +276,13 @@ public class HIDForegroundService extends Service {
             cancelUpNotification();
             if (pendingContext != null) {
                 pendingUpTxn.setUserPresent(true);
-                byte[] response = pendingContext.buildResponse(Outcome.APPROVED);
-                sendDeferred(pendingUpTxn, response);
+                pendingContext.buildResponse(Outcome.APPROVED, response -> {
+                    if (response != null) sendDeferred(pendingUpTxn, response);
+                    finishUpDelivery();
+                });
+            } else {
+                finishUpDelivery();
             }
-            finishUpDelivery();
         });
     }
 
@@ -288,12 +291,15 @@ public class HIDForegroundService extends Service {
         upHandler.post(() -> {
             cancelTimeout();
             cancelUpNotification();
-            pendingUpTxn.setUserPresent(true);
             if (pendingContext != null) {
-                byte[] response = pendingContext.buildResponse(Outcome.APPROVED_CTAP1_COMPAT);
-                sendDeferred(pendingUpTxn, response);
+                pendingUpTxn.setUserPresent(true);
+                pendingContext.buildResponse(Outcome.APPROVED_CTAP1_COMPAT, response -> {
+                    if (response != null) sendDeferred(pendingUpTxn, response);
+                    finishUpDelivery();
+                });
+            } else {
+                finishUpDelivery();
             }
-            finishUpDelivery();
         });
     }
 
@@ -303,10 +309,13 @@ public class HIDForegroundService extends Service {
             cancelTimeout();
             cancelUpNotification();
             if (pendingContext != null) {
-                byte[] response = pendingContext.buildResponse(Outcome.DENIED);
-                sendDeferred(pendingUpTxn, response);
+                pendingContext.buildResponse(Outcome.DENIED, response -> {
+                    if (response != null) sendDeferred(pendingUpTxn, response);
+                    finishUpDelivery();
+                });
+            } else {
+                finishUpDelivery();
             }
-            finishUpDelivery();
         });
     }
 

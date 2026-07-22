@@ -4,10 +4,12 @@
 package com.isfs.blekey.activity;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Base64;
 import android.util.Log;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -15,6 +17,7 @@ import androidx.appcompat.widget.SwitchCompat;
 
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
+import com.isfs.blekey.MainActivity;
 import com.isfs.blekey.R;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
@@ -76,7 +79,16 @@ public class AdvancedConfigActivity extends AppCompatActivity {
 
         findViewById(R.id.backButton).setOnClickListener(v -> finish());
 
+        findViewById(R.id.homeButton).setOnClickListener(v -> {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            finish();
+        });
+
         findViewById(R.id.saveConfigButton).setOnClickListener(v -> onSaveClicked());
+
+        findViewById(R.id.resetPlatformKeyButton).setOnClickListener(v -> onResetPlatformKeyClicked());
     }
 
     private void onSaveClicked() {
@@ -154,5 +166,39 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         AuthenticatorAPI.setAppConfig(new AppConfig(value));
         Log.d(TAG, "HKDF info updated: length=" + value.length());
         finish();
+    }
+
+    private void onResetPlatformKeyClicked() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.adv_config_reset_confirm_title)
+                .setMessage(R.string.adv_config_reset_confirm_message)
+                .setPositiveButton(R.string.ok, (dialog, which) -> performPlatformKeyReset())
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void performPlatformKeyReset() {
+        try {
+            KeyUtils.resetPlatformKey();
+
+            // The HKDF info pref was encrypted under the old key — remove it so
+            // the service falls back cleanly to AppConfig.DEFAULT_INFO on next
+            // start rather than logging a decrypt error.
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .remove(PREFS_KEY_HKDF_INFO)
+                    .apply();
+
+            // Reflect the cleared pref in the UI immediately.
+            hkdfInfoEdit.setText(AppConfig.DEFAULT_INFO);
+
+            Toast.makeText(this, R.string.adv_config_reset_success, Toast.LENGTH_LONG).show();
+            Log.i(TAG, "Platform key reset successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Platform key reset failed", e);
+            Toast.makeText(this,
+                    getString(R.string.adv_config_reset_failed, e.getMessage()),
+                    Toast.LENGTH_LONG).show();
+        }
     }
 }

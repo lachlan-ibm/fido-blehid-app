@@ -148,6 +148,14 @@
     <string name="adv_config_save_confirm_message">This will invalidate all credentials issued under the current value. Continue?</string>
     <string name="save">Save</string>
 
+    <!-- Platform key reset strings -->
+    <string name="adv_config_reset_platform_key_label">Reset Platform Key</string>
+    <string name="adv_config_reset_platform_key_desc">Delete and regenerate the platform key used to encrypt wallet PIN caches. All wallets will require PIN re-entry after reset.</string>
+    <string name="adv_config_reset_confirm_title">Reset Platform Key?</string>
+    <string name="adv_config_reset_confirm_message">This will permanently delete the current platform key and generate a new one.\n\nAll wallet .stash files will become unreadable. You will need to re-enter your PIN for every wallet before it can be used again.\n\nThis cannot be undone. Continue?</string>
+    <string name="adv_config_reset_success">Platform key reset. Re-enter your PIN for each wallet on next use.</string>
+    <string name="adv_config_reset_failed">Platform key reset failed: %1$s</string>
+
     <!-- User Presence dialog strings -->
     <string name="up_getinfo_title">Authentication Request</string>
     <string name="up_getinfo_message">A device is requesting authentication. Choose a response.</string>

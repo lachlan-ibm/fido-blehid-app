@@ -185,17 +185,19 @@ public class Ctap2HidRequestTest {
         com.isfs.blekey.authenticator.AuthenticatorAPI.setUserPresenceCallback(
             context -> {
                 com.isfs.blekey.ctap.CtapTxn txn = context.getTxn();
-                byte[] approvedBytes = context.buildResponse(
-                    com.isfs.blekey.authenticator.UpRequestContext.Outcome.APPROVED);
-                com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
-                if (deferred != null) {
-                    try {
-                        deferred.injectDeferredResponse(approvedBytes);
-                        txn.setUserPresent(true);
-                    } catch (java.io.IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                }
+                context.buildResponse(
+                    com.isfs.blekey.authenticator.UpRequestContext.Outcome.APPROVED,
+                    bytes -> {
+                        com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
+                        if (deferred != null && bytes != null) {
+                            try {
+                                deferred.injectDeferredResponse(bytes);
+                                txn.setUserPresent(true);
+                            } catch (java.io.IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                    });
             });
 
         // Stub SecureStorageCallback: platform key is not TEE-backed in tests so

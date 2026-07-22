@@ -3,6 +3,7 @@
  Copyright IBM 2025
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -90,6 +91,32 @@
             android:layout_height="wrap_content"
             android:text="@string/save"
             android:layout_marginTop="24dp" />
+
+        <!-- Platform Key Reset Section -->
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/adv_config_reset_platform_key_label"
+            style="@style/TextAppearance.MaterialComponents.Subtitle1" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/resetKeyDesc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/adv_config_reset_platform_key_desc"
+            style="@style/TextAppearance.MaterialComponents.Body2" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/resetPlatformKeyButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/adv_config_reset_platform_key_label"
+            app:strokeColor="@color/design_default_color_error"
+            android:textColor="@color/design_default_color_error"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
     </LinearLayout>
 </LinearLayout>
