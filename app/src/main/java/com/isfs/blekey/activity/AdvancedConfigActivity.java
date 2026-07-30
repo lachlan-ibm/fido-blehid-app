@@ -15,6 +15,8 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
 
+import android.widget.TextView;
+
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 import com.isfs.blekey.MainActivity;
@@ -39,22 +41,26 @@ import java.security.interfaces.ECPublicKey;
 public class AdvancedConfigActivity extends AppCompatActivity {
 
     private static final String TAG = AdvancedConfigActivity.class.getCanonicalName();
-    private static final String PREFS_NAME = "HIDServicePrefs";
-    private static final String PREFS_KEY_HKDF_INFO = "hkdf_info";
-    private static final String PREFS_KEY_AUTO_START = "auto_start_enabled";
+    private static final String PREFS_NAME          = "HIDServicePrefs";
+    private static final String PREFS_KEY_HKDF_INFO  = "hkdf_info";
+    private static final String PREFS_KEY_AUTO_START  = "auto_start_enabled";
+    private static final String PREFS_KEY_CTAP1_COMPAT = "ctap1_compat_mode";
 
     private TextInputLayout hkdfInfoLayout;
     private TextInputEditText hkdfInfoEdit;
     private SwitchCompat autoStartSwitch;
+    private SwitchCompat ctap1CompatSwitch;
+    private TextView pinRetriesValue;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_advanced_config);
 
-        hkdfInfoLayout  = findViewById(R.id.hkdfInfoLayout);
-        hkdfInfoEdit    = findViewById(R.id.hkdfInfoEdit);
-        autoStartSwitch = findViewById(R.id.autoStartSwitch);
+        hkdfInfoLayout    = findViewById(R.id.hkdfInfoLayout);
+        hkdfInfoEdit      = findViewById(R.id.hkdfInfoEdit);
+        autoStartSwitch   = findViewById(R.id.autoStartSwitch);
+        ctap1CompatSwitch = findViewById(R.id.ctap1CompatSwitch);
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
 
@@ -77,6 +83,19 @@ public class AdvancedConfigActivity extends AppCompatActivity {
             Log.d(TAG, "Auto-start set to: " + isChecked);
         });
 
+        // Load and wire CTAP1 compat toggle — persists immediately and applies live
+        ctap1CompatSwitch.setChecked(
+                prefs.getBoolean(PREFS_KEY_CTAP1_COMPAT, AppConfig.DEFAULT_CTAP1_COMPAT));
+        ctap1CompatSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PREFS_KEY_CTAP1_COMPAT, isChecked)
+                    .apply();
+            AppConfig current1 = AuthenticatorAPI.getAppConfig();
+            AuthenticatorAPI.setAppConfig(new AppConfig(current1.getInfo(), isChecked));
+            Log.d(TAG, "CTAP1 compat mode set to: " + isChecked);
+        });
+
         findViewById(R.id.backButton).setOnClickListener(v -> finish());
 
         findViewById(R.id.homeButton).setOnClickListener(v -> {
@@ -89,6 +108,16 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         findViewById(R.id.saveConfigButton).setOnClickListener(v -> onSaveClicked());
 
         findViewById(R.id.resetPlatformKeyButton).setOnClickListener(v -> onResetPlatformKeyClicked());
+
+        pinRetriesValue = findViewById(R.id.pinRetriesValue);
+        refreshPinRetriesDisplay();
+        findViewById(R.id.resetPinRetriesButton).setOnClickListener(v -> onResetPinRetriesClicked());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshPinRetriesDisplay();
     }
 
     private void onSaveClicked() {
@@ -166,6 +195,31 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         AuthenticatorAPI.setAppConfig(new AppConfig(value));
         Log.d(TAG, "HKDF info updated: length=" + value.length());
         finish();
+    }
+
+    private void refreshPinRetriesDisplay() {
+        int current = AuthenticatorAPI.getPinRetries();
+        pinRetriesValue.setText(
+                getString(R.string.adv_config_pin_retries_value,
+                          current, AuthenticatorAPI.getMaxPinRetries()));
+    }
+
+    private void onResetPinRetriesClicked() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.adv_config_pin_retries_reset_confirm_title)
+                .setMessage(getString(
+                        R.string.adv_config_pin_retries_reset_confirm_message,
+                        AuthenticatorAPI.getMaxPinRetries()))
+                .setPositiveButton(R.string.ok, (dialog, which) -> {
+                    AuthenticatorAPI.resetPinRetries();
+                    refreshPinRetriesDisplay();
+                    Toast.makeText(this,
+                            R.string.adv_config_pin_retries_reset_success,
+                            Toast.LENGTH_SHORT).show();
+                    Log.i(TAG, "PIN retry counter reset by operator");
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     private void onResetPlatformKeyClicked() {

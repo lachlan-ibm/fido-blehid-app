@@ -15,21 +15,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link AuthenticatorAPI.UserPresenceCallback}.  The app layer calls
  * {@link #buildResponse(Outcome, ChainCallback)} exactly once when the user acts;
  * subsequent calls are silently ignored (idempotency guard via {@link AtomicBoolean}).</p>
+ *
+ * <p>{@code getInfo} no longer creates a UP context — it returns synchronously,
+ * driven by {@code AppConfig.isCtap1CompatMode()}.  Every context that reaches
+ * {@code onUserPresenceRequired} is therefore a {@code makeCredential} or
+ * {@code getAssertion} ceremony.</p>
  */
 public final class UpRequestContext {
 
     /** The outcome chosen by the user (or system). */
     public enum Outcome {
-        /** Full CTAP2 approval: advertises PIN/UV protocol, sets UP flag on txn. */
+        /** Approval: grants the pending CTAP operation. */
         APPROVED,
-        /** CTAP1-compat approval: omits PIN/UV, adds U2F_V2, does NOT set UP flag. */
-        APPROVED_CTAP1_COMPAT,
         /** Denial: returns OPERATION_DENIED error. */
         DENIED
     }
 
     /**
-     * A single step in the getInfo post-approval chain.
+     * A single step in the post-approval action chain.
      * The implementation must call exactly one of {@link ChainCallback#done(byte[])}:
      * {@code done(null)} on success, {@code done(errorBytes)} on failure.
      */
@@ -49,45 +52,38 @@ public final class UpRequestContext {
 
     private final String            rpId;
     private final CtapTxn           txn;
-    private final boolean           isGetInfo;
     private final List<ChainAction> actions;
     private final AtomicBoolean     delivered = new AtomicBoolean(false);
 
     /**
      * Package-private — only {@link AuthenticatorAPI} creates instances.
      *
-     * @param rpId      Relying-party identifier (null for getInfo).
-     * @param txn       The live {@link CtapTxn} for this channel.
-     * @param isGetInfo {@code true} when this context was created for a getInfo ceremony.
+     * @param rpId Relying-party identifier.
+     * @param txn  The live {@link CtapTxn} for this channel.
      */
-    UpRequestContext(String rpId, CtapTxn txn, boolean isGetInfo) {
-        this(rpId, txn, isGetInfo, Collections.emptyList());
+    UpRequestContext(String rpId, CtapTxn txn) {
+        this(rpId, txn, Collections.emptyList());
     }
 
     /**
      * Package-private overload that allows {@link AuthenticatorAPI} to supply a chain of
-     * post-approval actions (e.g. the bio pre-fetch for getInfo).
+     * post-approval actions.
      *
-     * @param rpId      Relying-party identifier (null for getInfo).
-     * @param txn       The live {@link CtapTxn} for this channel.
-     * @param isGetInfo {@code true} when this context was created for a getInfo ceremony.
-     * @param actions   Ordered list of actions to run after approval (empty = none).
+     * @param rpId    Relying-party identifier.
+     * @param txn     The live {@link CtapTxn} for this channel.
+     * @param actions Ordered list of actions to run after approval (empty = none).
      */
-    UpRequestContext(String rpId, CtapTxn txn, boolean isGetInfo, List<ChainAction> actions) {
-        this.rpId      = rpId;
-        this.txn       = txn;
-        this.isGetInfo = isGetInfo;
-        this.actions   = actions;
+    UpRequestContext(String rpId, CtapTxn txn, List<ChainAction> actions) {
+        this.rpId    = rpId;
+        this.txn     = txn;
+        this.actions = actions;
     }
 
-    /** Returns the relying-party identifier, or {@code null} for getInfo. */
-    public String  getRpId()    { return rpId;      }
+    /** Returns the relying-party identifier. */
+    public String  getRpId() { return rpId; }
 
     /** Returns the live transaction associated with this request. */
-    public CtapTxn getTxn()     { return txn;       }
-
-    /** Returns {@code true} when this context was created for a getInfo ceremony. */
-    public boolean isGetInfo()  { return isGetInfo; }
+    public CtapTxn getTxn()  { return txn;  }
 
     /**
      * Builds the CTAP wire response for the given {@code outcome} and delivers it via
@@ -96,11 +92,12 @@ public final class UpRequestContext {
      * <ul>
      *   <li>On {@code DENIED} the chain is skipped and {@code cb.done(deniedBytes)} is
      *       called immediately.</li>
-     *   <li>On {@code APPROVED} / {@code APPROVED_CTAP1_COMPAT} each action in
-     *       {@link #actions} is run in order.  The first action that calls
-     *       {@code done(errorBytes)} with non-null bytes stops the chain and that error is
-     *       delivered.  When all actions succeed, {@code cb.done(successBytes)} is
-     *       called.</li>
+     *   <li>On {@code APPROVED} each action in {@link #actions} is run in order.
+     *       The first action that calls {@code done(errorBytes)} with non-null bytes
+     *       stops the chain and that error is delivered.  When all actions succeed,
+     *       {@code cb.done(null)} is called (the actual CTAP response is sent by the
+     *       deferred lambda inside makeCredential / getAssertion via
+     *       {@code DeferredResponseSender.send}).</li>
      * </ul>
      *
      * <p>Idempotent: a second call invokes {@code cb.done(null)} without re-running
@@ -112,14 +109,13 @@ public final class UpRequestContext {
      */
     public void buildResponse(Outcome outcome, ChainCallback cb) {
         if (!delivered.compareAndSet(false, true)) { cb.done(null); return; }
-        if (outcome != Outcome.APPROVED && outcome != Outcome.APPROVED_CTAP1_COMPAT) {
+        if (outcome != Outcome.APPROVED) {
             cb.done(AuthenticatorAPI.buildDeniedResponse());
             return;
         }
-        byte[] successResponse = (outcome == Outcome.APPROVED)
-            ? AuthenticatorAPI.buildGetInfoCtap2Response()
-            : AuthenticatorAPI.buildGetInfoCtap1CompatResponse();
-        new ChainRunner(actions, successResponse, cb).run();
+        // successResponse is null: makeCredential/getAssertion send their own response
+        // via DeferredResponseSender after the biometric gate completes.
+        new ChainRunner(actions, null, cb).run();
     }
 
     // -------------------------------------------------------------------------

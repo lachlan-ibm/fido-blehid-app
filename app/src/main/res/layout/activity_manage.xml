@@ -210,22 +210,37 @@
                 android:hint="Password"
                 android:layout_marginBottom="8dp" />
                 
-            <Button
-                android:id="@+id/unlockButton"
+            <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="64dp"
-                android:text="Unlock"
-                android:backgroundTint="@color/ibm_blue"
-                android:textColor="@color/ibm_white"
-                android:textSize="18sp"
-                android:textStyle="bold"
-                android:paddingVertical="20dp"
-                android:paddingHorizontal="24dp"
-                android:letterSpacing="0.02"
-                android:elevation="4dp"
-                android:stateListAnimator="@null"
-                style="@android:style/Widget.Material.Button" />
+                android:layout_height="wrap_content">
+
+                <Button
+                    android:id="@+id/unlockButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="64dp"
+                    android:text="@string/unlock"
+                    android:backgroundTint="@color/ibm_blue"
+                    android:textColor="@color/ibm_white"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:paddingVertical="20dp"
+                    android:paddingHorizontal="24dp"
+                    android:letterSpacing="0.02"
+                    android:elevation="4dp"
+                    android:stateListAnimator="@null"
+                    style="@android:style/Widget.Material.Button" />
+
+                <ProgressBar
+                    android:id="@+id/unlockProgress"
+                    style="?android:attr/progressBarStyle"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="center"
+                    android:visibility="gone"
+                    android:indeterminateTint="@color/ibm_white" />
+
+            </FrameLayout>
                 
             <TextView
                 android:id="@+id/passwordError"

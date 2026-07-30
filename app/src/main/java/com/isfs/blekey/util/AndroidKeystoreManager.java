@@ -49,13 +49,17 @@ public class AndroidKeystoreManager implements KeystoreManager {
             KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE);
 
+            // UPUV_GATE_SIMPLIFICATION: bio-gate removed from platform key so that
+            // ECDH self-agreement in derivePasskeySeed() can run without a live TEE
+            // auth window.  Existing keys created with setUserAuthenticationRequired(true)
+            // will throw UserNotAuthenticatedException until the key is rolled via
+            // Advanced Config → Reset Platform Key.
             KeyGenParameterSpec.Builder builder = new KeyGenParameterSpec.Builder(
                 EC_KEYSTORE_ALIAS,
                 KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_VERIFY | KeyProperties.PURPOSE_AGREE_KEY)
                 .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
                 .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
-                .setUserAuthenticationRequired(true)
-                .setUserAuthenticationParameters(15, KeyProperties.AUTH_BIOMETRIC_STRONG);
+                .setUserAuthenticationRequired(false);
 
             // Prefer StrongBox; fall back to TEE.
             try {

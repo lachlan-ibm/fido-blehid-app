@@ -6,16 +6,12 @@ package com.isfs.blekey.authenticator;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -42,25 +38,6 @@ public class AuthenticatorAPICredentialExclusionTest {
 
     @Mock
     private Passkey mockPasskey;
-
-    private KeyPair originalPlatKeyPair;
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        // Save original platKeyPair for restoration
-        Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        platKeyPairField.setAccessible(true);
-        originalPlatKeyPair = (KeyPair) platKeyPairField.get(null);
-    }
-
-    @AfterEach
-    public void tearDown() throws Exception {
-        // Restore original platKeyPair
-        Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        platKeyPairField.setAccessible(true);
-        platKeyPairField.set(null, originalPlatKeyPair);
-    }
-
 
     // ========================================================================
     // checkExcludeList() - Missing Excluded Credential Branch

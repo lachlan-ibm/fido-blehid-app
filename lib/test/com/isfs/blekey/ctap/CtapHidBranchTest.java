@@ -124,19 +124,12 @@ public class CtapHidBranchTest {
      */
     @Test
     public void testProcessMessageWithInvalidCommand() throws Exception {
-        // Test that unknown command codes are handled
-        // Since CtapHidCmd.fromValue() throws exception, we verify the behavior
-        // by testing a valid command that triggers the default case
-        
-        // Use MSG command which calls u2f() method that just returns
+        // MSG with a zero-length payload → u2f() returns SW_WRONG_LENGTH (67 00),
+        // so a response IS ready now that U2F is implemented.
         byte[] msgPacket = createInitPacket(TEST_CID, CtapHidCmd.MSG, 0, null);
         CtapHid ctapHid = new CtapHid(msgPacket);
-        
-        // Process the message - u2f() just returns without setting response
         ctapHid.processMessage();
-        
-        // MSG command doesn't generate a response (u2f is not implemented)
-        assertFalse("Response should not be ready for MSG command", ctapHid.isResponseReady());
+        assertTrue("Response should be ready for MSG command", ctapHid.isResponseReady());
     }
     
     /**
@@ -282,8 +275,8 @@ public class CtapHidBranchTest {
         byte[] cancelResponse = cancelCmd.getResponseSegment();
         assertNotNull("Cancel response should not be null", cancelResponse);
         
-        // Verify it's a CANCEL response
-        assertEquals("Should be CANCEL command", CtapHidCmd.CANCEL.getValue(), cancelResponse[4] & 0xFF);
+        // Verify it's a CANCEL response (MSB set per spec §11.2.4)
+        assertEquals("Should be CANCEL command", 0x80 | CtapHidCmd.CANCEL.getValue(), cancelResponse[4] & 0xFF);
     }
     
     /**
@@ -300,8 +293,8 @@ public class CtapHidBranchTest {
         byte[] response = ctapHid.getResponseSegment();
         assertNotNull("Response should not be null", response);
         
-        // Verify response structure
-        assertEquals("Should be KEEP_ALIVE command", CtapHidCmd.KEEP_ALIVE.getValue(), response[4] & 0xFF);
+        // Verify response structure (MSB set per spec §11.2.4)
+        assertEquals("Should be KEEP_ALIVE command", 0x80 | CtapHidCmd.KEEP_ALIVE.getValue(), response[4] & 0xFF);
         assertEquals("Byte count should be 1", 1, ((response[5] & 0xFF) << 8) | (response[6] & 0xFF));
         assertEquals("Status byte should be 0x01", 0x01, response[7] & 0xFF);
     }
@@ -320,8 +313,8 @@ public class CtapHidBranchTest {
         byte[] response = ctapHid.getResponseSegment();
         assertNotNull("Response should not be null", response);
         
-        // Verify response structure
-        assertEquals("Should be WINK command", CtapHidCmd.WINK.getValue(), response[4] & 0xFF);
+        // Verify response structure (MSB set per spec §11.2.4)
+        assertEquals("Should be WINK command", 0x80 | CtapHidCmd.WINK.getValue(), response[4] & 0xFF);
         assertEquals("Byte count should be 0", 0, ((response[5] & 0xFF) << 8) | (response[6] & 0xFF));
     }
     
@@ -339,8 +332,8 @@ public class CtapHidBranchTest {
         byte[] response = ctapHid.getResponseSegment();
         assertNotNull("Response should not be null", response);
         
-        // Verify response structure
-        assertEquals("Should be LOCK command", CtapHidCmd.LOCK.getValue(), response[4] & 0xFF);
+        // Verify response structure (MSB set per spec §11.2.4)
+        assertEquals("Should be LOCK command", 0x80 | CtapHidCmd.LOCK.getValue(), response[4] & 0xFF);
         assertEquals("Byte count should be 0", 0, ((response[5] & 0xFF) << 8) | (response[6] & 0xFF));
     }
     

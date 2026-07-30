@@ -61,6 +61,7 @@
     <string name="passkey_wallet_create_failed">Failed to create passkey wallet</string>
     
     <!-- Unlock messages -->
+    <string name="unlock">Unlock</string>
     <string name="wallet_selected">Unlocking wallet: </string>
 
     <!-- Delete passkey messages -->
@@ -156,15 +157,27 @@
     <string name="adv_config_reset_success">Platform key reset. Re-enter your PIN for each wallet on next use.</string>
     <string name="adv_config_reset_failed">Platform key reset failed: %1$s</string>
 
+    <!-- PIN Retries strings -->
+    <string name="adv_config_pin_retries_label">PIN Retry Counter</string>
+    <string name="adv_config_pin_retries_desc">Remaining PIN attempts before lockout. Resetting to maximum does not change the PIN.</string>
+    <string name="adv_config_pin_retries_value">%1$d / %2$d</string>
+    <string name="adv_config_pin_retries_reset_button">Reset Retries</string>
+    <string name="adv_config_pin_retries_reset_confirm_title">Reset PIN Retry Counter?</string>
+    <string name="adv_config_pin_retries_reset_confirm_message">This restores the retry counter to its maximum value (%1$d). The PIN itself is not changed.</string>
+    <string name="adv_config_pin_retries_reset_success">PIN retry counter reset to maximum.</string>
+
     <!-- User Presence dialog strings -->
     <string name="up_getinfo_title">Authentication Request</string>
     <string name="up_getinfo_message">A device is requesting authentication. Choose a response.</string>
     <string name="up_allow">Accept</string>
-    <string name="up_allow_ctap1_compat">Accept [no pin]</string>
     <string name="up_deny">Deny</string>
     <string name="up_timeout_toast">Authentication request timed out</string>
     <string name="up_notification_title">Touch required</string>
     <string name="up_notification_text">Tap to approve the authentication request</string>
+
+    <!-- CTAP mode toggle strings -->
+    <string name="adv_config_ctap_mode_label">CTAP1/U2F Compatibility Mode</string>
+    <string name="adv_config_ctap_mode_desc">When enabled, getInfo advertises U2F_V2 / FIDO_2_0 without PIN/UV protocol (CTAP1 compat). Default: off (CTAP2, FIDO_2_1).</string>
 
     <!-- Biometric prompt for TEE-gated platform key -->
     <string name="bio_prompt_title">Confirm your identity</string>

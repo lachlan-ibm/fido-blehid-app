@@ -27,7 +27,6 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import com.isfs.blekey.R;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
-import com.isfs.blekey.authenticator.AuthenticatorAPI.SecureStorageCallback;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.util.KeyUtils;
 
@@ -68,7 +67,10 @@ public class HIDForegroundService extends Service {
     /** Notification ID for the UP prompt notification. */
     static final int UP_NOTIFICATION_ID = 4200;
     /** How long to wait for user response before auto-denying. */
-    static final int UP_TIMEOUT_MS = 15_000;
+    /** Stage 1 :: user to tap Allow/Deny after the dialog/notification appears. */
+    static final int UP_DIALOG_TIMEOUT_MS = 8_000;   // 8 s
+    /** Stage 2 :: user to meet biometric challenge after Allow. */
+    static final int UP_BIO_TIMEOUT_MS = 12_000;     // 12 s
 
     // -------------------------------------------------------------------------
     // Service-level fields
@@ -105,33 +107,32 @@ public class HIDForegroundService extends Service {
     // UpActivityDelegate — implemented by ServerActivity
     // -------------------------------------------------------------------------
 
-    /**
-     * Delegate interface that {@code ServerActivity} must implement to handle
-     * biometric prompts for the TEE platform key gate.
-     */
+    // UPUV_GATE_SIMPLIFICATION: BiometricDelegate commented out — no longer needed.
+    // Retained here for future reinstatement if the bio-gate path is restored.
+    /*
     public interface BiometricDelegate {
         void showBiometricPrompt(AuthenticatorAPI.PlatformKeyContext ctx);
     }
+    */
 
     /**
      * Callback interface for the bound {@code ServerActivity}.
      *
      * <p>The service calls {@link #showUpDialog} on the UI thread when the
      * activity is visible and a UP ceremony begins.  The activity calls back
-     * via {@link #deliverUpApproved()}, {@link #deliverUpApprovedCtap1Compat()},
-     * or {@link #deliverUpDenied()} once the user acts.</p>
+     * via {@link #deliverUpApproved()} or {@link #deliverUpDenied()} once the
+     * user acts.</p>
      *
      * <p>No {@link UpRequestContext} reference is passed across this boundary —
      * the service owns that state exclusively.</p>
      */
     public interface UpActivityDelegate {
         /**
-         * Called on the UI thread: show the three-button UP dialog.
+         * Called on the UI thread: show the UP dialog.
          *
-         * @param rpId      Relying-party identifier (may be null for getInfo).
-         * @param isGetInfo {@code true} when this is a getInfo ceremony.
+         * @param rpId Relying-party identifier (may be null).
          */
-        void showUpDialog(@Nullable String rpId, boolean isGetInfo);
+        void showUpDialog(@Nullable String rpId);
     }
 
     // -------------------------------------------------------------------------
@@ -214,8 +215,8 @@ public class HIDForegroundService extends Service {
         // Register the UP callback here so it survives activity destruction.
         AuthenticatorAPI.setUserPresenceCallback(new UpHandler());
 
-        // Register TEE / biometric gate callbacks.
-        AuthenticatorAPI.setSecureStorageCallback(new SecureStorageHandler());
+        // UPUV_GATE_SIMPLIFICATION: SecureStorageCallback no longer used for CTAP commands.
+        // AuthenticatorAPI.setSecureStorageCallback(new SecureStorageHandler());
         AuthenticatorAPI.setDeferredResponseSender(
             (txn, response) -> sendDeferred(txn, response));
 
@@ -236,7 +237,7 @@ public class HIDForegroundService extends Service {
     public void onDestroy() {
         Log.d(TAG, "onDestroy");
         AuthenticatorAPI.setUserPresenceCallback(null);
-        AuthenticatorAPI.setSecureStorageCallback(null);
+        // AuthenticatorAPI.setSecureStorageCallback(null); // UPUV_GATE_SIMPLIFICATION
         AuthenticatorAPI.setDeferredResponseSender(null);
         if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
         unregisterBatteryReceiver();
@@ -286,28 +287,17 @@ public class HIDForegroundService extends Service {
         });
     }
 
-    /** Approve — CTAP1/U2F-compat path (no PIN/UV, no userPresent flag on txn). */
-    public void deliverUpApprovedCtap1Compat() {
-        upHandler.post(() -> {
-            cancelTimeout();
-            cancelUpNotification();
-            if (pendingContext != null) {
-                pendingUpTxn.setUserPresent(true);
-                pendingContext.buildResponse(Outcome.APPROVED_CTAP1_COMPAT, response -> {
-                    if (response != null) sendDeferred(pendingUpTxn, response);
-                    finishUpDelivery();
-                });
-            } else {
-                finishUpDelivery();
-            }
-        });
-    }
-
     /** Deny. */
     public void deliverUpDenied() {
         upHandler.post(() -> {
             cancelTimeout();
             cancelUpNotification();
+            // Mark the channel as denied BEFORE sending the response so that any
+            // follow-up command arriving on the same CID (e.g. a U2F MSG retry) is
+            // rejected immediately without opening a new biometric prompt.
+            if (pendingUpTxn != null) {
+                pendingUpTxn.setUserDenied(true);
+            }
             if (pendingContext != null) {
                 pendingContext.buildResponse(Outcome.DENIED, response -> {
                     if (response != null) sendDeferred(pendingUpTxn, response);
@@ -333,12 +323,9 @@ public class HIDForegroundService extends Service {
     // UpHandler — inner class: bridges CTAP thread → service state → UI
     // -------------------------------------------------------------------------
 
-    /**
-     * Handles the TEE / biometric gate for the platform key.
-     * Posts to the UI thread and delegates to the activity's BiometricDelegate.
-     * On the first successful bio, also runs applyAppConfig() so ECDH decryption
-     * of the stored HKDF info has a valid auth window.
-     */
+    // UPUV_GATE_SIMPLIFICATION: SecureStorageHandler commented out — no longer needed.
+    // Retained here for future reinstatement if the bio-gate path is restored.
+    /*
     private final class SecureStorageHandler implements SecureStorageCallback {
 
         @Override
@@ -367,6 +354,7 @@ public class HIDForegroundService extends Service {
             });
         }
     }
+    */
 
     private final class UpHandler implements UserPresenceCallback {
         @Override
@@ -378,7 +366,7 @@ public class HIDForegroundService extends Service {
             CtapTxn txn    = context.getTxn();
             byte[]  cid    = txn.getCid();
             String  cidKey = bytesToHex(cid);
-
+            stopUpKeepalive();
             keepaliveManager.startKeepalive(cidKey, KeepaliveManager.STATUS_PROCESSING);
 
             // Store pending state on the service before posting to UI thread.
@@ -392,7 +380,7 @@ public class HIDForegroundService extends Service {
 
                 UpActivityDelegate d = activityDelegate;
                 if (d != null) {
-                    d.showUpDialog(context.getRpId(), context.isGetInfo());
+                    d.showUpDialog(context.getRpId());
                 } else {
                     postUpNotification();
                 }
@@ -406,7 +394,7 @@ public class HIDForegroundService extends Service {
 
     private void startUpTimeout() {
         timeoutRunnable = this::deliverTimeoutInternal;
-        upHandler.postDelayed(timeoutRunnable, UP_TIMEOUT_MS);
+        upHandler.postDelayed(timeoutRunnable, UP_DIALOG_TIMEOUT_MS);
     }
 
     private void cancelTimeout() {
@@ -454,7 +442,7 @@ public class HIDForegroundService extends Service {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm == null) return;
         upWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "blekey:upPrompt");
-        upWakeLock.acquire(UP_TIMEOUT_MS + 2_000L);
+        upWakeLock.acquire(UP_BIO_TIMEOUT_MS + 2_000L);
         Log.d(TAG, "UP wake lock acquired");
     }
 
@@ -589,8 +577,10 @@ public class HIDForegroundService extends Service {
                 Log.e(TAG, "Failed to decrypt HKDF info; using default", e);
             }
         }
-        AuthenticatorAPI.setAppConfig(new AppConfig(info));
-        Log.d(TAG, "AppConfig applied: hkdf_info length=" + info.length());
+        boolean ctap1Compat = prefs.getBoolean("ctap1_compat_mode", AppConfig.DEFAULT_CTAP1_COMPAT);
+        AuthenticatorAPI.setAppConfig(new AppConfig(info, ctap1Compat));
+        Log.d(TAG, "AppConfig applied: hkdf_info length=" + info.length()
+                + " ctap1CompatMode=" + ctap1Compat);
     }
 
     private void createUpNotificationChannel() {

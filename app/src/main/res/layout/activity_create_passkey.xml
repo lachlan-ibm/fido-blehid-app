@@ -89,24 +89,39 @@
         android:visibility="gone"
         android:layout_marginBottom="16dp" />
 
-    <Button
-        android:id="@+id/createPasskeyButton"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:minHeight="64dp"
-        android:text="@string/create_passkey_wallet"
-        android:backgroundTint="@color/ibm_blue"
-        android:textColor="@color/ibm_white"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:paddingVertical="20dp"
-        android:paddingHorizontal="24dp"
-        android:letterSpacing="0.02"
-        android:elevation="4dp"
-        android:stateListAnimator="@null"
-        android:enabled="false"
-        android:layout_marginTop="16dp"
-        style="@android:style/Widget.Material.Button" />
+        android:layout_marginTop="16dp">
+
+        <Button
+            android:id="@+id/createPasskeyButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="64dp"
+            android:text="@string/create_passkey_wallet"
+            android:backgroundTint="@color/ibm_blue"
+            android:textColor="@color/ibm_white"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:paddingVertical="20dp"
+            android:paddingHorizontal="24dp"
+            android:letterSpacing="0.02"
+            android:elevation="4dp"
+            android:stateListAnimator="@null"
+            android:enabled="false"
+            style="@android:style/Widget.Material.Button" />
+
+        <ProgressBar
+            android:id="@+id/createProgress"
+            style="?android:attr/progressBarStyle"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:visibility="gone"
+            android:indeterminateTint="@color/ibm_white" />
+
+    </FrameLayout>
 
     </LinearLayout>
 </LinearLayout>

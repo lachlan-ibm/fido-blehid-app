@@ -78,7 +78,7 @@ import androidx.annotation.Nullable;
  */
 public class ServerActivity extends AppCompatActivity
         implements HIDForegroundService.UpActivityDelegate,
-                   HIDForegroundService.BiometricDelegate,
+                   // HIDForegroundService.BiometricDelegate, // UPUV_GATE_SIMPLIFICATION
                    HIDForegroundService.CancelListener,
                    HIDForegroundService.TimeoutListener {
 
@@ -1233,7 +1233,7 @@ public class ServerActivity extends AppCompatActivity
      * {@link #onResume()}.
      */
     @Override
-    public void showUpDialog(@Nullable String rpId, boolean isGetInfo) {
+    public void showUpDialog(@Nullable String rpId) {
         if (isInForeground) {
             showUserPresenceDialog();
         } else {
@@ -1248,12 +1248,11 @@ public class ServerActivity extends AppCompatActivity
 
     // -------------------------------------------------------------------------
     // HIDForegroundService.BiometricDelegate
+    // UPUV_GATE_SIMPLIFICATION: showBiometricPrompt commented out — BiometricDelegate removed.
+    // Retained here for future reinstatement if the bio-gate path is restored.
     // -------------------------------------------------------------------------
 
-    /**
-     * Called on the UI thread by {@link HIDForegroundService.SecureStorageHandler} when a
-     * CTAP command needs the bio-gated platform key.
-     */
+    /*
     @Override
     public void showBiometricPrompt(AuthenticatorAPI.PlatformKeyContext ctx) {
         biometricHelper.authenticate(
@@ -1275,6 +1274,7 @@ public class ServerActivity extends AppCompatActivity
             }
         );
     }
+    */
 
     // -------------------------------------------------------------------------
     // HIDForegroundService.CancelListener
@@ -1303,21 +1303,16 @@ public class ServerActivity extends AppCompatActivity
 
     private void showUserPresenceDialog() {
         dismissDialogIfShowing();
-        // AlertDialog lays out buttons left-to-right as: Negative | Neutral | Positive.
-        // Assigning Allow→Negative and Deny→Positive produces the desired visual order:
-        //   [Allow]  [Allow (U2F only)]  [Deny]
+        // AlertDialog lays out buttons left-to-right as: Negative | Positive.
+        // Assigning Allow→Negative and Deny→Positive:  [Allow]  [Deny]
         userPresenceDialog = new AlertDialog.Builder(this)
             .setTitle(getString(R.string.up_getinfo_title))
             .setMessage(getString(R.string.up_getinfo_message))
-            .setNegativeButton(R.string.up_allow,             (d, w) -> {
+            .setNegativeButton(R.string.up_allow, (d, w) -> {
                 dismissDialogIfShowing();
                 if (foregroundService != null) foregroundService.deliverUpApproved();
             })
-            .setNeutralButton(R.string.up_allow_ctap1_compat, (d, w) -> {
-                dismissDialogIfShowing();
-                if (foregroundService != null) foregroundService.deliverUpApprovedCtap1Compat();
-            })
-            .setPositiveButton(R.string.up_deny,              (d, w) -> {
+            .setPositiveButton(R.string.up_deny, (d, w) -> {
                 dismissDialogIfShowing();
                 if (foregroundService != null) foregroundService.deliverUpDenied();
             })

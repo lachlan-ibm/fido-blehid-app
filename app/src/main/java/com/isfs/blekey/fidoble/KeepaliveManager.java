@@ -90,7 +90,7 @@ public class KeepaliveManager {
     /**
      * Represents an active keepalive session for a single channel / device.
      */
-    private static class KeepaliveSession {
+    private class KeepaliveSession {
         final AtomicBoolean active = new AtomicBoolean(true);
         byte currentStatus;
         final long startTime = System.currentTimeMillis();
@@ -98,6 +98,15 @@ public class KeepaliveManager {
         KeepaliveSession(byte initialStatus) {
             this.currentStatus = initialStatus;
         }
+
+        // Stored so the Handler can remove it by token (the session object itself).
+        final Runnable runnable = () -> {
+            if (!active.get()) return;
+            sendKeepalive(this);
+            if (active.get()) {
+                scheduleKeepalive(this);
+            }
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -188,6 +197,10 @@ public class KeepaliveManager {
         KeepaliveSession session = activeSessions.remove(key);
         if (session != null) {
             session.active.set(false);
+            // Remove any pending runnables for this session from the Handler queue.
+            // Without this, a startKeepalive/stopKeepalive cycle leaves orphaned
+            // runnables that accumulate and fire simultaneously, multiplying the rate.
+            keepaliveHandler.removeCallbacksAndMessages(session);
             long duration = System.currentTimeMillis() - session.startTime;
             Log.d(TAG, "Stopped keepalive for key=" + key + ", duration=" + duration + "ms");
         }
@@ -238,15 +251,9 @@ public class KeepaliveManager {
     // -------------------------------------------------------------------------
 
     private void scheduleKeepalive(@NonNull KeepaliveSession session) {
-        keepaliveHandler.postDelayed(() -> {
-            if (!session.active.get()) return;
-
-            sendKeepalive(session);
-
-            if (session.active.get()) {
-                scheduleKeepalive(session);
-            }
-        }, KEEPALIVE_INTERVAL_MS);
+        // Use the session object as the token so removeCallbacksAndMessages(session)
+        // can cancel exactly the runnables belonging to this session.
+        keepaliveHandler.postDelayed(session.runnable, session, KEEPALIVE_INTERVAL_MS);
     }
 
     private void sendKeepalive(@NonNull KeepaliveSession session) {

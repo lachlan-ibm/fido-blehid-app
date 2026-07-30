@@ -76,10 +76,17 @@ public class CtapTxn {
     private boolean userPresent = false;
 
     /**
-     * True once the platform key TEE auth window has been successfully opened on
-     * this channel. Allows makeCredential / getAssertion / getTkn to skip bio re-challenge.
+     * True once the user has explicitly denied a UP prompt on this channel.
+     * Any subsequent command on this CID — regardless of MSG type — must be
+     * rejected immediately without opening a new biometric prompt.
      */
-    private boolean bioVerified = false;
+    private boolean userDenied = false;
+
+    /**
+     * True once the ECDH IKM has been derived and cached on this channel.
+     * Allows makeCredential / getAssertion to skip ECDH re-derivation on the same CID.
+     */
+    private boolean ikmCached = false;
 
     /**
      * Raw ECDH IKM derived during the first bio-gate opening on this channel.
@@ -88,6 +95,13 @@ public class CtapTxn {
      * Must NOT be serialised to disk.
      */
     private byte[] platformIkm = null;
+
+    /**
+     * Ephemeral ECDH key pair generated for this CID's key-agreement ceremony.
+     * Populated by AuthenticatorAPI.getKey(); consumed and nulled by getTkn().
+     * Must NOT be serialised to disk.
+     */
+    private java.security.KeyPair ecdhKeyPair = null;
 
     /**
      * The CtapHid instance whose response is deferred pending user presence.
@@ -322,18 +336,33 @@ public class CtapTxn {
     }
 
     /**
-     * Returns true if the platform key TEE auth window has been opened on this channel.
+     * Returns true if the user explicitly denied the UP prompt on this channel.
      *
-     * @return true if bio-verified
+     * @return true if denied
      */
-    public boolean isBioVerified() { return bioVerified; }
+    public boolean isUserDenied() { return userDenied; }
 
     /**
-     * Sets the bio-verified flag.
+     * Marks this channel as explicitly denied by the user.
+     * Once set, all subsequent commands on this CID are rejected immediately.
      *
-     * @param v true to mark the channel as bio-verified
+     * @param v true to mark as denied
      */
-    public void setBioVerified(boolean v) { this.bioVerified = v; }
+    public void setUserDenied(boolean v) { this.userDenied = v; }
+
+    /**
+     * Returns true if the ECDH IKM has been derived and cached on this channel.
+     *
+     * @return true if IKM is cached
+     */
+    public boolean isIkmCached() { return ikmCached; }
+
+    /**
+     * Sets the IKM-cached flag.
+     *
+     * @param v true to mark the channel IKM as cached
+     */
+    public void setIkmCached(boolean v) { this.ikmCached = v; }
 
     /**
      * Gets the cached ECDH IKM for this channel.
@@ -348,6 +377,21 @@ public class CtapTxn {
      * @param ikm The IKM to cache (defensive copy is made)
      */
     public void setPlatformIkm(byte[] ikm) { this.platformIkm = ikm != null ? ikm.clone() : null; }
+
+    /**
+     * Returns the ephemeral ECDH key pair for this channel's PIN ceremony.
+     * Null until GETKEY has been processed on this CID.
+     *
+     * @return the key pair, or null if GETKEY has not yet been called
+     */
+    public java.security.KeyPair getEcdhKeyPair() { return ecdhKeyPair; }
+
+    /**
+     * Stores the ephemeral ECDH key pair generated during GETKEY.
+     *
+     * @param kp Fresh P-256 key pair; pass null to clear after use.
+     */
+    public void setEcdhKeyPair(java.security.KeyPair kp) { this.ecdhKeyPair = kp; }
 
     /**
      * Stores the deferred CtapHid command awaiting user presence resolution.

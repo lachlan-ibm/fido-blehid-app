@@ -4,6 +4,7 @@
 
 package com.isfs.blekey.hidsvc;
 
+import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
 
@@ -183,7 +184,19 @@ public class HIDPasskey {
         }
         CtapHid cmd = txn.takeDeferredCmd();
         if (cmd == null) {
-            logger.error("sendDeferredResponse: no deferred cmd on txn");
+            logger.error("sendDeferredResponse: no deferred cmd on txn {} — " +
+                         "channel state is invalid; sending CTAPHID_ERROR and evicting CID",
+                         java.util.Arrays.toString(txn.getCid()));
+            // Send CTAPHID_ERROR(ERR_OTHER) so the platform knows the transaction is dead.
+            if (_transport != null) {
+                _transport.sendInputReport(
+                    CtapHid.buildHidErrorFrame(txn.getCid(), Ctap2StatusCode.OTHER));
+            } else {
+                logger.error("sendDeferredResponse: _transport is also NULL — " +
+                             "platform will not be notified of channel failure");
+            }
+            // Evict the poisoned CID so no further commands are accepted on it.
+            CtapHid.evictCid(txn.getCid());
             return;
         }
         try {

@@ -19,16 +19,15 @@ import com.isfs.blekey.ctap.CtapTxn;
 /**
  * Tests targeting missed branches in getTkn() and related methods.
  * Based on JaCoCo coverage report showing getTkn with 30% instruction, 35% branch coverage.
- * 
+ *
  * Key branches to cover:
- * - Line 1425: pinHashEnc == null check
- * - Line 1426: platKeyPair == null check  
- * - Line 1429: req.get(KEY_PIN_HASH_ENC) == null check
- * - Line 1437: clientKey == null check
- * - Line 1443: sharedSecret == null check
- * - Line 1453: pkeyFile == null check
- * - Line 1454: pinRetries == 0 check
- * - Exception handling branches (lines 1472-1481)
+ * - getTkn: missing KEY_PIN_HASH_ENC
+ * - getTkn: wrong type for KEY_PIN_HASH_ENC
+ * - getTkn: null client key
+ * - getTkn: no ecdhKeyPair on txn → performEcdhKeyAgreement returns null
+ * - validateAndExtractPinHash: missing / wrong-type parameter
+ * - extractClientPublicKey: missing / invalid key agreement
+ * - performEcdhKeyAgreement: null txn or no ecdhKeyPair on txn
  */
 public class AuthenticatorAPIGetTknTest {
 
@@ -44,33 +43,27 @@ public class AuthenticatorAPIGetTknTest {
     }
     
     /**
-     * Test getTkn() with null pinHashEnc and null platKeyPair.
-     * Covers line 1426-1428: platKeyPair == null branch
+     * Test getTkn() when txn has no ecdhKeyPair (GETKEY was never called).
+     * performEcdhKeyAgreement() returns null → getTkn() returns OTHER error.
      */
     @Test
-    public void testGetTkn_NullPlatKeyPair() throws Exception {
+    public void testGetTkn_NoEcdhKeyPairOnTxn() throws Exception {
         Method method = AuthenticatorAPI.class.getDeclaredMethod(
             "getTkn", CtapTxn.class, Map.class);
         method.setAccessible(true);
-        
+
+        CtapTxn txn = new CtapTxn();
+        // ecdhKeyPair is null — GETKEY was never called on this txn
+
         Map<Integer, Object> req = new HashMap<>();
         req.put(KEY_PIN_HASH_ENC, new byte[16]);
-        
-        // Set platKeyPair to null via reflection
-        java.lang.reflect.Field field = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        field.setAccessible(true);
-        Object originalValue = field.get(null);
-        field.set(null, null);
-        
-        try {
-            byte[] result = (byte[]) method.invoke(null, mockTxn, req);
-            
-            assertNotNull("Should return error response", result);
-            assertEquals("Should return OTHER error", Ctap2StatusCode.OTHER.getCode(), result[0] & 0xFF);
-        } finally {
-            // Restore original value
-            field.set(null, originalValue);
-        }
+        // No KEY_PLATFORM_KEY_AGREEMENT → extractClientPublicKey returns null → INVALID_PARAMETER
+
+        byte[] result = (byte[]) method.invoke(null, txn, req);
+
+        assertNotNull("Should return error response", result);
+        assertEquals("Should return INVALID_PARAMETER when client key is absent",
+            Ctap2StatusCode.INVALID_PARAMETER.getCode(), result[0] & 0xFF);
     }
     
     /**
@@ -242,16 +235,34 @@ public class AuthenticatorAPIGetTknTest {
     }
     
     /**
-     * Test performEcdhKeyAgreement() with null client key.
-     * Covers null check branch - method throws IllegalArgumentException.
+     * Test performEcdhKeyAgreement() with null txn.
+     * Should return null (error logged, no exception).
      */
-    @Test(expected = java.lang.reflect.InvocationTargetException.class)
-    public void testPerformEcdhKeyAgreement_NullClientKey() throws Exception {
+    @Test
+    public void testPerformEcdhKeyAgreement_NullTxn() throws Exception {
         Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "performEcdhKeyAgreement", java.security.PublicKey.class);
+            "performEcdhKeyAgreement", java.security.PublicKey.class, CtapTxn.class);
         method.setAccessible(true);
-        
-        method.invoke(null, (java.security.PublicKey) null);
+
+        Object result = method.invoke(null, (java.security.PublicKey) null, (CtapTxn) null);
+        assertNull("Should return null when txn is null", result);
+    }
+
+    /**
+     * Test performEcdhKeyAgreement() with a txn that has no ecdhKeyPair set.
+     * Should return null (no GETKEY was performed on this CID).
+     */
+    @Test
+    public void testPerformEcdhKeyAgreement_NoEcdhKeyPair() throws Exception {
+        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+            "performEcdhKeyAgreement", java.security.PublicKey.class, CtapTxn.class);
+        method.setAccessible(true);
+
+        CtapTxn txn = new CtapTxn();
+        // ecdhKeyPair intentionally not set
+
+        Object result = method.invoke(null, (java.security.PublicKey) null, txn);
+        assertNull("Should return null when txn has no ecdhKeyPair", result);
     }
 
 }

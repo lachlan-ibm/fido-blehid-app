@@ -25,6 +25,7 @@ import com.isfs.blekey.R;
 import com.isfs.blekey.credential.VerifiableCredential;
 import com.isfs.blekey.data.Passkey;
 
+import android.widget.FrameLayout;
 import android.widget.Toast;
 import android.widget.ImageView;
 
@@ -34,6 +35,8 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Activity for managing resident credentials and digital credentials stored on the device.
@@ -49,20 +52,21 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
     
     private TabLayout tabLayout;
     private ViewPager2 viewPager;
-    
+    private FrameLayout loadingFrame;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_resident_credentials);
-        
+
         Intent intent = getIntent();
         if (intent != null) {
             passwordHash = intent.getByteArrayExtra("passkey");
             fileName = intent.getStringExtra("file");
         }
-        
+
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
-        
+
         // Set up home button to navigate to MainActivity
         findViewById(R.id.homeButton).setOnClickListener(view -> {
             Intent homeIntent = new Intent(this, com.isfs.blekey.MainActivity.class);
@@ -70,36 +74,51 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             startActivity(homeIntent);
             finish();
         });
-        
-        TextView credentialsDescription = findViewById(R.id.credentialsDescription);
-        credentialsDescription.setText(R.string.manage_credentials);
-        
-        loadPasskey();
-        
+
         tabLayout = findViewById(R.id.tabLayout);
         viewPager = findViewById(R.id.viewPager);
-        
-        setupTabs();
+        loadingFrame = findViewById(R.id.loadingFrame);
+
+        // Hide tabs until passkey is loaded; loadPasskey() calls setupTabs() on completion
+        tabLayout.setVisibility(View.GONE);
+        viewPager.setVisibility(View.GONE);
+        loadPasskey();
     }
-    
+
     private void loadPasskey() {
-        try {
-            if (fileName != null && passwordHash != null) {
+        if (fileName == null || passwordHash == null) {
+            Toast.makeText(this, "Failed to open passkey", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        loadingFrame.setVisibility(View.VISIBLE);
+
+        ExecutorService exec = Executors.newSingleThreadExecutor();
+        exec.execute(() -> {
+            Passkey loaded = null;
+            try {
                 File appDataDir = getFilesDir();
                 System.setProperty("FIDO2_HOME", appDataDir.getAbsolutePath());
-                
-                File passkeyFile = new File(appDataDir, fileName);
-                passkey = Passkey.openKey(passwordHash, passkeyFile);
-                
-                if (passkey == null) {
+                loaded = Passkey.openKey(passwordHash, new File(appDataDir, fileName));
+            } catch (Exception e) {
+                Log.e(TAG, "Error loading passkey", e);
+            }
+
+            final Passkey result = loaded;
+            runOnUiThread(() -> {
+                loadingFrame.setVisibility(View.GONE);
+                if (result == null) {
                     Log.e(TAG, "Failed to open passkey");
                     Toast.makeText(this, "Failed to open passkey", Toast.LENGTH_SHORT).show();
+                } else {
+                    passkey = result;
+                    tabLayout.setVisibility(View.VISIBLE);
+                    viewPager.setVisibility(View.VISIBLE);
+                    setupTabs();
                 }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error loading passkey", e);
-            Toast.makeText(this, "Error loading passkey: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-        }
+            });
+            exec.shutdown();
+        });
     }
     
     private void setupTabs() {

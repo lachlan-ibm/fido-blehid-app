@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.io.File;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.security.KeyPair;
@@ -25,7 +24,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.data.AppConfig;
-import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.KeyUtils;
 
@@ -43,8 +41,6 @@ import com.isfs.blekey.util.KeyUtils;
 @ExtendWith(MockitoExtension.class)
 public class PlatformKeyAttestationTest {
 
-    private KeyPair savedPlatKeyPair;
-    private KeyPair testPasskeyPair;
     private KeyPair testPlatformKeyPair;
     private File tempDir;
     /** Captures the deferred response delivered via DeferredResponseSender in unit tests. */
@@ -57,24 +53,16 @@ public class PlatformKeyAttestationTest {
         tempDir.deleteOnExit();
         System.setProperty("FIDO2_HOME", tempDir.getAbsolutePath());
 
-        // Generate a test passkey key pair (simulates a loaded .passkey file key)
-        testPasskeyPair = KeyUtils.generateKeyPair("EC", 256);
-
         // Generate a test platform key pair and write it to platform.key so that
         // KeyUtils.getPlatformKey() (disk lookup) returns it during makeCredential.
         testPlatformKeyPair = KeyUtils.generateKeyPair("EC", 256);
         FileUtils.writePrivatePEM(testPlatformKeyPair.getPrivate(),
                 new File(tempDir, "platform.key"));
 
-        // Save + replace the static platKeyPair so tests are deterministic
-        Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        platKeyPairField.setAccessible(true);
-        savedPlatKeyPair = (KeyPair) platKeyPairField.get(null);
-        platKeyPairField.set(null, testPlatformKeyPair);
-
-        // Stub SecureStorageCallback: platform key is not TEE-backed in tests.
-        // Call onUnlocked() immediately so makeCredential/getAssertion can proceed.
-        AuthenticatorAPI.setSecureStorageCallback(ctx -> ctx.onUnlocked());
+        // Stub UserPresenceCallback: auto-approve so the UP dialog gate is bypassed
+        // in unit tests (no UI thread available). The ChainAction fires synchronously.
+        AuthenticatorAPI.setUserPresenceCallback(
+            ctx -> ctx.buildResponse(UpRequestContext.Outcome.APPROVED, err -> {}));
 
         // Stub DeferredResponseSender: try the CtapHid path first (Ctap2HidRequestTest
         // pattern); fall back to capturing in capturedResponse for direct-call tests.
@@ -95,10 +83,7 @@ public class PlatformKeyAttestationTest {
 
     @AfterEach
     public void tearDown() throws Exception {
-        Field platKeyPairField = AuthenticatorAPI.class.getDeclaredField("platKeyPair");
-        platKeyPairField.setAccessible(true);
-        platKeyPairField.set(null, savedPlatKeyPair);
-        AuthenticatorAPI.setSecureStorageCallback(null);
+        AuthenticatorAPI.setUserPresenceCallback(null);
         AuthenticatorAPI.setDeferredResponseSender(null);
         System.clearProperty("FIDO2_HOME");
     }
@@ -197,6 +182,10 @@ public class PlatformKeyAttestationTest {
 
         CtapTxn txn = new CtapTxn();
         txn.setUserPresent(true);
+        // Pre-seed the IKM-cached fast-path so derivePasskeySeed bypasses
+        // ECDH re-derivation (KeystoreManager unavailable in unit-test JVM environment).
+        txn.setIkmCached(true);
+        txn.setPlatformIkm(testPlatformKeyPair.getPrivate().getEncoded());
 
         // makeCredential is always deferred now; response arrives via DeferredResponseSender.
         AuthenticatorAPI.makeCredential(txn, req);

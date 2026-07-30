@@ -118,8 +118,8 @@ public class CtapHidTests {
             byte[] responseCid = Arrays.copyOfRange(response, 0, 4);
             assertArrayEquals("Response channel ID should match", TEST_CID, responseCid);
             
-            // Verify response command (should be PING for echo)
-            assertEquals("Response command should be PING", CtapHidCmd.PING.getValue(), response[4] & 0xFF);
+            // Verify response command (should be PING for echo — MSB set per spec §11.2.4)
+            assertEquals("Response command should be PING", 0x80 | CtapHidCmd.PING.getValue(), response[4] & 0xFF);
             
             // Extract response data length
             int responseLength = ((response[5] & 0xFF) << 8) | (response[6] & 0xFF);
@@ -377,7 +377,7 @@ public class CtapHidTests {
         for(int i = 0; i < 4; i++) { //broadcast cid
             assertEquals((byte) 0xFF, response[i]);
         }
-        assertTrue(response[4] == CtapHidCmd.INIT.getValue()); //cmd
+        assertEquals("INIT response CMD byte", 0x80 | CtapHidCmd.INIT.getValue(), response[4] & 0xFF); //MSB set per spec §11.2.4
         assertTrue(response[6] == 17); //bcnt
         byte[] rspNonce = new byte[8];
         System.arraycopy(response, 7, rspNonce, 0, 8);

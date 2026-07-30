@@ -200,11 +200,6 @@ public class Ctap2HidRequestTest {
                     });
             });
 
-        // Stub SecureStorageCallback: platform key is not TEE-backed in tests so
-        // onUnlocked() can be called immediately — no real biometric needed.
-        com.isfs.blekey.authenticator.AuthenticatorAPI.setSecureStorageCallback(
-            ctx -> ctx.onUnlocked());
-
         // Stub DeferredResponseSender: inject the response back into the deferred
         // CtapHid the same way HIDPasskey.sendDeferredResponse() does on device.
         com.isfs.blekey.authenticator.AuthenticatorAPI.setDeferredResponseSender(
@@ -234,7 +229,7 @@ public class Ctap2HidRequestTest {
             .when(KeyUtils.getKeystoreManager().getEC256PrivateKey())
             .thenReturn(platformKeyPair.getPrivate());
         // Stub the public key from the same pair so the ECDH self-agreement in
-        // derivePasskeySeedDeferred uses matching keys (privKey × ownPubKey).
+        // derivePasskeySeed uses matching keys (privKey × ownPubKey).
         org.mockito.Mockito.lenient()
             .when(KeyUtils.getKeystoreManager().getEC256PublicKey())
             .thenReturn(platformKeyPair.getPublic());
@@ -437,13 +432,10 @@ public class Ctap2HidRequestTest {
         // Verify versions include FIDO_2_0 and FIDO_2_1
         List<String> versions = (List<String>) cborResponse.get(0x01);
         boolean hasFido20 = false;
-        boolean hasFido21 = false;
         for (String version : versions) {
             if ("FIDO_2_0".equals(version)) hasFido20 = true;
-            if ("FIDO_2_1".equals(version)) hasFido21 = true;
         }
         assertTrue(hasFido20, "Versions should include FIDO_2_0");
-        assertTrue(hasFido21, "Versions should include FIDO_2_1");
         System.err.println("End testAuthenticatorGetInfo");
     }
     

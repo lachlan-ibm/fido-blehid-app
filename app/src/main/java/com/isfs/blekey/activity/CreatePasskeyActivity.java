@@ -6,6 +6,7 @@ import android.text.TextWatcher;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -17,6 +18,8 @@ import com.isfs.blekey.util.AndroidKeystoreManager;
 import com.isfs.blekey.util.KeyUtils;
 
 import java.io.File;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
@@ -31,8 +34,11 @@ public class CreatePasskeyActivity extends AppCompatActivity {
     private EditText passwordInput;
     private EditText confirmPasswordInput;
     private Button createButton;
+    private ProgressBar createProgress;
     private TextView nameErrorText;
     private TextView passwordErrorText;
+
+    private final ExecutorService executorService = Executors.newSingleThreadExecutor();
 
     // Pattern for validating passkey name (alphanumeric only)
     private static final Pattern NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9]+$");
@@ -48,6 +54,7 @@ public class CreatePasskeyActivity extends AppCompatActivity {
         passwordInput = findViewById(R.id.createPasskeyPasswordInput);
         confirmPasswordInput = findViewById(R.id.confirmPasswordInput);
         createButton = findViewById(R.id.createPasskeyButton);
+        createProgress = findViewById(R.id.createProgress);
         nameErrorText = findViewById(R.id.nameErrorText);
         passwordErrorText = findViewById(R.id.passwordErrorText);
 
@@ -67,6 +74,24 @@ public class CreatePasskeyActivity extends AppCompatActivity {
             startActivity(intent);
             finish();
         });
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executorService.shutdown();
+    }
+
+    private void showCreateSpinner() {
+        createButton.setText("");
+        createButton.setEnabled(false);
+        createProgress.setVisibility(View.VISIBLE);
+    }
+
+    private void hideCreateSpinner() {
+        createProgress.setVisibility(View.GONE);
+        createButton.setText(R.string.create_passkey_wallet);
+        createButton.setEnabled(true);
     }
 
     /**
@@ -159,6 +184,7 @@ public class CreatePasskeyActivity extends AppCompatActivity {
 
     /**
      * Creates a new passkey with the provided local name and password.
+     * Crypto is performed on the background executor to avoid freezing the UI.
      */
     private void createPasskey() {
         String passkeyName = passkeyNameInput.getText().toString().trim();
@@ -186,15 +212,21 @@ public class CreatePasskeyActivity extends AppCompatActivity {
         // Generate PIN hash from password
         byte[] pinHash = KeyUtils.getPinHash(password);
 
-        // Generate passkey
-        Passkey passkey = Passkey.generatePasskey(pinHash, passkeyFile);
+        showCreateSpinner();
 
-        if (passkey != null) {
-            Toast.makeText(this, R.string.passkey_wallet_created, Toast.LENGTH_SHORT).show();
-            finish(); // Return to previous activity
-        } else {
-            Toast.makeText(this, R.string.passkey_wallet_create_failed, Toast.LENGTH_SHORT).show();
-        }
+        executorService.execute(() -> {
+            Passkey passkey = Passkey.generatePasskey(pinHash, passkeyFile);
+
+            runOnUiThread(() -> {
+                hideCreateSpinner();
+                if (passkey != null) {
+                    Toast.makeText(this, R.string.passkey_wallet_created, Toast.LENGTH_SHORT).show();
+                    finish();
+                } else {
+                    Toast.makeText(this, R.string.passkey_wallet_create_failed, Toast.LENGTH_SHORT).show();
+                }
+            });
+        });
     }
 }
 

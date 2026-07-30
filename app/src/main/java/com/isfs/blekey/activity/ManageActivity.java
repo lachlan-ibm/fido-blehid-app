@@ -12,6 +12,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.view.ViewGroup;
@@ -140,6 +141,7 @@ public class ManageActivity extends AppCompatActivity {
     // Password protection components
     private EditText passwordInput;
     private Button unlockButton;
+    private ProgressBar unlockProgress;
     private TextView passwordError;
     private LinearLayout passwordSection;
     private LinearLayout credentialOptionsSection;
@@ -558,6 +560,7 @@ public class ManageActivity extends AppCompatActivity {
         // Initialize password protection components
         passwordInput = findViewById(R.id.passwordInput);
         unlockButton = findViewById(R.id.unlockButton);
+        unlockProgress = findViewById(R.id.unlockProgress);
         passwordError = findViewById(R.id.passwordError);
         passwordSection = findViewById(R.id.passwordSection);
         credentialOptionsSection = findViewById(R.id.credentialOptionsSection);
@@ -893,27 +896,50 @@ public class ManageActivity extends AppCompatActivity {
             });
     }
 
+    private void showUnlockSpinner() {
+        unlockButton.setText("");
+        unlockButton.setEnabled(false);
+        unlockProgress.setVisibility(View.VISIBLE);
+    }
+
+    private void hideUnlockSpinner() {
+        unlockProgress.setVisibility(View.GONE);
+        unlockButton.setText(R.string.unlock);
+        unlockButton.setEnabled(true);
+    }
+
     /**
      * Called on the UI thread after the CryptoObject biometric succeeds.
-     * TEE auth window is open — safe to call Passkey.openKey() / writeKey().
+     * Shows an inline spinner and performs wallet crypto on the background executor.
      */
     private void completePasswordValidation(byte[] pinHash) {
-        Passkey passkey = Passkey.openKey(pinHash, selectedPasskeyFile);
+        showUnlockSpinner();
 
-        if (passkey == null) {
-            handleInvalidPassword();
-            return;
-        }
+        executorService.execute(() -> {
+            Passkey passkey = Passkey.openKey(pinHash, selectedPasskeyFile);
 
-        Log.d(TAG, "Updating passkey header after successful unlock");
-        boolean updated = Passkey.writeKey(passkey, pinHash, selectedPasskeyFile);
-        if (!updated) {
-            Log.w(TAG, "Failed to update passkey header, but passkey is still usable");
-        }
+            if (passkey == null) {
+                runOnUiThread(() -> {
+                    hideUnlockSpinner();
+                    handleInvalidPassword();
+                });
+                return;
+            }
 
-        Toast.makeText(this, getString(R.string.wallet_unlocked), Toast.LENGTH_SHORT).show();
-        hideKeyboard();
-        launchAppropriateActivity(pinHash);
+            Log.d(TAG, "Updating passkey header after successful unlock");
+            boolean updated = Passkey.writeKey(passkey, pinHash, selectedPasskeyFile);
+            if (!updated) {
+                Log.w(TAG, "Failed to update passkey header, but passkey is still usable");
+            }
+
+            runOnUiThread(() -> {
+                hideUnlockSpinner();
+                Toast.makeText(ManageActivity.this,
+                        getString(R.string.wallet_unlocked), Toast.LENGTH_SHORT).show();
+                hideKeyboard();
+                launchAppropriateActivity(pinHash);
+            });
+        });
     }
     
     /**

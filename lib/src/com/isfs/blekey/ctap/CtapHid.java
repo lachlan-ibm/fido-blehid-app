@@ -203,14 +203,24 @@ public class CtapHid {
                 txn.setUserPresent(true);
                 logger.debug("Preserved userPresent=true when updating CID transaction");
             }
-            // Preserve bio-verified state and cached IKM so subsequent commands skip re-challenge.
-            if (existingTxn.isBioVerified()) {
-                txn.setBioVerified(true);
-                logger.debug("Preserved bioVerified=true when updating CID transaction");
+            // Propagate denial — once the user has denied on this CID every subsequent
+            // command must be rejected immediately, regardless of MSG/CBOR type.
+            if (existingTxn.isUserDenied()) {
+                txn.setUserDenied(true);
+                logger.debug("Preserved userDenied=true when updating CID transaction");
+            }
+            // Preserve IKM-cached state so subsequent commands on this CID skip re-derivation.
+            if (existingTxn.isIkmCached()) {
+                txn.setIkmCached(true);
+                logger.debug("Preserved ikmCached=true when updating CID transaction");
             }
             if (existingTxn.getPlatformIkm() != null) {
                 txn.setPlatformIkm(existingTxn.getPlatformIkm());
                 logger.debug("Preserved platformIkm when updating CID transaction");
+            }
+            if (existingTxn.getEcdhKeyPair() != null) {
+                txn.setEcdhKeyPair(existingTxn.getEcdhKeyPair());
+                logger.debug("Preserved ecdhKeyPair when updating CID transaction");
             }
         } else {
             logger.warn("=== PIN HASH TRACKING: No existing transaction found for CID!");
@@ -426,7 +436,7 @@ public class CtapHid {
     private void ctapAck(int bcnt, byte[] data) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream(64);
         bos.write(this.getCid());
-        bos.write(this.messageType.getValue()); // Response command byte (no MSB set)
+        bos.write(0x80 | this.messageType.getValue()); // Response command byte — MSB must be set per CTAP HID spec §11.2.4
         bos.write((bcnt & 0xFF00) >> 8);
         bos.write(bcnt & 0xFF);
         if(data == null || data.length == 0) { /* continue */ }
@@ -460,12 +470,131 @@ public class CtapHid {
     }
 
     /**
-     * Processes a U2F message (not implemented).
+     * Sends a CTAPHID_MSG response frame (U2F APDU response).
+     * ctapAck uses this.messageType (MSG) to set the correct CMD byte.
      *
-     * @param data The U2F message data
+     * @param apduResponse The U2F APDU response bytes (data + SW1 + SW2)
+     * @throws IOException if an error occurs while creating the response
      */
-    private void u2f(byte[] data) {   
-        return;
+    private void ctapMsgAck(byte[] apduResponse) throws IOException {
+        ctapAck(apduResponse.length, apduResponse);
+    }
+
+    /**
+     * Dispatches a CTAPHID_MSG (U2F) APDU to the appropriate handler.
+     * Supports U2F_VERSION (0x03), U2F_REGISTER (0x01), and U2F_AUTHENTICATE (0x02).
+     *
+     * @param data The raw U2F extended APDU bytes
+     * @throws IOException if an error occurs while creating the response
+     */
+    private void u2f(byte[] data) throws IOException {
+        if (data.length < 7) {
+            // Too short for a minimal extended APDU header
+            ctapMsgAck(new byte[]{(byte) 0x67, (byte) 0x00}); // SW_WRONG_LENGTH
+            return;
+        }
+        byte   cla     = data[0];
+        byte   ins     = data[1];
+        byte   p1      = data[2];
+        // P2 = data[3] — ignored for all current INS values
+        // data[4] == 0x00 indicates extended Lc; data[5:7] = big-endian length
+        byte[] payload = Arrays.copyOfRange(data, 7, data.length);
+
+        if (cla != 0x00) {
+            ctapMsgAck(new byte[]{(byte) 0x6A, (byte) 0x86}); // SW_INCORRECT_PARAMETERS
+            return;
+        }
+        switch (ins & 0xFF) {
+            case 0x03: u2fVersion();                  break;
+            case 0x01: u2fRegister(payload);          break;
+            case 0x02: u2fAuthenticate(p1, payload);  break;
+            default:
+                ctapMsgAck(new byte[]{(byte) 0x6D, (byte) 0x00}); // SW_INS_NOT_SUPPORTED
+        }
+    }
+
+    /**
+     * Handles U2F_VERSION (INS=0x03). Returns "U2F_V2" + SW_NO_ERROR.
+     *
+     * @throws IOException if an error occurs while creating the response
+     */
+    private void u2fVersion() throws IOException {
+        byte[] ver = new byte[]{'U', '2', 'F', '_', 'V', '2'};
+        byte[] rsp = new byte[ver.length + 2];
+        System.arraycopy(ver, 0, rsp, 0, ver.length);
+        rsp[ver.length]     = (byte) 0x90;
+        rsp[ver.length + 1] = (byte) 0x00;
+        ctapMsgAck(rsp);
+    }
+
+    /**
+     * Handles U2F_REGISTER (INS=0x01). Delegates to AuthenticatorAPI.u2fRegister().
+     * Response is returned synchronously (no bio gate).
+     *
+     * @param apduData challenge_param[32] || app_param[32]
+     * @throws IOException if an error occurs while creating the response
+     */
+    private void u2fRegister(byte[] apduData) throws IOException {
+        if (apduData.length < 64) {
+            ctapMsgAck(new byte[]{(byte) 0x67, (byte) 0x00}); // SW_WRONG_LENGTH
+            return;
+        }
+        byte[] challengeParam = Arrays.copyOfRange(apduData, 0,  32);
+        byte[] appParam       = Arrays.copyOfRange(apduData, 32, 64);
+
+        CtapTxn txn = CtapHid.assignedCids.get(cidKey(this.cid));
+        if (txn != null && txn.isUserDenied()) {
+            logger.warn("u2fRegister: CID {} already denied — rejecting", cidKey(this.cid));
+            ctapMsgAck(new byte[]{(byte) 0x69, (byte) 0x00}); // SW_CONDITIONS_NOT_SATISFIED
+            return;
+        }
+        byte[] response = AuthenticatorAPI.u2fRegister(txn, challengeParam, appParam);
+        ctapMsgAck(response);
+    }
+
+    /**
+     * Handles U2F_AUTHENTICATE (INS=0x02). Delegates to AuthenticatorAPI.u2fAuthenticate().
+     * Check-only requests (p1=0x07) are answered synchronously; sign requests are also
+     * returned synchronously (no bio gate).
+     *
+     * @param p1       U2F control byte (0x03 = UP+sign, 0x07 = check-only, 0x08 = sign no UP)
+     * @param apduData challenge_param[32] || app_param[32] || kh_len[1] || key_handle[kh_len]
+     * @throws IOException if an error occurs while creating the response
+     */
+    private void u2fAuthenticate(byte p1, byte[] apduData) throws IOException {
+        if (apduData.length < 65) {
+            ctapMsgAck(new byte[]{(byte) 0x67, (byte) 0x00}); // SW_WRONG_LENGTH
+            return;
+        }
+        byte[] challengeParam = Arrays.copyOfRange(apduData, 0,  32);
+        byte[] appParam       = Arrays.copyOfRange(apduData, 32, 64);
+        int    khLen          = apduData[64] & 0xFF;
+        if (apduData.length < 65 + khLen) {
+            ctapMsgAck(new byte[]{(byte) 0x67, (byte) 0x00}); // SW_WRONG_LENGTH
+            return;
+        }
+        byte[] keyHandle = Arrays.copyOfRange(apduData, 65, 65 + khLen);
+
+        // Check-only: validate key handle and return immediately without signing
+        if ((p1 & 0xFF) == 0x07) {
+            CtapTxn checkTxn = CtapHid.assignedCids.get(cidKey(this.cid));
+            boolean valid = AuthenticatorAPI.u2fCheckKeyHandle(checkTxn, appParam, keyHandle);
+            ctapMsgAck(valid
+                ? new byte[]{(byte) 0x69, (byte) 0x85}   // SW_CONDITIONS_NOT_SATISFIED (key valid)
+                : new byte[]{(byte) 0x6A, (byte) 0x80}); // SW_WRONG_DATA (unknown key handle)
+            return;
+        }
+
+        CtapTxn txn = CtapHid.assignedCids.get(cidKey(this.cid));
+        if (txn != null && txn.isUserDenied()) {
+            logger.warn("u2fAuthenticate: CID {} already denied — rejecting", cidKey(this.cid));
+            ctapMsgAck(new byte[]{(byte) 0x69, (byte) 0x00}); // SW_CONDITIONS_NOT_SATISFIED
+            return;
+        }
+        boolean requireUP = (p1 & 0xFF) != 0x08;
+        byte[] response = AuthenticatorAPI.u2fAuthenticate(
+            txn, challengeParam, appParam, keyHandle, requireUP);
+        ctapMsgAck(response);
     }
 
     /**
@@ -531,6 +660,12 @@ public class CtapHid {
                 // Set the deferred cmd BEFORE calling process() so
                 // the callback exists when processing the txn.
                 CtapTxn txn = CtapHid.assignedCids.get(cidKey(this.cid));
+                if (txn != null && txn.isUserDenied()) {
+                    logger.warn("cbor: CID {} already denied — returning OPERATION_DENIED without biometric", cidKey(this.cid));
+                    buildCborInitAndSequencePackets(
+                        AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.OPERATION_DENIED));
+                    return;
+                }
                 if (txn != null) {
                     txn.setDeferredCmd(this);
                 }
@@ -578,14 +713,14 @@ public class CtapHid {
     private void init(byte[] data) throws IOException {
         logger.debug("init");
         byte[] nonce = new byte[8];
-        logger.debug("nonce :: " + Arrays.toString(nonce));
         System.arraycopy(data, 0, nonce, 0, 8);
+        logger.debug("nonce :: " + Arrays.toString(nonce));
         SecureRandom random = new SecureRandom();
         byte[] newCid = new byte[4];
         random.nextBytes(newCid);
         logger.debug("newCid :: " + Arrays.toString(newCid));
-                                   //version 2; leeet; CAPABILITY_CBOR | CAPABILITY_NMSG
-        byte[] specStuff = new byte[] {0x02, 0x13, 0x33, 0x37, 0x0C};
+                                   //version 2; leeet; CAPABILITY_WINK | CAPABILITY_CBOR
+        byte[] specStuff = new byte[] {0x02, 0x13, 0x33, 0x37, 0x01 | 0x04};
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         bos.write(nonce);
         bos.write(newCid);
@@ -700,5 +835,45 @@ public class CtapHid {
      */
     public static CtapTxn getCidTransaction(byte[] cid) {
         return assignedCids.get(cidKey(cid));
+    }
+
+    /**
+     * Evicts a channel from the active CID map.
+     *
+     * <p>Call when the channel enters an unrecoverable state (e.g. the deferred
+     * {@link CtapHid} object was lost before the CBOR response could be delivered).
+     * Any subsequent commands arriving on this CID will be silently discarded.</p>
+     *
+     * @param cid 4-byte channel identifier
+     */
+    public static void evictCid(byte[] cid) {
+        CtapTxn removed = assignedCids.remove(cidKey(cid));
+        logger.warn("evictCid: CID {} removed from active map (was {})",
+                    cidKey(cid), removed != null ? "present" : "already absent");
+    }
+
+    /**
+     * Builds a zero-padded 64-byte {@code CTAPHID_ERROR} HID input report frame.
+     *
+     * <p>Used to send a transport-level error when no live {@link CtapHid} instance
+     * exists for the channel (e.g. the deferred cmd was lost before delivery).
+     * Format: {@code CID[4] | 0xBF | 0x00 | 0x01 | errorCode | 0x00...}</p>
+     *
+     * @param cid  4-byte channel identifier
+     * @param code HID-layer error code (use {@link Ctap2StatusCode#OTHER} for
+     *             unspecified internal errors, per spec §11.2.9)
+     * @return zero-padded 64-byte HID input report
+     */
+    public static byte[] buildHidErrorFrame(byte[] cid, Ctap2StatusCode code) {
+        byte[] frame = new byte[64]; // zero-padded to 64 bytes
+        frame[0] = cid[0];
+        frame[1] = cid[1];
+        frame[2] = cid[2];
+        frame[3] = cid[3];
+        frame[4] = (byte) (0x80 | CtapHidCmd.ERROR.getValue()); // 0xBF
+        frame[5] = 0x00;  // BCNT high byte
+        frame[6] = 0x01;  // BCNT low byte = 1
+        frame[7] = (byte) code.getCode();
+        return frame;
     }
 }

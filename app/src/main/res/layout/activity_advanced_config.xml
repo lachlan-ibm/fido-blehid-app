@@ -52,6 +52,44 @@
                 android:layout_height="wrap_content" />
         </LinearLayout>
 
+        <!-- CTAP Protocol Mode toggle -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="4dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/adv_config_ctap_mode_label"
+                    android:textSize="16sp"
+                    android:textColor="@color/text_primary" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/adv_config_ctap_mode_desc"
+                    android:textSize="12sp"
+                    android:textColor="@color/text_secondary" />
+
+            </LinearLayout>
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/ctap1CompatSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+        </LinearLayout>
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -114,6 +152,41 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/adv_config_reset_platform_key_label"
+            app:strokeColor="@color/design_default_color_error"
+            android:textColor="@color/design_default_color_error"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
+        <!-- PIN Retries Section -->
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/adv_config_pin_retries_label"
+            style="@style/TextAppearance.MaterialComponents.Subtitle1" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/adv_config_pin_retries_desc"
+            style="@style/TextAppearance.MaterialComponents.Body2" />
+
+        <TextView
+            android:id="@+id/pinRetriesValue"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:textColor="@color/ibm_black" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/resetPinRetriesButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/adv_config_pin_retries_reset_button"
             app:strokeColor="@color/design_default_color_error"
             android:textColor="@color/design_default_color_error"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton" />

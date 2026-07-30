@@ -186,19 +186,26 @@ public class Passkey {
                 return null;
             }
 
-            // Read companion stash file for encrypted upperHash
-            File stashFile = FileUtils.getStashFile(pkeyFile);
-            if (!stashFile.exists()) {
-                logger.error("Missing stash file: {}", stashFile.getAbsolutePath());
-                return null;
-            }
-            byte[] upperHashObf = FileUtils.readFileBytes(stashFile);
-
-            logger.debug("Decrypting upperHash from stash file...");
-            byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashObf);
-            logger.debug("upperHash decrypted, length: {}", upperHash != null ? upperHash.length : "null");
-            if (upperHash != null) {
-                logger.debug("upperHash (hex): {}", bytesToHex(upperHash));
+            // Read companion stash file for encrypted upperHash — only needed when
+            // the caller passed the 16-byte lower half.  When a full 32-byte hash is
+            // supplied the upperHash is already embedded and stash decryption is skipped,
+            // which avoids failures when the platform key has been rolled.
+            byte[] upperHash = null;
+            if (lowerHash.length < 32) {
+                File stashFile = FileUtils.getStashFile(pkeyFile);
+                if (!stashFile.exists()) {
+                    logger.error("Missing stash file: {}", stashFile.getAbsolutePath());
+                    return null;
+                }
+                byte[] upperHashObf = FileUtils.readFileBytes(stashFile);
+                logger.debug("Decrypting upperHash from stash file...");
+                upperHash = KeyUtils.getStashCipher().decrypt(upperHashObf);
+                logger.debug("upperHash decrypted, length: {}", upperHash != null ? upperHash.length : "null");
+                if (upperHash != null) {
+                    logger.debug("upperHash (hex): {}", bytesToHex(upperHash));
+                }
+            } else {
+                logger.debug("Full 32-byte hash supplied — skipping stash file read");
             }
             
             logger.debug("Passkey data size: {}", passkeyData.length);

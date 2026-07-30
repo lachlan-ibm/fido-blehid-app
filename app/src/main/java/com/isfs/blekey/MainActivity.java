@@ -15,7 +15,6 @@ import android.widget.Button;
 import com.isfs.blekey.activity.ManageActivity;
 import com.isfs.blekey.activity.ServerActivity;
 import com.isfs.blekey.activity.QRScannerActivity;
-import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.AndroidKeystoreManager;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.CameraPermissionHelper;
