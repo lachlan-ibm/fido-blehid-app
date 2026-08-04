@@ -175,6 +175,11 @@
     <string name="up_notification_title">Touch required</string>
     <string name="up_notification_text">Tap to approve the authentication request</string>
 
+    <!-- UP timeout configuration strings -->
+    <string name="adv_config_up_dialog_timeout_label">UP dialog timeout (ms, 1000–45000)</string>
+    <string name="adv_config_up_bio_timeout_label">Biometric challenge timeout (ms, 1000–45000)</string>
+    <string name="adv_config_up_timeout_invalid">Must be an integer between %1$d and %2$d ms</string>
+
     <!-- CTAP mode toggle strings -->
     <string name="adv_config_ctap_mode_label">CTAP1/U2F Compatibility Mode</string>
     <string name="adv_config_ctap_mode_desc">When enabled, getInfo advertises U2F_V2 / FIDO_2_0 without PIN/UV protocol (CTAP1 compat). Default: off (CTAP2, FIDO_2_1).</string>
@@ -182,4 +187,11 @@
     <!-- Biometric prompt for TEE-gated platform key -->
     <string name="bio_prompt_title">Confirm your identity</string>
     <string name="bio_prompt_subtitle">Required to access your passkey</string>
+
+    <!-- AdvancedConfigActivity biometric subtitles -->
+    <string name="adv_config_bio_subtitle_load">Required to decrypt the HKDF configuration</string>
+    <string name="adv_config_bio_subtitle_save">Required to re-encrypt and save the HKDF configuration</string>
+    <string name="adv_config_bio_subtitle_reset">Required to delete and regenerate the platform key</string>
+    <string name="adv_config_decrypt_failed">Failed to decrypt HKDF info — showing default</string>
+    <string name="adv_config_load_hkdf_button">Load Current Value</string>
 </resources>

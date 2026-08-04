@@ -9,19 +9,26 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Immutable context object describing a pending user-presence request.
+ * Immutable context object describing a pending UP/UV request.
  *
  * <p>Created exclusively by {@link AuthenticatorAPI} and passed to the registered
- * {@link AuthenticatorAPI.UserPresenceCallback}.  The app layer calls
+ * {@link AuthenticatorAPI.UpUvCallback}.  The app layer calls
  * {@link #buildResponse(Outcome, ChainCallback)} exactly once when the user acts;
  * subsequent calls are silently ignored (idempotency guard via {@link AtomicBoolean}).</p>
  *
- * <p>{@code getInfo} no longer creates a UP context — it returns synchronously,
- * driven by {@code AppConfig.isCtap1CompatMode()}.  Every context that reaches
- * {@code onUserPresenceRequired} is therefore a {@code makeCredential} or
- * {@code getAssertion} ceremony.</p>
+ * <p>Every context that reaches {@code onUpUvRequired} is either a
+ * {@code getInfo}, {@code getKey} / {@code getTkn} PIN ceremony, or a
+ * {@code makeCredential} / {@code getAssertion} ceremony.  The service layer
+ * must always show a biometric prompt before running the ChainAction; the
+ * Android Keystore enforces this at the hardware level for the platform key.</p>
  */
-public final class UpRequestContext {
+public final class UpUvRequestCtx {
+
+    /** Keepalive status: background work in progress (no physical interaction needed yet). */
+    public static final byte KEEPALIVE_PROCESSING = (byte) 0x01;
+
+    /** Keepalive status: waiting for a physical user-presence button press. */
+    public static final byte KEEPALIVE_UP_NEEDED  = (byte) 0x02;
 
     /** The outcome chosen by the user (or system). */
     public enum Outcome {
@@ -54,29 +61,61 @@ public final class UpRequestContext {
     private final CtapTxn           txn;
     private final List<ChainAction> actions;
     private final AtomicBoolean     delivered = new AtomicBoolean(false);
+    private final byte              keepaliveStatus;
+    private final boolean           requiresBiometric;
 
     /**
-     * Package-private — only {@link AuthenticatorAPI} creates instances.
+     * Creates a minimal context with no chain actions.
      *
      * @param rpId Relying-party identifier.
      * @param txn  The live {@link CtapTxn} for this channel.
      */
-    UpRequestContext(String rpId, CtapTxn txn) {
+    public UpUvRequestCtx(String rpId, CtapTxn txn) {
         this(rpId, txn, Collections.emptyList());
     }
 
     /**
-     * Package-private overload that allows {@link AuthenticatorAPI} to supply a chain of
-     * post-approval actions.
+     * Creates a context with a post-approval action chain.
      *
      * @param rpId    Relying-party identifier.
      * @param txn     The live {@link CtapTxn} for this channel.
      * @param actions Ordered list of actions to run after approval (empty = none).
      */
-    UpRequestContext(String rpId, CtapTxn txn, List<ChainAction> actions) {
-        this.rpId    = rpId;
-        this.txn     = txn;
-        this.actions = actions;
+    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions) {
+        this(rpId, txn, actions, KEEPALIVE_UP_NEEDED);
+    }
+
+    /**
+     * Creates a context with a specified keepalive status.
+     *
+     * @param rpId            Relying-party identifier.
+     * @param txn             The live {@link CtapTxn} for this channel.
+     * @param actions         Ordered list of actions to run after approval (empty = none).
+     * @param keepaliveStatus {@link #KEEPALIVE_PROCESSING} or {@link #KEEPALIVE_UP_NEEDED}.
+     */
+    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions, byte keepaliveStatus) {
+        this(rpId, txn, actions, keepaliveStatus, false);
+    }
+
+    /**
+     * Full constructor.
+     *
+     * @param rpId              Relying-party identifier.
+     * @param txn               The live {@link CtapTxn} for this channel.
+     * @param actions           Ordered list of actions to run after approval (empty = none).
+     * @param keepaliveStatus   {@link #KEEPALIVE_PROCESSING} or {@link #KEEPALIVE_UP_NEEDED}.
+     * @param requiresBiometric {@code true} when the app layer must show a biometric prompt
+     *                          before running the chain (getTkn / makeCredential / getAssertion
+     *                          slow paths); {@code false} for UP-only ceremonies (getInfo /
+     *                          getKey) where Allow/Deny is sufficient.
+     */
+    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions, byte keepaliveStatus,
+                     boolean requiresBiometric) {
+        this.rpId              = rpId;
+        this.txn               = txn;
+        this.actions           = actions;
+        this.keepaliveStatus   = keepaliveStatus;
+        this.requiresBiometric = requiresBiometric;
     }
 
     /** Returns the relying-party identifier. */
@@ -84,6 +123,20 @@ public final class UpRequestContext {
 
     /** Returns the live transaction associated with this request. */
     public CtapTxn getTxn()  { return txn;  }
+
+    /**
+     * Returns the keepalive status that should be sent while waiting for this ceremony.
+     * {@link #KEEPALIVE_PROCESSING} for GETKEY / GETTKN; {@link #KEEPALIVE_UP_NEEDED} for
+     * makeCredential / getAssertion.
+     */
+    public byte getKeepaliveStatus() { return keepaliveStatus; }
+
+    /**
+     * Returns {@code true} when the app layer must present a biometric prompt before
+     * running the chain actions.  {@code false} for UP-only ceremonies (getInfo / getKey)
+     * where an Allow/Deny tap is sufficient.
+     */
+    public boolean requiresBiometric() { return requiresBiometric; }
 
     /**
      * Builds the CTAP wire response for the given {@code outcome} and delivers it via

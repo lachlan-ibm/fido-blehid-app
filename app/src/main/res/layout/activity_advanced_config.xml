@@ -14,6 +14,12 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -90,38 +96,39 @@
 
         </LinearLayout>
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/adv_config_hkdf_info_label"
-            android:textSize="14sp"
-            android:textColor="@color/text_primary"
-            android:layout_marginTop="16dp"
-            android:layout_marginBottom="4dp" />
-
+        <!-- UP Dialog Timeout -->
         <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/hkdfInfoLayout"
+            android:id="@+id/upDialogTimeoutLayout"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+            android:layout_marginTop="16dp"
+            android:hint="@string/adv_config_up_dialog_timeout_label">
 
             <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/hkdfInfoEdit"
+                android:id="@+id/upDialogTimeoutEdit"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:inputType="textNoSuggestions|textVisiblePassword"
-                android:hint="@string/adv_config_hkdf_info_hint"
-                android:maxLines="1" />
+                android:inputType="number"
+                android:maxLength="6" />
         </com.google.android.material.textfield.TextInputLayout>
 
-        <TextView
-            android:id="@+id/hkdfWarning"
+        <!-- UP Bio Timeout -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/upBioTimeoutLayout"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/adv_config_hkdf_warning"
-            android:textSize="12sp"
-            android:textColor="@color/device_error"
-            android:layout_marginTop="8dp" />
+            android:layout_marginTop="8dp"
+            android:hint="@string/adv_config_up_bio_timeout_label">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/upBioTimeoutEdit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:maxLength="6" />
+        </com.google.android.material.textfield.TextInputLayout>
 
         <Button
             android:id="@+id/saveConfigButton"
@@ -129,32 +136,6 @@
             android:layout_height="wrap_content"
             android:text="@string/save"
             android:layout_marginTop="24dp" />
-
-        <!-- Platform Key Reset Section -->
-        <com.google.android.material.textview.MaterialTextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/adv_config_reset_platform_key_label"
-            style="@style/TextAppearance.MaterialComponents.Subtitle1" />
-
-        <com.google.android.material.textview.MaterialTextView
-            android:id="@+id/resetKeyDesc"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/adv_config_reset_platform_key_desc"
-            style="@style/TextAppearance.MaterialComponents.Body2" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/resetPlatformKeyButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/adv_config_reset_platform_key_label"
-            app:strokeColor="@color/design_default_color_error"
-            android:textColor="@color/design_default_color_error"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
         <!-- PIN Retries Section -->
         <com.google.android.material.textview.MaterialTextView
@@ -191,5 +172,75 @@
             android:textColor="@color/design_default_color_error"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
+        <!-- HKDF Info Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/adv_config_hkdf_info_label"
+            android:textSize="14sp"
+            android:textColor="@color/text_primary"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="4dp" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/hkdfInfoLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/hkdfInfoEdit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textNoSuggestions|textVisiblePassword"
+                android:hint="@string/adv_config_hkdf_info_hint"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/loadHkdfButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/adv_config_load_hkdf_button"
+            style="@style/Widget.MaterialComponents.Button.TextButton" />
+
+        <TextView
+            android:id="@+id/hkdfWarning"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/adv_config_hkdf_warning"
+            android:textSize="12sp"
+            android:textColor="@color/device_error"
+            android:layout_marginTop="8dp" />
+
+        <!-- Platform Key Reset Section -->
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/adv_config_reset_platform_key_label"
+            style="@style/TextAppearance.MaterialComponents.Subtitle1" />
+
+        <com.google.android.material.textview.MaterialTextView
+            android:id="@+id/resetKeyDesc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/adv_config_reset_platform_key_desc"
+            style="@style/TextAppearance.MaterialComponents.Body2" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/resetPlatformKeyButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/adv_config_reset_platform_key_label"
+            app:strokeColor="@color/design_default_color_error"
+            android:textColor="@color/design_default_color_error"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
     </LinearLayout>
+
+    </ScrollView>
 </LinearLayout>

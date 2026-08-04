@@ -15,6 +15,7 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import com.isfs.blekey.authenticator.implapi.CredentialValidator;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.CertUtils;
@@ -36,7 +37,7 @@ public class AuthenticatorAPIAlgorithmTest {
      */
     @Test
     public void testIsSupportedAlgorithm_NullList() throws Exception {
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -55,7 +56,7 @@ public class AuthenticatorAPIAlgorithmTest {
     public void testIsSupportedAlgorithm_EmptyList() throws Exception {
         List<Map<String, Object>> emptyList = new ArrayList<>();
         
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -78,7 +79,7 @@ public class AuthenticatorAPIAlgorithmTest {
         param.put("type", "public-key");
         params.add(param);
         
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -101,7 +102,7 @@ public class AuthenticatorAPIAlgorithmTest {
         param.put("type", "public-key");
         params.add(param);
         
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -123,7 +124,7 @@ public class AuthenticatorAPIAlgorithmTest {
         param.put("type", "public-key");  // No 'alg' key
         params.add(param);
         
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -150,7 +151,7 @@ public class AuthenticatorAPIAlgorithmTest {
         param2.put("alg", -7);  // ES256 - supported
         params.add(param2);
         
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -177,7 +178,7 @@ public class AuthenticatorAPIAlgorithmTest {
         param2.put("alg", -37);  // PS256
         params.add(param2);
         
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -194,7 +195,7 @@ public class AuthenticatorAPIAlgorithmTest {
      */
     @Test
     public void testDetermineCredentialType_TwoFactor() throws Exception {
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         
@@ -218,7 +219,7 @@ public class AuthenticatorAPIAlgorithmTest {
      */
     @Test
     public void testDetermineCredentialType_ResidentWithUV() throws Exception {
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
 
@@ -253,7 +254,7 @@ public class AuthenticatorAPIAlgorithmTest {
      */
     @Test
     public void testDetermineCredentialType_ResidentWithoutUV() throws Exception {
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         
@@ -282,7 +283,7 @@ public class AuthenticatorAPIAlgorithmTest {
      */
     @Test
     public void testDetermineCredentialType_UVNotAvailable() throws Exception {
-        java.lang.reflect.Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        java.lang.reflect.Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         

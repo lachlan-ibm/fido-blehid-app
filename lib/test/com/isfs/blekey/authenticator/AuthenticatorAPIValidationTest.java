@@ -5,15 +5,20 @@ package com.isfs.blekey.authenticator;
 
 import static org.junit.Assert.*;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.Before;
 import org.junit.Test;
 
+import com.isfs.blekey.authenticator.implapi.CredentialValidator;
+import com.isfs.blekey.authenticator.implapi.pin.PinVerifier;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
+import com.isfs.blekey.ctap.CtapTxn;
 
 /**
  * Tests for AuthenticatorAPI validation methods including algorithm support,
@@ -27,13 +32,36 @@ import com.isfs.blekey.ctap.Ctap2StatusCode;
  */
 public class AuthenticatorAPIValidationTest {
 
+    private Method verifyPinUvAuth;
+
+    @Before
+    public void setUp() throws Exception {
+        verifyPinUvAuth = PinVerifier.class.getDeclaredMethod(
+            "verify", Map.class, CtapTxn.class);
+        verifyPinUvAuth.setAccessible(true);
+    }
+
+    private Object invokeVerify(Map<Integer, Object> req, CtapTxn txn) throws Exception {
+        try {
+            return verifyPinUvAuth.invoke(null, req, txn);
+        } catch (InvocationTargetException e) {
+            throw (Exception) e.getCause();
+        }
+    }
+
+    private Ctap2StatusCode getErrorCode(Object result) throws Exception {
+        java.lang.reflect.Field f = result.getClass().getDeclaredField("errorCode");
+        f.setAccessible(true);
+        return (Ctap2StatusCode) f.get(result);
+    }
+
     /**
      * Test isSupportedAlgorithm() with multiple algorithms including unsupported ones.
      * Covers branch where algorithm is not in SUPPORTED_ALGORITHM_SET.
      */
     @Test
     public void testIsSupportedAlgorithm_MixedAlgorithms() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        Method method = CredentialValidator.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
         List<Map<String, Object>> params = new ArrayList<>();
@@ -61,7 +89,7 @@ public class AuthenticatorAPIValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_OnlyUnsupported() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        Method method = CredentialValidator.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
         List<Map<String, Object>> params = new ArrayList<>();
@@ -87,7 +115,7 @@ public class AuthenticatorAPIValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_MissingAlgField() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        Method method = CredentialValidator.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
         List<Map<String, Object>> params = new ArrayList<>();
@@ -108,7 +136,7 @@ public class AuthenticatorAPIValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_NonIntegerAlg() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
+        Method method = CredentialValidator.class.getDeclaredMethod("isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
         List<Map<String, Object>> params = new ArrayList<>();
@@ -129,187 +157,189 @@ public class AuthenticatorAPIValidationTest {
      */
     @Test
     public void testDetermineCredentialType_TwoFactor() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class,
             com.isfs.blekey.data.Passkey.class);
         method.setAccessible(true);
-        
+
         Object result = method.invoke(null, false, false, null);
-        
+
         assertNotNull("Should return a result", result);
     }
-    
+
     /**
      * Test determineCredentialType() with rk=true, uv=false.
      * Covers the RESIDENT credential branch.
      */
     @Test
     public void testDetermineCredentialType_Resident() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class,
             com.isfs.blekey.data.Passkey.class);
         method.setAccessible(true);
-        
+
         Object result = method.invoke(null, true, false, null);
-        
+
         assertNotNull("Should return a result", result);
     }
-    
+
     /**
      * Test determineCredentialType() with rk=true, uv=true.
      * Covers the user verification branch.
      */
     @Test
     public void testDetermineCredentialType_UserVerified() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class,
             com.isfs.blekey.data.Passkey.class);
         method.setAccessible(true);
-        
+
         Object result = method.invoke(null, true, true, null);
-        
+
         assertNotNull("Should return a result", result);
     }
-    
+
     /**
      * Test determineCredentialType() with rk=false, uv=true.
      * Covers the UV without RK branch.
      */
     @Test
     public void testDetermineCredentialType_UvWithoutRk() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class,
             com.isfs.blekey.data.Passkey.class);
         method.setAccessible(true);
-        
+
         Object result = method.invoke(null, false, true, null);
-        
+
         assertNotNull("Should return a result", result);
     }
     
     /**
-     * Test validatePinUvAuthProtocol() with protocol version 0.
-     * Covers the unsupported protocol branch.
+     * Protocol version 0 is unsupported — verifyPinUvAuth returns PIN_AUTH_INVALID.
+     * (Replaces reflection-based validatePinUvAuthProtocol_Version0 test.)
      */
     @Test
     public void testValidatePinUvAuthProtocol_Version0() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validatePinUvAuthProtocol", Integer.class);
-        method.setAccessible(true);
-        
-        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, 0);
-        
-        assertEquals("Protocol version 0 should be invalid", 
-            Ctap2StatusCode.PIN_AUTH_INVALID, result);
+        Map<Integer, Object> req = buildReqWithProtocol(0);
+        CtapTxn txn = new CtapTxn();
+        txn.setPinAuthTkn(new byte[32]);
+        assertEquals("Protocol 0 should be invalid",
+            Ctap2StatusCode.PIN_AUTH_INVALID, getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test validatePinUvAuthProtocol() with protocol version 3.
-     * Covers the unsupported protocol branch.
+     * Protocol version 3 is unsupported — verifyPinUvAuth returns PIN_AUTH_INVALID.
+     * (Replaces reflection-based validatePinUvAuthProtocol_Version3 test.)
      */
     @Test
     public void testValidatePinUvAuthProtocol_Version3() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validatePinUvAuthProtocol", Integer.class);
-        method.setAccessible(true);
-        
-        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, 3);
-        
-        assertEquals("Protocol version 3 should be invalid", 
-            Ctap2StatusCode.PIN_AUTH_INVALID, result);
+        Map<Integer, Object> req = buildReqWithProtocol(3);
+        CtapTxn txn = new CtapTxn();
+        txn.setPinAuthTkn(new byte[32]);
+        assertEquals("Protocol 3 should be invalid",
+            Ctap2StatusCode.PIN_AUTH_INVALID, getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test validatePinUvAuthProtocol() with negative protocol version.
-     * Covers the invalid protocol branch.
+     * Negative protocol version is unsupported — verifyPinUvAuth returns PIN_AUTH_INVALID.
+     * (Replaces reflection-based validatePinUvAuthProtocol_NegativeVersion test.)
      */
     @Test
     public void testValidatePinUvAuthProtocol_NegativeVersion() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validatePinUvAuthProtocol", Integer.class);
-        method.setAccessible(true);
-        
-        Ctap2StatusCode result = (Ctap2StatusCode) method.invoke(null, -1);
-        
-        assertEquals("Negative protocol version should be invalid", 
-            Ctap2StatusCode.PIN_AUTH_INVALID, result);
+        Map<Integer, Object> req = buildReqWithProtocol(-1);
+        CtapTxn txn = new CtapTxn();
+        txn.setPinAuthTkn(new byte[32]);
+        assertEquals("Negative protocol should be invalid",
+            Ctap2StatusCode.PIN_AUTH_INVALID, getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test errorResult() with null message.
-     * Covers the null message branch.
+     * No pinUvAuthParam and UV not requested → no error (errorCode is null).
+     * (Replaces errorResult_NullMessage / _EmptyMessage tests: the old errorResult
+     *  helper is gone; error propagation is tested end-to-end here.)
      */
     @Test
     public void testErrorResult_NullMessage() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "errorResult", String.class, Ctap2StatusCode.class);
-        method.setAccessible(true);
-        
-        Object result = method.invoke(null, null, Ctap2StatusCode.PIN_AUTH_INVALID);
-        
-        assertNotNull("Should return result even with null message", result);
+        Map<Integer, Object> req = baseReq();
+        req.put(0x07, Map.of("uv", false)); // no UV request, no pinUvAuthParam
+        CtapTxn txn = new CtapTxn();
+        assertNull("No UV param and no UV request should produce no error",
+            getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test errorResult() with empty message.
-     * Covers the empty string branch.
+     * No pinUvAuthParam and UV requested → PIN_REQUIRED error.
+     * (Replaces errorResult_EmptyMessage test: equivalent error-propagation coverage.)
      */
     @Test
     public void testErrorResult_EmptyMessage() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "errorResult", String.class, Ctap2StatusCode.class);
-        method.setAccessible(true);
-        
-        Object result = method.invoke(null, "", Ctap2StatusCode.PIN_AUTH_INVALID);
-        
-        assertNotNull("Should return result with empty message", result);
+        Map<Integer, Object> req = baseReq();
+        req.put(0x07, Map.of("uv", true));
+        CtapTxn txn = new CtapTxn();
+        assertEquals("UV requested without token should return PIN_REQUIRED",
+            Ctap2StatusCode.PIN_REQUIRED, getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test errorResult() with exception parameter and null message.
-     * Covers the exception handling branch with null message.
+     * pinUvAuthParam present but missing clientDataHash → MISSING_PARAMETER.
+     * (Replaces errorResult_WithExceptionNullMessage test: exercises the same
+     *  error-return path in verifyPinUvAuth.)
      */
     @Test
     public void testErrorResult_WithExceptionNullMessage() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "errorResult", String.class, Ctap2StatusCode.class, Exception.class);
-        method.setAccessible(true);
-        
-        Exception testException = new RuntimeException("Test exception");
-        Object result = method.invoke(null, null, Ctap2StatusCode.PIN_AUTH_INVALID, testException);
-        
-        assertNotNull("Should return result with exception and null message", result);
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x02, Map.of("id", "example.com")); // RP required
+        req.put(0x08, new byte[16]); // pinUvAuthParam present
+        req.put(0x09, 1);            // valid protocol
+        // key 0x01 (clientDataHash) intentionally absent
+        CtapTxn txn = new CtapTxn();
+        txn.setPinAuthTkn(new byte[32]);
+        assertEquals("Missing clientDataHash should return MISSING_PARAMETER",
+            Ctap2StatusCode.MISSING_PARAMETER, getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test errorResult() with exception parameter and non-null message.
-     * Covers the exception handling branch with message.
+     * pinUvAuthParam present, valid protocol, no PIN token on txn → PIN_AUTH_INVALID.
+     * (Replaces errorResult_WithExceptionAndMessage test.)
      */
     @Test
     public void testErrorResult_WithExceptionAndMessage() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "errorResult", String.class, Ctap2StatusCode.class, Exception.class);
-        method.setAccessible(true);
-        
-        Exception testException = new RuntimeException("Test exception");
-        Object result = method.invoke(null, "Error occurred", Ctap2StatusCode.PIN_AUTH_INVALID, testException);
-        
-        assertNotNull("Should return result with exception and message", result);
+        Map<Integer, Object> req = buildReqWithProtocol(1);
+        CtapTxn txn = new CtapTxn();
+        // txn.getPinAuthTkn() == null → PIN_AUTH_INVALID
+        assertEquals("Null PIN token should return PIN_AUTH_INVALID",
+            Ctap2StatusCode.PIN_AUTH_INVALID, getErrorCode(invokeVerify(req, txn)));
     }
-    
+
     /**
-     * Test errorResult() with null exception.
-     * Covers the null exception branch.
+     * Unsupported protocol 2 → PIN_AUTH_INVALID.
+     * (Replaces errorResult_NullException test: different error-return code path.)
      */
     @Test
     public void testErrorResult_NullException() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "errorResult", String.class, Ctap2StatusCode.class, Exception.class);
-        method.setAccessible(true);
-        
-        Object result = method.invoke(null, "Error message", Ctap2StatusCode.PIN_AUTH_INVALID, null);
-        
-        assertNotNull("Should return result with null exception", result);
+        Map<Integer, Object> req = buildReqWithProtocol(2);
+        CtapTxn txn = new CtapTxn();
+        txn.setPinAuthTkn(new byte[32]);
+        assertEquals("Protocol 2 should return PIN_AUTH_INVALID",
+            Ctap2StatusCode.PIN_AUTH_INVALID, getErrorCode(invokeVerify(req, txn)));
+    }
+
+    // ---- helpers ----
+    private Map<Integer, Object> buildReqWithProtocol(int protocol) {
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x02, Map.of("id", "example.com")); // RP — required by PinUvAuthParams.parse
+        req.put(0x08, new byte[16]); // pinUvAuthParam — triggers protocol check
+        req.put(0x09, protocol);
+        req.put(0x01, new byte[32]); // clientDataHash
+        return req;
+    }
+
+    private Map<Integer, Object> baseReq() {
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x02, Map.of("id", "example.com")); // RP — required by PinUvAuthParams.parse
+        req.put(0x01, new byte[32]);
+        return req;
     }
 }
 

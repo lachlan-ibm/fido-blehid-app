@@ -1,7 +1,7 @@
 /*
  * Copyright IBM 2025, 2026
  */
-package com.isfs.blekey.authenticator;
+package com.isfs.blekey.authenticator.implapi.pin;
 
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import org.slf4j.Logger;
@@ -15,15 +15,15 @@ import java.util.Map;
  * Provides type-safe parsing and validation of request parameters.
  */
 class PinUvAuthParams {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(PinUvAuthParams.class);
-    
+
     final byte[] pinUvAuthParam;
     final Integer pinUvAuthProtocol;
     final boolean uvRequested;
     final String rpId;
     final Ctap2StatusCode errorCode;
-    
+
     private PinUvAuthParams(byte[] pinUvAuthParam, Integer pinUvAuthProtocol,
                             boolean uvRequested, String rpId, Ctap2StatusCode errorCode) {
         this.pinUvAuthParam = pinUvAuthParam;
@@ -32,7 +32,7 @@ class PinUvAuthParams {
         this.rpId = rpId;
         this.errorCode = errorCode;
     }
-    
+
     /**
      * Checks if parsing was successful.
      * @return true if no errors occurred during parsing
@@ -40,16 +40,11 @@ class PinUvAuthParams {
     boolean isValid() {
         return errorCode == null;
     }
-    
+
     /**
      * Parses and validates PIN/UV authentication parameters from the request.
-     * Performs type-safe extraction with proper validation.
      *
-     * @param req The request parameters map containing:
-     *            - 0x02: RP information (required, must contain "id")
-     *            - 0x07: Options map (optional, may contain "uv" boolean)
-     *            - 0x08: pinUvAuthParam byte array (optional)
-     *            - 0x09: pinUvAuthProtocol integer (optional)
+     * @param req The request parameters map
      * @return PinUvAuthParams containing validated parameters or error code
      */
     static PinUvAuthParams parse(Map<Integer, Object> req) {
@@ -63,7 +58,7 @@ class PinUvAuthParams {
             }
             pinUvAuthParam = (byte[]) paramObj;
         }
-        
+
         // Extract pinUvAuthProtocol (0x09) - optional
         Object protocolObj = req.get(0x09);
         Integer pinUvAuthProtocol = null;
@@ -74,7 +69,7 @@ class PinUvAuthParams {
             }
             pinUvAuthProtocol = (Integer) protocolObj;
         }
-        
+
         // Extract options (0x07) - optional
         Object optionsObj = req.get(0x07);
         boolean uvRequested = false;
@@ -90,7 +85,7 @@ class PinUvAuthParams {
                 uvRequested = (Boolean) uvObj;
             }
         }
-        
+
         // Extract and validate RP (0x02) - required
         Object rpObj = req.get(0x02);
         if (rpObj == null) {
@@ -101,7 +96,7 @@ class PinUvAuthParams {
             logger.error("RP parameter (0x02) is not a map");
             return new PinUvAuthParams(null, null, false, null, Ctap2StatusCode.INVALID_PARAMETER);
         }
-        
+
         @SuppressWarnings("unchecked")
         Map<String, Object> rp = (Map<String, Object>) rpObj;
         Object rpIdObj = rp.get("id");
@@ -113,11 +108,9 @@ class PinUvAuthParams {
             logger.error("RP ID is not a string");
             return new PinUvAuthParams(null, null, false, null, Ctap2StatusCode.INVALID_PARAMETER);
         }
-        
+
         String rpId = (String) rpIdObj;
-        
+
         return new PinUvAuthParams(pinUvAuthParam, pinUvAuthProtocol, uvRequested, rpId, null);
     }
 }
-
-// Made with Bob

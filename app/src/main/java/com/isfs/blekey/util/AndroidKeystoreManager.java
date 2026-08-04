@@ -16,6 +16,19 @@ import java.security.spec.ECGenParameterSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+// Every use of the platform private key (KeyAgreement.init / Signature.initSign)
+// requires a recent strong-biometric event.  The Android Keystore enforces this at
+// the hardware level (StrongBox / TEE); no application-layer gate is needed.
+//
+// Auth timeout: 15 seconds.  A single BiometricPrompt shown by deliverUpApproved()
+// opens a 15-second window; all CTAP operations that follow within that window
+// (getKey → cacheIkm, getTkn → processTkn / stash-cipher, makeCredential,
+// getAssertion) complete without a second prompt.  The window expires naturally,
+// so back-to-back ceremonies triggered after 15 s each show a fresh prompt.
+//
+// Existing keys created with setUserAuthenticationRequired(false) must be rolled:
+// Advanced Config → Reset Platform Key.
+
 /**
  * Android implementation of KeystoreManager using Android Keystore System.
  * Uses EC256 (ECDSA P-256) keys for FIDO2 compatibility and ECDH for encryption.
@@ -49,17 +62,15 @@ public class AndroidKeystoreManager implements KeystoreManager {
             KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE);
 
-            // UPUV_GATE_SIMPLIFICATION: bio-gate removed from platform key so that
-            // ECDH self-agreement in derivePasskeySeed() can run without a live TEE
-            // auth window.  Existing keys created with setUserAuthenticationRequired(true)
-            // will throw UserNotAuthenticatedException until the key is rolled via
-            // Advanced Config → Reset Platform Key.
             KeyGenParameterSpec.Builder builder = new KeyGenParameterSpec.Builder(
                 EC_KEYSTORE_ALIAS,
                 KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_VERIFY | KeyProperties.PURPOSE_AGREE_KEY)
                 .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
                 .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
-                .setUserAuthenticationRequired(false);
+                .setUserAuthenticationRequired(true)
+                .setUserAuthenticationParameters(
+                    15, // second window after auth
+                    KeyProperties.AUTH_BIOMETRIC_STRONG);
 
             // Prefer StrongBox; fall back to TEE.
             try {

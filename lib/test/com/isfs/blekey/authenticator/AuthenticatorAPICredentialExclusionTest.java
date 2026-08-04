@@ -17,6 +17,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.isfs.blekey.authenticator.implapi.CredentialValidator;
+import com.isfs.blekey.authenticator.implapi.ResidentCredentialStore;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.data.Passkey;
 
@@ -62,7 +64,7 @@ public class AuthenticatorAPICredentialExclusionTest {
         
         when(mockPasskey.getResCreds()).thenReturn(resCreds);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         
@@ -101,7 +103,7 @@ public class AuthenticatorAPICredentialExclusionTest {
         
         when(mockPasskey.getResCreds()).thenReturn(resCreds);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         
@@ -128,7 +130,7 @@ public class AuthenticatorAPICredentialExclusionTest {
      */
     @Test
     public void testIsCredentialExcluded_NullPasskey() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         
@@ -144,7 +146,7 @@ public class AuthenticatorAPICredentialExclusionTest {
      */
     @Test
     public void testIsCredentialExcluded_NullCredId() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         
@@ -161,7 +163,7 @@ public class AuthenticatorAPICredentialExclusionTest {
     public void testIsCredentialExcluded_NullResCreds() throws Exception {
         when(mockPasskey.getResCreds()).thenReturn(null);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         
@@ -186,7 +188,7 @@ public class AuthenticatorAPICredentialExclusionTest {
         
         when(mockPasskey.getResCreds()).thenReturn(resCreds);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         
@@ -211,7 +213,7 @@ public class AuthenticatorAPICredentialExclusionTest {
         
         when(mockPasskey.getResCreds()).thenReturn(resCreds);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         
@@ -235,7 +237,7 @@ public class AuthenticatorAPICredentialExclusionTest {
         
         when(mockPasskey.getResCreds()).thenReturn(resCreds);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         
@@ -261,7 +263,7 @@ public class AuthenticatorAPICredentialExclusionTest {
         
         when(mockPasskey.getResCreds()).thenReturn(resCreds);
         
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = ResidentCredentialStore.class.getDeclaredMethod(
             "isCredentialExcluded", byte[].class, Passkey.class);
         method.setAccessible(true);
         

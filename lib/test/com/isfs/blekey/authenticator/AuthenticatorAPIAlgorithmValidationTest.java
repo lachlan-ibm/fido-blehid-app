@@ -17,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.isfs.blekey.authenticator.implapi.CredentialValidator;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.data.Passkey;
 
@@ -52,7 +53,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_ES256() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -72,7 +73,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_RS256_Unsupported() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -92,7 +93,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_NullList() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -106,7 +107,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_EmptyList() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -122,7 +123,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_MultipleWithSupported() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -148,7 +149,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_MissingAlgKey() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -167,7 +168,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testIsSupportedAlgorithm_AllUnsupported() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "isSupportedAlgorithm", List.class);
         method.setAccessible(true);
         
@@ -195,7 +196,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testDetermineCredentialType_ResidentWithUV() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         
@@ -218,7 +219,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testDetermineCredentialType_ResidentWithoutUV() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         
@@ -243,7 +244,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testDetermineCredentialType_TwoFactor() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         
@@ -265,7 +266,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testDetermineCredentialType_TwoFactorWithUV() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "determineCredentialType", boolean.class, boolean.class, Passkey.class);
         method.setAccessible(true);
         
@@ -292,7 +293,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testCheckExcludeList_NullList() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         
@@ -306,7 +307,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testCheckExcludeList_EmptyList() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         
@@ -322,7 +323,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testCheckExcludeList_NullCredentialId() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         
@@ -341,7 +342,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testCheckExcludeList_MissingIdKey() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         
@@ -360,7 +361,7 @@ public class AuthenticatorAPIAlgorithmValidationTest {
      */
     @Test
     public void testCheckExcludeList_MultipleNonExcluded() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = CredentialValidator.class.getDeclaredMethod(
             "checkExcludeList", List.class, Passkey.class);
         method.setAccessible(true);
         

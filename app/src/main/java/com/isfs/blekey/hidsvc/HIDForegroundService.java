@@ -27,14 +27,9 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import com.isfs.blekey.R;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
-import com.isfs.blekey.data.AppConfig;
-import com.isfs.blekey.util.KeyUtils;
-
-import java.nio.charset.StandardCharsets;
-import java.security.PrivateKey;
-import com.isfs.blekey.authenticator.AuthenticatorAPI.UserPresenceCallback;
-import com.isfs.blekey.authenticator.UpRequestContext;
-import com.isfs.blekey.authenticator.UpRequestContext.Outcome;
+import com.isfs.blekey.authenticator.AuthenticatorAPI.UpUvCallback;
+import com.isfs.blekey.authenticator.UpUvRequestCtx;
+import com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
@@ -68,9 +63,19 @@ public class HIDForegroundService extends Service {
     static final int UP_NOTIFICATION_ID = 4200;
     /** How long to wait for user response before auto-denying. */
     /** Stage 1 :: user to tap Allow/Deny after the dialog/notification appears. */
-    static final int UP_DIALOG_TIMEOUT_MS = 8_000;   // 8 s
+    public static final int UP_DIALOG_TIMEOUT_MS = 8_000;   // 8 s
     /** Stage 2 :: user to meet biometric challenge after Allow. */
-    static final int UP_BIO_TIMEOUT_MS = 12_000;     // 12 s
+    public static final int UP_BIO_TIMEOUT_MS = 12_000;     // 12 s
+
+    private int getUpDialogTimeoutMs() {
+        return getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE)
+                .getInt("up_dialog_timeout_ms", UP_DIALOG_TIMEOUT_MS);
+    }
+
+    private int getUpBioTimeoutMs() {
+        return getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE)
+                .getInt("up_bio_timeout_ms", UP_BIO_TIMEOUT_MS);
+    }
 
     // -------------------------------------------------------------------------
     // Service-level fields
@@ -88,7 +93,7 @@ public class HIDForegroundService extends Service {
     private KeepaliveManager keepaliveManager;
 
     /** Pending context; non-null while a UP ceremony is in progress. */
-    private volatile UpRequestContext pendingContext = null;
+    private volatile UpUvRequestCtx pendingContext = null;
     /** Pending txn; mirrors pendingContext.getTxn() for convenience. */
     private volatile CtapTxn pendingUpTxn = null;
 
@@ -107,13 +112,25 @@ public class HIDForegroundService extends Service {
     // UpActivityDelegate — implemented by ServerActivity
     // -------------------------------------------------------------------------
 
-    // UPUV_GATE_SIMPLIFICATION: BiometricDelegate commented out — no longer needed.
-    // Retained here for future reinstatement if the bio-gate path is restored.
-    /*
+    /**
+     * Callback interface implemented by {@code ServerActivity} to show a biometric
+     * prompt after the user taps Allow.
+     *
+     * <p>The service calls {@link #showBiometricPrompt} on the UI thread only when the
+     * CID does not already own the UP lock (i.e. this is the first ceremony in the
+     * 15-second window).  If the CID is already the lock owner the chain runs
+     * immediately without a second bio challenge.</p>
+     */
     public interface BiometricDelegate {
-        void showBiometricPrompt(AuthenticatorAPI.PlatformKeyContext ctx);
+        /**
+         * Show the biometric prompt.  Call {@code onSuccess.run()} when authentication
+         * succeeds, {@code onFailed.run()} on failure or cancellation.
+         *
+         * @param onSuccess Runnable to invoke on biometric success (UI or executor thread).
+         * @param onFailed  Runnable to invoke on biometric failure or cancellation.
+         */
+        void showBiometricPrompt(Runnable onSuccess, Runnable onFailed);
     }
-    */
 
     /**
      * Callback interface for the bound {@code ServerActivity}.
@@ -123,7 +140,7 @@ public class HIDForegroundService extends Service {
      * via {@link #deliverUpApproved()} or {@link #deliverUpDenied()} once the
      * user acts.</p>
      *
-     * <p>No {@link UpRequestContext} reference is passed across this boundary —
+     * <p>No {@link UpUvRequestCtx} reference is passed across this boundary —
      * the service owns that state exclusively.</p>
      */
     public interface UpActivityDelegate {
@@ -151,9 +168,6 @@ public class HIDForegroundService extends Service {
     // -------------------------------------------------------------------------
     // Service lifecycle
     // -------------------------------------------------------------------------
-
-    /** True after applyAppConfig() has run at least once through the bio callback. */
-    private boolean appConfigLoaded = false;
 
     @Override
     public void onCreate() {
@@ -212,8 +226,8 @@ public class HIDForegroundService extends Service {
             Log.d(TAG, "BTHIDService already running");
         }
 
-        // Register the UP callback here so it survives activity destruction.
-        AuthenticatorAPI.setUserPresenceCallback(new UpHandler());
+        // Register the UP/UV callback here so it survives activity destruction.
+        AuthenticatorAPI.setUpUvCallback(new UpHandler());
 
         // UPUV_GATE_SIMPLIFICATION: SecureStorageCallback no longer used for CTAP commands.
         // AuthenticatorAPI.setSecureStorageCallback(new SecureStorageHandler());
@@ -236,7 +250,7 @@ public class HIDForegroundService extends Service {
     @Override
     public void onDestroy() {
         Log.d(TAG, "onDestroy");
-        AuthenticatorAPI.setUserPresenceCallback(null);
+        AuthenticatorAPI.setUpUvCallback(null);
         // AuthenticatorAPI.setSecureStorageCallback(null); // UPUV_GATE_SIMPLIFICATION
         AuthenticatorAPI.setDeferredResponseSender(null);
         if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
@@ -275,15 +289,55 @@ public class HIDForegroundService extends Service {
         upHandler.post(() -> {
             cancelTimeout();
             cancelUpNotification();
-            if (pendingContext != null) {
-                pendingUpTxn.setUserPresent(true);
+            if (pendingContext == null) {
+                finishUpDelivery();
+                return;
+            }
+
+            CtapTxn txn = pendingUpTxn;
+
+            // If the CID already proved biometric in a prior ceremony this session and
+            // the platform IKM is cached on the txn, run the chain directly — no
+            // second prompt needed.
+            if (AuthenticatorAPI.isUpLockOwner(txn.getCid()) && txn.isIkmCached()) {
                 pendingContext.buildResponse(Outcome.APPROVED, response -> {
-                    if (response != null) sendDeferred(pendingUpTxn, response);
+                    if (response != null) sendDeferred(txn, response);
                     finishUpDelivery();
                 });
-            } else {
-                finishUpDelivery();
+                return;
             }
+
+            // If the pending ceremony does not require a biometric (getInfo / getKey),
+            // run the chain directly after the Allow tap — no fingerprint needed.
+            if (!pendingContext.requiresBiometric()) {
+                pendingContext.buildResponse(Outcome.APPROVED, response -> {
+                    if (response != null) sendDeferred(txn, response);
+                    finishUpDelivery();
+                });
+                return;
+            }
+
+            UpActivityDelegate d = activityDelegate;
+            if (!(d instanceof BiometricDelegate)) {
+                Log.w(TAG, "deliverUpApproved: no BiometricDelegate — denying");
+                deliverUpDenied();
+                return;
+            }
+
+            // Stage-2 timeout covering the biometric window.
+            timeoutRunnable = this::deliverTimeoutInternal;
+            upHandler.postDelayed(timeoutRunnable, getUpBioTimeoutMs());
+
+            ((BiometricDelegate) d).showBiometricPrompt(
+                /* onSuccess */ () -> upHandler.post(() -> {
+                    cancelTimeout();
+                    pendingContext.buildResponse(Outcome.APPROVED, response -> {
+                        if (response != null) sendDeferred(txn, response);
+                        finishUpDelivery();
+                    });
+                }),
+                /* onFailed  */ () -> deliverUpDenied()
+            );
         });
     }
 
@@ -297,6 +351,7 @@ public class HIDForegroundService extends Service {
             // rejected immediately without opening a new biometric prompt.
             if (pendingUpTxn != null) {
                 pendingUpTxn.setUserDenied(true);
+                AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
             }
             if (pendingContext != null) {
                 pendingContext.buildResponse(Outcome.DENIED, response -> {
@@ -356,9 +411,9 @@ public class HIDForegroundService extends Service {
     }
     */
 
-    private final class UpHandler implements UserPresenceCallback {
+    private final class UpHandler implements UpUvCallback {
         @Override
-        public void onUserPresenceRequired(UpRequestContext context) {
+        public void onUpUvRequired(UpUvRequestCtx context) {
             // Acquire wake lock immediately on the CTAP thread so the CPU stays alive
             // while we post to the main thread and build the notification.
             acquireUpWakeLock();
@@ -375,9 +430,18 @@ public class HIDForegroundService extends Service {
             startUpTimeout();
 
             upHandler.post(() -> {
-                keepaliveManager.updateStatus(cidKey, KeepaliveManager.STATUS_UP_NEEDED);
-                Log.d(TAG, "UP: posting to UI thread for cidKey=" + cidKey);
+                keepaliveManager.updateStatus(cidKey, context.getKeepaliveStatus());
 
+                // UP already collected on this txn and the command needs biometric only
+                // (e.g. getTkn after getInfo) — skip the Allow/Deny dialog and go straight
+                // to the biometric prompt.
+                if (txn.isUserPresent() && context.requiresBiometric()) {
+                    Log.d(TAG, "UP: txn already has UP + requiresBiometric — skipping dialog, delivering approved");
+                    deliverUpApproved();
+                    return;
+                }
+
+                Log.d(TAG, "UP: posting to UI thread for cidKey=" + cidKey);
                 UpActivityDelegate d = activityDelegate;
                 if (d != null) {
                     d.showUpDialog(context.getRpId());
@@ -394,7 +458,7 @@ public class HIDForegroundService extends Service {
 
     private void startUpTimeout() {
         timeoutRunnable = this::deliverTimeoutInternal;
-        upHandler.postDelayed(timeoutRunnable, UP_DIALOG_TIMEOUT_MS);
+        upHandler.postDelayed(timeoutRunnable, getUpDialogTimeoutMs());
     }
 
     private void cancelTimeout() {
@@ -408,6 +472,7 @@ public class HIDForegroundService extends Service {
         cancelUpNotification();
         UpActivityDelegate d = activityDelegate;
         if (d instanceof TimeoutListener) ((TimeoutListener) d).onUpTimeout();
+        if (pendingUpTxn != null) AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
         if (pendingContext != null) {
             sendDeferred(pendingUpTxn,
                 AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.USER_ACTION_TIMEOUT));
@@ -442,7 +507,7 @@ public class HIDForegroundService extends Service {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm == null) return;
         upWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "blekey:upPrompt");
-        upWakeLock.acquire(UP_BIO_TIMEOUT_MS + 2_000L);
+        upWakeLock.acquire(getUpBioTimeoutMs() + 2_000L);
         Log.d(TAG, "UP wake lock acquired");
     }
 
@@ -547,42 +612,6 @@ public class HIDForegroundService extends Service {
         return lowBatteryMode;
     }
 
-    // -------------------------------------------------------------------------
-    // Notification channel for UP alerts
-    // -------------------------------------------------------------------------
-
-    /**
-     * Loads, decrypts, and applies the HKDF info string from SharedPreferences.
-     *
-     * <p>The stored value is ECDH-encrypted with the platform key and Base64-encoded
-     * (written by {@code AdvancedConfigActivity}). Falls back to
-     * {@link AppConfig#DEFAULT_INFO} if no value is stored or decryption fails.
-     */
-    private void applyAppConfig() {
-        android.content.SharedPreferences prefs =
-                getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE);
-        String stored = prefs.getString("hkdf_info", null);
-        String info = AppConfig.DEFAULT_INFO;
-        if (stored != null) {
-            try {
-                PrivateKey platformKey = KeyUtils.getPlatformKey();
-                if (platformKey == null) {
-                    Log.e(TAG, "Platform key unavailable; using default HKDF info");
-                } else {
-                    byte[] ciphertext = android.util.Base64.decode(stored, android.util.Base64.NO_WRAP);
-                    byte[] plaintext = KeyUtils.ecdhDecrypt(ciphertext, platformKey);
-                    info = new String(plaintext, StandardCharsets.UTF_8);
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to decrypt HKDF info; using default", e);
-            }
-        }
-        boolean ctap1Compat = prefs.getBoolean("ctap1_compat_mode", AppConfig.DEFAULT_CTAP1_COMPAT);
-        AuthenticatorAPI.setAppConfig(new AppConfig(info, ctap1Compat));
-        Log.d(TAG, "AppConfig applied: hkdf_info length=" + info.length()
-                + " ctap1CompatMode=" + ctap1Compat);
-    }
-
     private void createUpNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
@@ -630,7 +659,6 @@ public class HIDForegroundService extends Service {
             .setContentTitle("Passkey BT HID Active")
             .setContentText("Classic Bluetooth HID service is running")
             .setSmallIcon(R.drawable.bee)
-            .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setShowWhen(false)

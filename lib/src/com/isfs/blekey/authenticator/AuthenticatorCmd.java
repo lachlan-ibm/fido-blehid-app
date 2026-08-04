@@ -12,6 +12,7 @@ public enum AuthenticatorCmd {
     ERR(0x00),
     MKCRED(0x01),
     NXTAST(0x02),
+    GETNXTAST(0x08),
     GETINF(0x04),
     ATHPIN(0x06),
     SELECTION(0x0B);

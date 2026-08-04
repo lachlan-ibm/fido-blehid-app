@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.isfs.blekey.authenticator.implapi.AttestationBuilder;
+import com.isfs.blekey.authenticator.implapi.MakeCredentialHandler;
 import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.util.FileUtils;
@@ -59,10 +61,12 @@ public class PlatformKeyAttestationTest {
         FileUtils.writePrivatePEM(testPlatformKeyPair.getPrivate(),
                 new File(tempDir, "platform.key"));
 
-        // Stub UserPresenceCallback: auto-approve so the UP dialog gate is bypassed
-        // in unit tests (no UI thread available). The ChainAction fires synchronously.
-        AuthenticatorAPI.setUserPresenceCallback(
-            ctx -> ctx.buildResponse(UpRequestContext.Outcome.APPROVED, err -> {}));
+        // Stub UpUvCallback: auto-approve so the UP/UV gate is bypassed in unit tests
+        // (no UI thread available). The ChainAction fires synchronously.
+        // Pre-arm the UxInteractionLock for the test CID so the tryAcquire guard
+        // does not short-circuit before the stub fires.
+        AuthenticatorAPI.setUpUvCallback(
+            ctx -> ctx.buildResponse(UpUvRequestCtx.Outcome.APPROVED, err -> {}));
 
         // Stub DeferredResponseSender: try the CtapHid path first (Ctap2HidRequestTest
         // pattern); fall back to capturing in capturedResponse for direct-call tests.
@@ -83,9 +87,41 @@ public class PlatformKeyAttestationTest {
 
     @AfterEach
     public void tearDown() throws Exception {
-        AuthenticatorAPI.setUserPresenceCallback(null);
+        AuthenticatorAPI.setUpUvCallback(null);
         AuthenticatorAPI.setDeferredResponseSender(null);
         System.clearProperty("FIDO2_HOME");
+        resetUpLock();
+    }
+
+    /**
+     * Pre-acquires the UxInteractionLock for {@code cid} so that the tryAcquire
+     * guard in commands like makeCredential does not reject the request.
+     */
+    private static void preAcquireLock(byte[] cid) throws Exception {
+        Class<?> lockClass = Class.forName(
+            "com.isfs.blekey.authenticator.UxInteractionLock");
+        java.lang.reflect.Method get = lockClass.getDeclaredMethod("get");
+        get.setAccessible(true);
+        Object lock = get.invoke(null);
+        java.lang.reflect.Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
+        tryAcquire.setAccessible(true);
+        tryAcquire.invoke(lock, (Object) cid);
+    }
+
+    private static void resetUpLock() throws Exception {
+        Class<?> lockClass = Class.forName(
+            "com.isfs.blekey.authenticator.UxInteractionLock");
+        java.lang.reflect.Method get = lockClass.getDeclaredMethod("get");
+        get.setAccessible(true);
+        Object lock = get.invoke(null);
+
+        java.lang.reflect.Field ownerCid = lockClass.getDeclaredField("ownerCid");
+        ownerCid.setAccessible(true);
+        ownerCid.set(lock, null);
+
+        java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
+        expiresAtMs.setAccessible(true);
+        expiresAtMs.set(lock, 0L);
     }
 
 
@@ -109,7 +145,7 @@ public class PlatformKeyAttestationTest {
         byte[] authData = new byte[37];
 
         // Use the platform key pair as the attestation key pair (UV-discouraged path)
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = AttestationBuilder.class.getDeclaredMethod(
             "createAttestationStatement",
             byte[].class, byte[].class, Fido2Authenticator.class,
             KeyPair.class, X509Certificate.class);
@@ -150,7 +186,7 @@ public class PlatformKeyAttestationTest {
         KeyPair caKeyPair = fixture.getEcCaKeyPair();
         X509Certificate caCert = fixture.getEcCaCert();
 
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
+        Method method = AttestationBuilder.class.getDeclaredMethod(
             "createAttestationStatement",
             byte[].class, byte[].class, Fido2Authenticator.class,
             KeyPair.class, X509Certificate.class);
@@ -180,15 +216,19 @@ public class PlatformKeyAttestationTest {
         // Build a minimal valid makeCredential request with uv=false, no PIN param
         Map<Integer, Object> req = buildMinimalMakeCredentialRequest(false /* uv */);
 
+        byte[] testCid = {0x0A, 0x0B, 0x0C, 0x0D};
         CtapTxn txn = new CtapTxn();
-        txn.setUserPresent(true);
-        // Pre-seed the IKM-cached fast-path so derivePasskeySeed bypasses
+        txn.setCid(testCid);
+        // Pre-seed the IKM-cached state so derivePasskeySeed bypasses
         // ECDH re-derivation (KeystoreManager unavailable in unit-test JVM environment).
         txn.setIkmCached(true);
         txn.setPlatformIkm(testPlatformKeyPair.getPrivate().getEncoded());
 
-        // makeCredential is always deferred now; response arrives via DeferredResponseSender.
-        AuthenticatorAPI.makeCredential(txn, req);
+        // Pre-acquire the UP lock so the tryAcquire guard passes (UP not yet set on
+        // txn — deferred path is taken; the UpUvCallback stub auto-approves and the
+        // ChainAction delivers the response via DeferredResponseSender).
+        preAcquireLock(testCid);
+        MakeCredentialHandler.makeCredential(txn, req);
 
         byte[] response = capturedResponse.get();
         assertNotNull(response, "Response must not be null");
@@ -210,7 +250,7 @@ public class PlatformKeyAttestationTest {
         CtapTxn txn = new CtapTxn();
         txn.setUserPresent(true);
 
-        byte[] response = AuthenticatorAPI.makeCredential(txn, req);
+        byte[] response = MakeCredentialHandler.makeCredential(txn, req);
 
         assertNotNull(response, "Response must not be null");
         // 0x36 = PIN_REQUIRED

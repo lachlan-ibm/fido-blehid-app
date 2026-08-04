@@ -10,11 +10,11 @@ import android.bluetooth.le.AdvertiseSettings;
 import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import androidx.core.content.ContextCompat;
 import android.os.Handler;
 import android.os.ParcelUuid;
 import android.util.Log;
 
-import androidx.core.content.ContextCompat;
 
 import com.isfs.blekey.util.BleUtils;
 

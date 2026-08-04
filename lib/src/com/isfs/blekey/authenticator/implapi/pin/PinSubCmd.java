@@ -1,12 +1,12 @@
 /*
  * Copyright IBM 2025, 2026
  */
-package com.isfs.blekey.authenticator;
+package com.isfs.blekey.authenticator.implapi.pin;
 
-import java.util.stream.Collectors;
-import java.util.function.Function;
-import java.util.Map;
 import java.util.Arrays;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 public enum PinSubCmd {
     ERR(0x00),
@@ -33,7 +33,7 @@ public enum PinSubCmd {
         return name();
     }
 
-    private static Map<Integer, PinSubCmd> reverseLookup = 
+    private static Map<Integer, PinSubCmd> reverseLookup =
             Arrays.stream(PinSubCmd.values())
                   .collect(Collectors.toMap(PinSubCmd::getValue, Function.identity()));
 

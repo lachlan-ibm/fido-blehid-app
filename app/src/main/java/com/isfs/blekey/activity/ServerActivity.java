@@ -59,8 +59,6 @@ import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.BiometricAuthHelper;
 import com.isfs.blekey.hidsvc.DeviceStateManager;
 import com.isfs.blekey.MainActivity;
-import com.isfs.blekey.authenticator.AuthenticatorAPI;
-import androidx.biometric.BiometricPrompt;
 
 import androidx.annotation.Nullable;
 
@@ -78,7 +76,7 @@ import androidx.annotation.Nullable;
  */
 public class ServerActivity extends AppCompatActivity
         implements HIDForegroundService.UpActivityDelegate,
-                   // HIDForegroundService.BiometricDelegate, // UPUV_GATE_SIMPLIFICATION
+                   HIDForegroundService.BiometricDelegate,
                    HIDForegroundService.CancelListener,
                    HIDForegroundService.TimeoutListener {
 
@@ -1248,33 +1246,30 @@ public class ServerActivity extends AppCompatActivity
 
     // -------------------------------------------------------------------------
     // HIDForegroundService.BiometricDelegate
-    // UPUV_GATE_SIMPLIFICATION: showBiometricPrompt commented out — BiometricDelegate removed.
-    // Retained here for future reinstatement if the bio-gate path is restored.
     // -------------------------------------------------------------------------
 
-    /*
     @Override
-    public void showBiometricPrompt(AuthenticatorAPI.PlatformKeyContext ctx) {
+    public void showBiometricPrompt(Runnable onSuccess, Runnable onFailed) {
         biometricHelper.authenticate(
             getString(R.string.bio_prompt_title),
             getString(R.string.bio_prompt_subtitle),
             new BiometricAuthHelper.AuthenticationCallback() {
                 @Override
-                public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
-                    ctx.onUnlocked();
+                public void onAuthenticationSucceeded(
+                        androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                    onSuccess.run();
                 }
                 @Override
                 public void onAuthenticationFailed(String errorMessage) {
-                    ctx.onFailed();
+                    onFailed.run();
                 }
                 @Override
                 public void onAuthenticationCancelled() {
-                    ctx.onFailed();
+                    onFailed.run();
                 }
             }
         );
     }
-    */
 
     // -------------------------------------------------------------------------
     // HIDForegroundService.CancelListener

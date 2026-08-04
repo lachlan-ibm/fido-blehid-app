@@ -21,6 +21,7 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,9 +31,9 @@ import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.authenticator.AuthenticatorCmd;
-import com.isfs.blekey.authenticator.PinSubCmd;
 import com.isfs.blekey.authenticator.TestConfig;
 import com.isfs.blekey.authenticator.TestHelper;
+import com.isfs.blekey.authenticator.implapi.pin.PinSubCmd;
 import com.isfs.blekey.data.Passkey;
 
 /**
@@ -147,7 +148,7 @@ public class Ctap2HidRequestTest {
         // loadAuthenticatedSession() which looks up openKeys by CID — without this
         // entry it finds nothing and nulls out the passkey, causing PIN_REQUIRED.
         java.lang.reflect.Field openKeysField =
-                AuthenticatorAPI.class.getDeclaredField("openKeys");
+                com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry.class.getDeclaredField("openKeys");
         openKeysField.setAccessible(true);
         @SuppressWarnings("unchecked")
         Map<byte[], Passkey> openKeys =
@@ -179,14 +180,14 @@ public class Ctap2HidRequestTest {
         pinHash = new byte[32];
         random.nextBytes(pinHash);
         
-        // Register a synchronous UP callback so getInfo completes without UI interaction.
+        // Register a synchronous UP/UV callback so getInfo completes without UI interaction.
         // When getInfo defers, this callback immediately loads the approved response back
         // into the waiting CtapHid so the drain loop in the test works normally.
-        com.isfs.blekey.authenticator.AuthenticatorAPI.setUserPresenceCallback(
+        com.isfs.blekey.authenticator.AuthenticatorAPI.setUpUvCallback(
             context -> {
                 com.isfs.blekey.ctap.CtapTxn txn = context.getTxn();
                 context.buildResponse(
-                    com.isfs.blekey.authenticator.UpRequestContext.Outcome.APPROVED,
+                    com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome.APPROVED,
                     bytes -> {
                         com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
                         if (deferred != null && bytes != null) {
@@ -251,6 +252,46 @@ public class Ctap2HidRequestTest {
             System.err.println("Transaction not found in setUp with channel ID: " + Arrays.toString(channelId));
             System.err.println("assignedCids keys: " + assignedCids.keySet());
         }
+    }
+
+    @AfterEach
+    public void tearDown() throws Exception {
+        AuthenticatorAPI.setUpUvCallback(null);
+        AuthenticatorAPI.setDeferredResponseSender(null);
+        System.clearProperty("FIDO2_HOME");
+        resetUpLock();
+    }
+
+    /**
+     * Polls {@code ctapHid.getResponseSegment()} until a non-null segment is returned
+     * (the deferred ChainAction has injected a response) or the timeout elapses.
+     * Returns the first non-null segment, or null if the timeout expires.
+     */
+    private byte[] waitForDeferredResponse(CtapHid ctapHid, long timeoutMs)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            byte[] seg = ctapHid.getResponseSegment();
+            if (seg != null) return seg;
+            Thread.sleep(10);
+        }
+        return null;
+    }
+
+    private static void resetUpLock() throws Exception {
+        Class<?> lockClass = Class.forName(
+            "com.isfs.blekey.authenticator.UxInteractionLock");
+        java.lang.reflect.Method get = lockClass.getDeclaredMethod("get");
+        get.setAccessible(true);
+        Object lock = get.invoke(null);
+
+        java.lang.reflect.Field ownerCid = lockClass.getDeclaredField("ownerCid");
+        ownerCid.setAccessible(true);
+        ownerCid.set(lock, null);
+
+        java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
+        expiresAtMs.setAccessible(true);
+        expiresAtMs.set(lock, 0L);
     }
 
     /**
@@ -457,8 +498,9 @@ public class Ctap2HidRequestTest {
         CtapHid ctapHid = new CtapHid(request);
         ctapHid.processMessage();
         
-        // Get the response
-        byte[] response = ctapHid.getResponseSegment();
+        // GETKEY is now deferred — poll until the ChainAction injects the response.
+        byte[] response = waitForDeferredResponse(ctapHid, 2_000);
+        assertNotNull(response, "Expected deferred GETKEY response within 2 s");
         
         // Verify response status is success (0x00)
         assertEquals(0x00, response[7] & 0xFF, "Response status should be success (0x00)");
@@ -507,7 +549,9 @@ public class Ctap2HidRequestTest {
         byte[] getKeyRequest = createCborRequest(AuthenticatorCmd.ATHPIN, getKeyParams);
         CtapHid getKeyCtapHid = new CtapHid(getKeyRequest);
         getKeyCtapHid.processMessage();
-        byte[] getKeyResponse = getKeyCtapHid.getResponseSegment();
+        // GETKEY is now deferred — poll until the ChainAction injects the response.
+        byte[] getKeyResponse = waitForDeferredResponse(getKeyCtapHid, 2_000);
+        assertNotNull(getKeyResponse, "Expected deferred GETKEY response within 2 s");
         
         // Collect all response segments for the key agreement
         ArrayList<byte[]> keySegments = new ArrayList<>();

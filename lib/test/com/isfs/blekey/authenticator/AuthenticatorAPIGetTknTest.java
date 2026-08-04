@@ -3,268 +3,244 @@
  */
 package com.isfs.blekey.authenticator;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.security.KeyPair;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.isfs.blekey.authenticator.implapi.pin.PinFlowHandler;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.util.FileUtils;
+import com.isfs.blekey.util.KeyUtils;
 
 /**
- * Tests targeting missed branches in getTkn() and related methods.
- * Based on JaCoCo coverage report showing getTkn with 30% instruction, 35% branch coverage.
+ * Unit tests for {@link AuthenticatorAPI#getTkn} (via reflection).
  *
- * Key branches to cover:
- * - getTkn: missing KEY_PIN_HASH_ENC
- * - getTkn: wrong type for KEY_PIN_HASH_ENC
- * - getTkn: null client key
- * - getTkn: no ecdhKeyPair on txn → performEcdhKeyAgreement returns null
- * - validateAndExtractPinHash: missing / wrong-type parameter
- * - extractClientPublicKey: missing / invalid key agreement
- * - performEcdhKeyAgreement: null txn or no ecdhKeyPair on txn
+ * <p>After the UPUV-split refactor, {@code getTkn} has three paths:
+ * <ul>
+ *   <li><b>Fast path</b> — UP lock owned + IKM cached → synchronous {@code processTkn}.</li>
+ *   <li><b>Blocked path</b> — another CID holds the lock → immediate {@code OPERATION_DENIED}.</li>
+ *   <li><b>Slow path</b> — lock not owned / IKM absent, but callback registered → deferred.</li>
+ * </ul>
+ *
+ * <p>Validation-error tests exercise the fast path so that
+ * {@code processTkn} is reached and the specific error code from
+ * {@code validateAndExtractPinHash} / {@code extractClientPublicKey} is returned.
  */
+@ExtendWith(MockitoExtension.class)
 public class AuthenticatorAPIGetTknTest {
 
-    @Mock
-    private CtapTxn mockTxn;
-    
-    private static final int KEY_PIN_HASH_ENC = 0x06;
-    private static final int KEY_PLATFORM_KEY_AGREEMENT = 0x03;
-    
-    @Before
+    private static final byte[] TEST_CID = {0x01, 0x02, 0x03, 0x04};
+
+    private java.io.File tempDir;
+    private Method getTknMethod;
+
+    @BeforeEach
     public void setUp() throws Exception {
-        MockitoAnnotations.openMocks(this);
+        // Minimal FIDO2_HOME so KeyUtils static initialisation does not fail.
+        tempDir = Files.createTempDirectory("fido2-getTkn-test-").toFile();
+        tempDir.deleteOnExit();
+        System.setProperty("FIDO2_HOME", tempDir.getAbsolutePath());
+
+        // Write a platform.key so KeyUtils.getPlatformKey() (file-based path) works.
+        KeyPair platformKeyPair = KeyUtils.generateKeyPair("EC", 256);
+        FileUtils.writePrivatePEM(platformKeyPair.getPrivate(),
+                new java.io.File(tempDir, "platform.key"));
+
+        // No UpUvCallback registered — slow path returns OPERATION_DENIED.
+        AuthenticatorAPI.setUpUvCallback(null);
+        AuthenticatorAPI.setDeferredResponseSender(null);
+
+        // Obtain private getTkn(CtapTxn, Map) via reflection.
+        getTknMethod = PinFlowHandler.class.getDeclaredMethod(
+                "getTkn", CtapTxn.class, Map.class);
+        getTknMethod.setAccessible(true);
+
+        // Always start with a clean UP lock.
+        resetUpLock();
     }
-    
+
+    @AfterEach
+    public void tearDown() throws Exception {
+        AuthenticatorAPI.setUpUvCallback(null);
+        AuthenticatorAPI.setDeferredResponseSender(null);
+        System.clearProperty("FIDO2_HOME");
+        resetUpLock();
+    }
+
+    // -------------------------------------------------------------------------
+    // Fast-path helper
+    // -------------------------------------------------------------------------
+
     /**
-     * Test getTkn() when txn has no ecdhKeyPair (GETKEY was never called).
-     * performEcdhKeyAgreement() returns null → getTkn() returns OTHER error.
+     * Acquires the UP lock for {@code cid} and marks IKM as cached on {@code txn} so
+     * that the fast path inside {@code getTkn} is taken.
      */
-    @Test
-    public void testGetTkn_NoEcdhKeyPairOnTxn() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "getTkn", CtapTxn.class, Map.class);
-        method.setAccessible(true);
+    private void setupFastPath(CtapTxn txn, byte[] cid) throws Exception {
+        Class<?> lockClass = Class.forName(
+            "com.isfs.blekey.authenticator.UxInteractionLock");
+        Method get = lockClass.getDeclaredMethod("get");
+        get.setAccessible(true);
+        Object lock = get.invoke(null);
+        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
+        tryAcquire.setAccessible(true);
+        // Cast to Object to avoid Java treating byte[] as a varargs array.
+        tryAcquire.invoke(lock, (Object) cid);
 
-        CtapTxn txn = new CtapTxn();
-        // ecdhKeyPair is null — GETKEY was never called on this txn
-
-        Map<Integer, Object> req = new HashMap<>();
-        req.put(KEY_PIN_HASH_ENC, new byte[16]);
-        // No KEY_PLATFORM_KEY_AGREEMENT → extractClientPublicKey returns null → INVALID_PARAMETER
-
-        byte[] result = (byte[]) method.invoke(null, txn, req);
-
-        assertNotNull("Should return error response", result);
-        assertEquals("Should return INVALID_PARAMETER when client key is absent",
-            Ctap2StatusCode.INVALID_PARAMETER.getCode(), result[0] & 0xFF);
+        // Mark IKM as cached so the fast-path condition is satisfied.
+        txn.setPlatformIkm(new byte[32]);   // dummy 32-byte IKM
+        txn.setIkmCached(true);
     }
-    
+
     /**
-     * Test getTkn() with missing KEY_PIN_HASH_ENC parameter.
-     * Covers line 1429-1431: req.get(KEY_PIN_HASH_ENC) == null branch
+     * Resets the UxInteractionLock singleton to a clean state between tests.
+     */
+    private static void resetUpLock() throws Exception {
+        Class<?> lockClass = Class.forName(
+            "com.isfs.blekey.authenticator.UxInteractionLock");
+        Method get = lockClass.getDeclaredMethod("get");
+        get.setAccessible(true);
+        Object lock = get.invoke(null);
+
+        Field ownerCid = lockClass.getDeclaredField("ownerCid");
+        ownerCid.setAccessible(true);
+        ownerCid.set(lock, null);
+
+        Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
+        expiresAtMs.setAccessible(true);
+        expiresAtMs.set(lock, 0L);
+    }
+
+    /**
+     * Extracts the CTAP2 status byte from the response array (byte[0] after the
+     * 7-byte HID-packet framing that the unit test returns directly from the method).
+     * The raw response from {@code getTkn} starts with the status byte at index 0.
+     */
+    private static int statusByte(byte[] response) {
+        assertNotNull(response, "Response must not be null");
+        // getTkn returns the raw CBOR response (status byte at offset 0).
+        return response[0] & 0xFF;
+    }
+
+    // -------------------------------------------------------------------------
+    // Fast-path validation tests
+    // -------------------------------------------------------------------------
+
+    /**
+     * Missing pinHashEnc field (key 0x06) → MISSING_PARAMETER.
+     * Fast path is set up so processTkn is entered and the validation error is returned.
      */
     @Test
     public void testGetTkn_MissingPinHashEnc() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "getTkn", CtapTxn.class, Map.class);
-        method.setAccessible(true);
-        
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+        setupFastPath(txn, TEST_CID);
+
         Map<Integer, Object> req = new HashMap<>();
-        // Missing KEY_PIN_HASH_ENC
-        req.put(KEY_PLATFORM_KEY_AGREEMENT, new HashMap<>());
-        
-        byte[] result = (byte[]) method.invoke(null, mockTxn, req);
-        
-        assertNotNull("Should return error response", result);
-        assertEquals("Should return MISSING_PARAMETER error", 
-            Ctap2StatusCode.MISSING_PARAMETER.getCode(), result[0] & 0xFF);
+        req.put(0x01, 1); // pinProtocol — no pinHashEnc (0x06)
+
+        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
+        assertNotNull(response, "Should return MISSING_PARAMETER error, not null");
+        assertEquals(Ctap2StatusCode.MISSING_PARAMETER.getCode(), statusByte(response),
+                "Expected MISSING_PARAMETER status");
     }
-    
+
     /**
-     * Test getTkn() with invalid pinHashEnc (wrong type).
-     * Covers line 1432: return error(INVALID_PARAMETER) branch
+     * pinHashEnc present but wrong type (Integer instead of byte[]) → INVALID_PARAMETER.
      */
     @Test
     public void testGetTkn_InvalidPinHashEncType() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "getTkn", CtapTxn.class, Map.class);
-        method.setAccessible(true);
-        
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+        setupFastPath(txn, TEST_CID);
+
         Map<Integer, Object> req = new HashMap<>();
-        req.put(KEY_PIN_HASH_ENC, "not-a-byte-array"); // Wrong type
-        req.put(KEY_PLATFORM_KEY_AGREEMENT, new HashMap<>());
-        
-        byte[] result = (byte[]) method.invoke(null, mockTxn, req);
-        
-        assertNotNull("Should return error response", result);
-        assertEquals("Should return INVALID_PARAMETER error", 
-            Ctap2StatusCode.INVALID_PARAMETER.getCode(), result[0] & 0xFF);
+        req.put(0x06, Integer.valueOf(42)); // wrong type
+
+        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
+        assertNotNull(response, "Should return INVALID_PARAMETER error, not null");
+        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), statusByte(response),
+                "Expected INVALID_PARAMETER status");
     }
-    
+
     /**
-     * Test getTkn() with null client key.
-     * Covers line 1437-1439: clientKey == null branch
+     * pinHashEnc is valid bytes but client key (0x03) is absent → INVALID_PARAMETER.
      */
     @Test
     public void testGetTkn_NullClientKey() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "getTkn", CtapTxn.class, Map.class);
-        method.setAccessible(true);
-        
-        Map<Integer, Object> req = new HashMap<>();
-        req.put(KEY_PIN_HASH_ENC, new byte[16]);
-        // Missing or invalid KEY_PLATFORM_KEY_AGREEMENT will result in null clientKey
-        
-        byte[] result = (byte[]) method.invoke(null, mockTxn, req);
-        
-        assertNotNull("Should return error response", result);
-        // Will hit clientKey == null check
-    }
-    
-    /**
-     * Test validateAndExtractPinHash() with null request.
-     * Covers null check branch - method throws NullPointerException.
-     */
-    @Test(expected = java.lang.reflect.InvocationTargetException.class)
-    public void testValidateAndExtractPinHash_NullRequest() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validateAndExtractPinHash", Map.class);
-        method.setAccessible(true);
-        
-        method.invoke(null, (Map<Integer, Object>) null);
-    }
-    
-    /**
-     * Test validateAndExtractPinHash() with missing parameter.
-     * Covers missing parameter branch.
-     */
-    @Test
-    public void testValidateAndExtractPinHash_MissingParameter() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validateAndExtractPinHash", Map.class);
-        method.setAccessible(true);
-        
-        Map<Integer, Object> req = new HashMap<>();
-        // Missing KEY_PIN_HASH_ENC
-        
-        Object result = method.invoke(null, req);
-        
-        assertNotNull("Should return PinHashValidationResult", result);
-        // Use reflection to check isValid() method
-        Method isValidMethod = result.getClass().getDeclaredMethod("isValid");
-        isValidMethod.setAccessible(true);
-        boolean isValid = (boolean) isValidMethod.invoke(result);
-        assertFalse("Should return invalid result for missing parameter", isValid);
-    }
-    
-    /**
-     * Test validateAndExtractPinHash() with wrong type.
-     * Covers type validation branch.
-     */
-    @Test
-    public void testValidateAndExtractPinHash_WrongType() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "validateAndExtractPinHash", Map.class);
-        method.setAccessible(true);
-        
-        Map<Integer, Object> req = new HashMap<>();
-        req.put(KEY_PIN_HASH_ENC, "not-a-byte-array");
-        
-        Object result = method.invoke(null, req);
-        
-        assertNotNull("Should return PinHashValidationResult", result);
-        // Use reflection to check isValid() method
-        Method isValidMethod = result.getClass().getDeclaredMethod("isValid");
-        isValidMethod.setAccessible(true);
-        boolean isValid = (boolean) isValidMethod.invoke(result);
-        assertFalse("Should return invalid result for wrong type", isValid);
-    }
-    
-    /**
-     * Test extractClientPublicKey() with null request.
-     * Covers null check branch - method throws NullPointerException.
-     */
-    @Test(expected = java.lang.reflect.InvocationTargetException.class)
-    public void testExtractClientPublicKey_NullRequest() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "extractClientPublicKey", Map.class);
-        method.setAccessible(true);
-        
-        method.invoke(null, (Map<Integer, Object>) null);
-    }
-    
-    /**
-     * Test extractClientPublicKey() with missing key agreement.
-     * Covers missing parameter branch.
-     */
-    @Test
-    public void testExtractClientPublicKey_MissingKeyAgreement() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "extractClientPublicKey", Map.class);
-        method.setAccessible(true);
-        
-        Map<Integer, Object> req = new HashMap<>();
-        // Missing KEY_PLATFORM_KEY_AGREEMENT
-        
-        Object result = method.invoke(null, req);
-        
-        assertNull("Should return null for missing key agreement", result);
-    }
-    
-    /**
-     * Test extractClientPublicKey() with invalid key agreement type.
-     * Covers type validation branch - method throws ClassCastException.
-     */
-    @Test(expected = java.lang.reflect.InvocationTargetException.class)
-    public void testExtractClientPublicKey_InvalidType() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "extractClientPublicKey", Map.class);
-        method.setAccessible(true);
-        
-        Map<Integer, Object> req = new HashMap<>();
-        req.put(KEY_PLATFORM_KEY_AGREEMENT, "not-a-map");
-        
-        method.invoke(null, req);
-    }
-    
-    /**
-     * Test performEcdhKeyAgreement() with null txn.
-     * Should return null (error logged, no exception).
-     */
-    @Test
-    public void testPerformEcdhKeyAgreement_NullTxn() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "performEcdhKeyAgreement", java.security.PublicKey.class, CtapTxn.class);
-        method.setAccessible(true);
-
-        Object result = method.invoke(null, (java.security.PublicKey) null, (CtapTxn) null);
-        assertNull("Should return null when txn is null", result);
-    }
-
-    /**
-     * Test performEcdhKeyAgreement() with a txn that has no ecdhKeyPair set.
-     * Should return null (no GETKEY was performed on this CID).
-     */
-    @Test
-    public void testPerformEcdhKeyAgreement_NoEcdhKeyPair() throws Exception {
-        Method method = AuthenticatorAPI.class.getDeclaredMethod(
-            "performEcdhKeyAgreement", java.security.PublicKey.class, CtapTxn.class);
-        method.setAccessible(true);
-
         CtapTxn txn = new CtapTxn();
-        // ecdhKeyPair intentionally not set
+        txn.setCid(TEST_CID);
+        setupFastPath(txn, TEST_CID);
 
-        Object result = method.invoke(null, (java.security.PublicKey) null, txn);
-        assertNull("Should return null when txn has no ecdhKeyPair", result);
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x06, new byte[16]); // valid byte[] pinHashEnc
+        // 0x03 (keyAgreement) deliberately absent
+
+        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
+        // extractClientPublicKey returns null → INVALID_PARAMETER
+        assertNotNull(response, "Expected a non-null error response");
+        assertEquals(Ctap2StatusCode.INVALID_PARAMETER.getCode(), statusByte(response),
+                "Expected INVALID_PARAMETER when client key is absent");
     }
 
-}
+    /**
+     * Valid pinHashEnc + valid client COSE key but txn has no ECDH key pair (no prior
+     * GETKEY) → OTHER from performEcdhKeyAgreement (sharedSecret is null).
+     */
+    @Test
+    public void testGetTkn_NoEcdhKeyPairOnTxn() throws Exception {
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+        setupFastPath(txn, TEST_CID);
+        // Intentionally do NOT set an ECDH key pair on txn.
 
-// Made with Bob
+        // Build a minimal valid client COSE key (EC P-256).
+        KeyPair clientKp = KeyUtils.generateKeyPair("EC", 256);
+        Map<Integer, Object> clientCoseKey = KeyUtils.toCoseKey(clientKp.getPublic());
+
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x06, new byte[16]);          // pinHashEnc
+        req.put(0x03, clientCoseKey);          // keyAgreement
+
+        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
+        // performEcdhKeyAgreement: txn has no ECDH key pair → returns null → OTHER
+        assertNotNull(response, "Expected a non-null error response");
+        assertEquals(Ctap2StatusCode.OTHER.getCode(), statusByte(response),
+                "Expected OTHER when ECDH key pair is missing from txn");
+    }
+
+    // -------------------------------------------------------------------------
+    // Slow-path tests (no lock, no callback)
+    // -------------------------------------------------------------------------
+
+    /**
+     * When the CID does not own the UP lock and no UpUvCallback is registered,
+     * getTkn returns OPERATION_DENIED (slow path short-circuit).
+     */
+    @Test
+    public void testGetTkn_NullCallback_ReturnsOperationDenied() throws Exception {
+        // No fast-path setup — lock is free, IKM is not cached.
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x06, new byte[16]);
+
+        // userPresenceCallback is null (set in setUp)
+        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
+        assertNotNull(response, "Should return OPERATION_DENIED, not null");
+        assertEquals(Ctap2StatusCode.OPERATION_DENIED.getCode(), statusByte(response),
+                "Expected OPERATION_DENIED when no callback is registered");
+    }
+}
