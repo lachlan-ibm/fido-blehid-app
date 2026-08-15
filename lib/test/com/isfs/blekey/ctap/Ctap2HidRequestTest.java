@@ -180,12 +180,21 @@ public class Ctap2HidRequestTest {
         pinHash = new byte[32];
         random.nextBytes(pinHash);
         
-        // Register a synchronous UP/UV callback so getInfo completes without UI interaction.
-        // When getInfo defers, this callback immediately loads the approved response back
-        // into the waiting CtapHid so the drain loop in the test works normally.
+        // Register a synchronous UP/UV callback so UX ceremonies complete without UI.
+        // Mirrors the strict write order in HIDForegroundService.deliverUpApproved():
+        //   1. setUserPresent(true)
+        //   2. setUxState(APPROVED)   ← latch-waiter thread reads this after waking
+        //   3. releaseUxLatch()       ← wakes the latch-waiter thread
+        //   4. buildResponse(APPROVED, ...) ← handles legacy deferred-chain path
         com.isfs.blekey.authenticator.AuthenticatorAPI.setUpUvCallback(
             context -> {
                 com.isfs.blekey.ctap.CtapTxn txn = context.getTxn();
+                // Steps 1–3: match HIDForegroundService biometric-success path so that
+                // PinFlowHandler's latch-waiter thread sees APPROVED and unblocks.
+                txn.setUserPresent(true);
+                txn.setUxState(com.isfs.blekey.ctap.CtapTxn.CidUxState.APPROVED);
+                txn.releaseUxLatch();
+                // Step 4: handle legacy deferred-chain path (makeCredential/getAssertion).
                 context.buildResponse(
                     com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome.APPROVED,
                     bytes -> {
@@ -193,7 +202,6 @@ public class Ctap2HidRequestTest {
                         if (deferred != null && bytes != null) {
                             try {
                                 deferred.injectDeferredResponse(bytes);
-                                txn.setUserPresent(true);
                             } catch (java.io.IOException e) {
                                 throw new RuntimeException(e);
                             }
@@ -292,6 +300,14 @@ public class Ctap2HidRequestTest {
         java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
         expiresAtMs.setAccessible(true);
         expiresAtMs.set(lock, 0L);
+
+        java.lang.reflect.Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
+        cachedIkm.setAccessible(true);
+        cachedIkm.set(lock, null);
+
+        java.lang.reflect.Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
+        grantExpiresAtMs.setAccessible(true);
+        grantExpiresAtMs.set(lock, 0L);
     }
 
     /**
@@ -604,8 +620,10 @@ public class Ctap2HidRequestTest {
         CtapHid ctapHid = new CtapHid(request);
         ctapHid.processMessage();
         
-        // Get the response
-        byte[] response = ctapHid.getResponseSegment();
+        // GETTKN is deferred — the latch-waiter thread releases after UX approval.
+        // Poll until the DeferredResponseSender injects the response.
+        byte[] response = waitForDeferredResponse(ctapHid, 5_000);
+        assertNotNull(response, "Expected deferred GETTKN response within 5 s");
         
         // For testing purposes, we'll just check if the response format is correct
         // If the PIN hash is invalid, we'll get an error status

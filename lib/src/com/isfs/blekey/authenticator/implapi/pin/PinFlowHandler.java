@@ -4,10 +4,12 @@
 package com.isfs.blekey.authenticator.implapi.pin;
 
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import com.isfs.blekey.authenticator.AuthenticatorAPI.UpUvCallback;
 import com.isfs.blekey.authenticator.UpUvRequestCtx;
 import com.isfs.blekey.authenticator.UxInteractionLock;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.ByteUtils;
 import com.isfs.blekey.util.Cbor;
@@ -24,6 +26,7 @@ import java.security.KeyPair;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Map;
 
 import javax.crypto.Cipher;
@@ -108,37 +111,11 @@ public class PinFlowHandler {
 
     /**
      * Handles the getKeyAgreement PIN sub-command.
-     * Runs synchronously if UP is already collected; otherwise defers behind UP dialog.
+     * Returns synchronously — no UP/UV prompt, no lock claimed (plan §4.2 / G3).
      */
     private static byte[] getKey(CtapTxn txn, Map<Integer, Object> req) {
-        if (txn != null && txn.isUserPresent()) {
-            return executeGetKey(txn);
-        }
-
-        AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
-        if (cb == null) {
-            logger.warn("getKey: no UpUvCallback — OPERATION_DENIED");
-            return error(Ctap2StatusCode.OPERATION_DENIED);
-        }
-        if (!UxInteractionLock.get().tryAcquire(txn.getCid())) {
-            logger.warn("getKey: CID does not own UP lock — CHANNEL_BUSY");
-            return error(Ctap2StatusCode.CHANNEL_BUSY);
-        }
-        cb.onUpUvRequired(
-            new UpUvRequestCtx(null, txn,
-                java.util.List.of((chainCb) -> onGetKeyUpApproved(chainCb, txn)),
-                UpUvRequestCtx.KEEPALIVE_PROCESSING
-            )
-        );
-        return null; // deferred
-    }
-
-    private static void onGetKeyUpApproved(UpUvRequestCtx.ChainCallback chainCb, CtapTxn txn) {
-        if (txn != null) txn.setUserPresent(true);
-        byte[] response = executeGetKey(txn);
-        AuthenticatorAPI.DeferredResponseSender sender = AuthenticatorAPI.getDeferredResponseSender();
-        if (sender != null) sender.send(txn, response);
-        chainCb.done(null);
+        logger.debug("getKey: synchronous");
+        return executeGetKey(txn);
     }
 
     /**
@@ -146,6 +123,34 @@ public class PinFlowHandler {
      * the COSE key response.
      */
     public static byte[] executeGetKey(CtapTxn txn) {
+        // Attempt to start out-of-band UX collection for this CID.
+        // Guard: only when txn exists, uxState is IDLE, and the lock is free.
+        // If another CID holds the lock, uxState stays IDLE and protected commands
+        // will return CHANNEL_BUSY via the existing legacy path (unchanged).
+        //DO NOT PROMPT FOR UPUV IF A GRANT IS ACTIVE THE BIO GATE IS ALREADY IN PROGRESS OR COMPLETE
+        //DO NOT START ANOTHER ONE
+        if (!UxInteractionLock.get().isGrantActive()
+                && txn.getCid() != null
+                && txn.getUxState() == CidUxState.IDLE
+                && UxInteractionLock.get().tryAcquire(txn.getCid())) {
+            txn.setUxState(CidUxState.IN_PROGRESS);
+            txn.armUxLatch();
+            UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
+            if (cb != null) {
+                logger.debug("getKey: starting out-of-band UX for CID {}", Arrays.toString(txn.getCid()));
+                cb.onUpUvRequired(new UpUvRequestCtx(
+                    null,
+                    txn,
+                    java.util.Collections.emptyList(),
+                    UpUvRequestCtx.KEEPALIVE_PROCESSING,
+                    true   // requiresBiometric: platform key is needed
+                ));
+            } else {
+                // No callback registered — release lock and reset state.
+                UxInteractionLock.get().release(txn.getCid());
+                txn.setUxState(CidUxState.IDLE);
+            }
+        }
         KeyPair ecdhPair;
         try {
             ecdhPair = KeyUtils.generateKeyPair("EC", 256);
@@ -174,13 +179,53 @@ public class PinFlowHandler {
      * Always requires UV (biometric). Runs synchronously if lock is owned + IKM cached;
      * otherwise defers behind UP + biometric dialog.
      */
+    /** Maximum ms to wait for the out-of-band UX latch before timing out (§5.4). */
+    private static final long UP_WAIT_TIMEOUT_MS = 25_000L;
+
     private static byte[] getTkn(CtapTxn txn, Map<Integer, ?> req) {
-        if (txn != null && UxInteractionLock.get().isOwner(txn.getCid())
-                && txn.isIkmCached() && txn.getPlatformIkm() != null) {
-            logger.debug("getTkn: fast path — lock owned + IKM cached, running synchronously");
+        // Grant fast-path: bio done app-wide — no dialog or notification needed.
+        // IKM is owned by UxInteractionLock; CredentialSeedDeriver reads from it directly.
+        if (txn != null && UxInteractionLock.get().isGrantActive()) {
+            logger.debug("getTkn: grant active — processing synchronously, no notification");
+            txn.setUserPresent(true);
             return processTkn(txn, req);
         }
 
+        // Denied path: CID was already denied this session.
+        if (txn != null && (txn.getUxState() == CidUxState.DENIED || txn.isUserDenied())) {
+            logger.warn("getTkn: CID denied — OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
+        // Latch-wait path: GETKEY already started the UX; wait off-thread to avoid ANR.
+        if (txn != null && txn.getUxState() == CidUxState.IN_PROGRESS) {
+            logger.debug("getTkn: UX in progress — registering deferred latch listener");
+            final Map<Integer, ?> reqSnapshot = req;
+            Thread latchWaiter = new Thread(() -> {
+                boolean completed = txn.awaitUxLatch(UP_WAIT_TIMEOUT_MS);
+                byte[] response;
+                if (!completed || txn.getUxState() != CidUxState.APPROVED) {
+                    logger.warn("getTkn: latch timeout or denied — OPERATION_DENIED");
+                    response = error(Ctap2StatusCode.OPERATION_DENIED);
+                } else {
+                    logger.debug("getTkn: latch fired APPROVED — processing token");
+                    response = processTkn(txn, reqSnapshot);
+                }
+                AuthenticatorAPI.DeferredResponseSender sender =
+                    AuthenticatorAPI.getDeferredResponseSender();
+                if (sender != null) {
+                    sender.send(txn, response);
+                } else {
+                    logger.error("getTkn: no DeferredResponseSender — response dropped");
+                }
+            }, "getTkn-latch-waiter");
+            latchWaiter.setDaemon(true);
+            latchWaiter.start();
+            return null; // deferred
+        }
+
+        // Legacy deferred path: getInfo was not called first (platform skipped it),
+        // or lock held by another CID. Preserve existing behaviour unchanged.
         AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
         if (cb == null) {
             logger.warn("getTkn: no UpUvCallback — OPERATION_DENIED");
@@ -197,10 +242,11 @@ public class PinFlowHandler {
             new UpUvRequestCtx(null, txn,
                 java.util.List.of((chainCb) -> onGetTknUpApproved(chainCb, txn, reqFinal)),
                 UpUvRequestCtx.KEEPALIVE_PROCESSING,
-                true  // requiresBiometric: UV always required for getTkn
+                true,  // requiresBiometric: UV always required for getTkn
+                UpUvRequestCtx.CeremonyType.GET_TKN
             )
         );
-        return null; // deferred
+        return null; // deferred (legacy path)
     }
 
     private static void onGetTknUpApproved(UpUvRequestCtx.ChainCallback chainCb,

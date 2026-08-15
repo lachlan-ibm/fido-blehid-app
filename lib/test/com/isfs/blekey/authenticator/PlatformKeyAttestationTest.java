@@ -122,6 +122,14 @@ public class PlatformKeyAttestationTest {
         java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
         expiresAtMs.setAccessible(true);
         expiresAtMs.set(lock, 0L);
+
+        java.lang.reflect.Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
+        cachedIkm.setAccessible(true);
+        cachedIkm.set(lock, null);
+
+        java.lang.reflect.Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
+        grantExpiresAtMs.setAccessible(true);
+        grantExpiresAtMs.set(lock, 0L);
     }
 
 
@@ -219,18 +227,23 @@ public class PlatformKeyAttestationTest {
         byte[] testCid = {0x0A, 0x0B, 0x0C, 0x0D};
         CtapTxn txn = new CtapTxn();
         txn.setCid(testCid);
-        // Pre-seed the IKM-cached state so derivePasskeySeed bypasses
-        // ECDH re-derivation (KeystoreManager unavailable in unit-test JVM environment).
-        txn.setIkmCached(true);
-        txn.setPlatformIkm(testPlatformKeyPair.getPrivate().getEncoded());
 
-        // Pre-acquire the UP lock so the tryAcquire guard passes (UP not yet set on
-        // txn — deferred path is taken; the UpUvCallback stub auto-approves and the
-        // ChainAction delivers the response via DeferredResponseSender).
+        // Bypass ECDH derivation in unit-test JVM (no Android Keystore) by pre-seeding
+        // the app-global bio grant so CredentialSeedDeriver fast-paths via isGrantActive().
+        Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
+        Method getLock = lockClass.getDeclaredMethod("get");
+        getLock.setAccessible(true);
+        Object lock = getLock.invoke(null);
+        Method recordBioGrant = lockClass.getDeclaredMethod("recordBioGrant", byte[].class, long.class);
+        recordBioGrant.setAccessible(true);
+        recordBioGrant.invoke(lock, testPlatformKeyPair.getPrivate().getEncoded(), 15_000L);
+
+        // Pre-acquire the UP lock. With grant active, makeCredential takes the synchronous
+        // fast-path (returns directly) rather than the deferred UpUvCallback path, so capture
+        // the direct return value; fall back to capturedResponse for any deferred path.
         preAcquireLock(testCid);
-        MakeCredentialHandler.makeCredential(txn, req);
-
-        byte[] response = capturedResponse.get();
+        byte[] response = MakeCredentialHandler.makeCredential(txn, req);
+        if (response == null) response = capturedResponse.get();
         assertNotNull(response, "Response must not be null");
         // The response must NOT be PIN_REQUIRED (0x36) — that's the key assertion.
         // PIN check is skipped for uv=false; any other failure (e.g. missing disk

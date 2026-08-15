@@ -5,6 +5,7 @@ package com.isfs.blekey.authenticator.implapi.pin;
 
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.Cbor;
 
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -44,7 +46,7 @@ public class PinVerifier {
         ThreadLocal.withInitial(() -> {
             try {
                 return Mac.getInstance("HmacSHA256");
-            } catch (java.security.NoSuchAlgorithmException e) {
+            } catch (NoSuchAlgorithmException e) {
                 throw new RuntimeException("HmacSHA256 algorithm not available", e);
             }
         });
@@ -173,18 +175,18 @@ class PinHashValidationResult {
  * Result of PIN verification — either the opened passkey + PIN hash or an error code.
  */
 class PinVerificationResult {
-    private final com.isfs.blekey.data.Passkey passkey;
+    private final Passkey passkey;
     private final byte[] pinHash;
     private final Ctap2StatusCode errorCode;
 
-    private PinVerificationResult(com.isfs.blekey.data.Passkey passkey, byte[] pinHash,
+    private PinVerificationResult(Passkey passkey, byte[] pinHash,
                                    Ctap2StatusCode errorCode) {
         this.passkey = passkey;
         this.pinHash = pinHash;
         this.errorCode = errorCode;
     }
 
-    static PinVerificationResult success(com.isfs.blekey.data.Passkey passkey, byte[] pinHash) {
+    static PinVerificationResult success(Passkey passkey, byte[] pinHash) {
         return new PinVerificationResult(passkey, pinHash, null);
     }
 
@@ -212,7 +214,7 @@ class PinTokenResponseBuilder {
     byte[] build() {
         byte[] encoded = Cbor.encode(response);
         byte[] out = new byte[encoded.length + 1];
-        out[0] = (byte) com.isfs.blekey.ctap.Ctap2StatusCode.SUCCESS.getCode();
+        out[0] = (byte) Ctap2StatusCode.SUCCESS.getCode();
         System.arraycopy(encoded, 0, out, 1, encoded.length);
         return out;
     }

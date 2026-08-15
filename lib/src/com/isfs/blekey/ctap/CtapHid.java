@@ -209,18 +209,16 @@ public class CtapHid {
                 txn.setUserDenied(true);
                 logger.debug("Preserved userDenied=true when updating CID transaction");
             }
-            // Preserve IKM-cached state so subsequent commands on this CID skip re-derivation.
-            if (existingTxn.isIkmCached()) {
-                txn.setIkmCached(true);
-                logger.debug("Preserved ikmCached=true when updating CID transaction");
-            }
-            if (existingTxn.getPlatformIkm() != null) {
-                txn.setPlatformIkm(existingTxn.getPlatformIkm());
-                logger.debug("Preserved platformIkm when updating CID transaction");
-            }
             if (existingTxn.getEcdhKeyPair() != null) {
                 txn.setEcdhKeyPair(existingTxn.getEcdhKeyPair());
                 logger.debug("Preserved ecdhKeyPair when updating CID transaction");
+            }
+            // Propagate UX state and latch so the latch-wait path survives a txn update.
+            txn.setUxState(existingTxn.getUxState());
+            if (existingTxn.getUxLatch() != null) {
+                txn.setUxLatch(existingTxn.getUxLatch());
+                logger.debug("Preserved uxState={} and uxLatch when updating CID transaction",
+                    existingTxn.getUxState());
             }
         } else {
             logger.warn("=== PIN HASH TRACKING: No existing transaction found for CID!");
@@ -666,16 +664,20 @@ public class CtapHid {
                         AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.OPERATION_DENIED));
                     return;
                 }
+                // Always register this CtapHid as the deferred cmd before calling process().
+                // process() returns null on both the legacy deferred path and the new
+                // latch-waiter thread path; in both cases the DeferredResponseSender
+                // needs txn.takeDeferredCmd() to return this instance.
                 if (txn != null) {
                     txn.setDeferredCmd(this);
                 }
                 byte[] response = AuthenticatorAPI.process(txn, api, cbor);
                 if (response == null) {
-                    // Deferred — cmd is already on txn; responseReady stays false.
+                    // Deferred (legacy path) — deferredCmd already set on txn above.
                     logger.info("CBOR response deferred for CID {}", cidKey(this.cid));
                     return;
                 }
-                // Non-deferred — clear the cmd we just set, then build packets.
+                // Non-deferred — clear any cmd slot we may have set, then build packets.
                 if (txn != null) {
                     txn.setDeferredCmd(null);
                 }

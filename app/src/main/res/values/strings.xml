@@ -168,6 +168,7 @@
 
     <!-- User Presence dialog strings -->
     <string name="up_getinfo_title">Authentication Request</string>
+    <string name="up_rp_wants_to_authenticate">%1$s wants to authenticate</string>
     <string name="up_getinfo_message">A device is requesting authentication. Choose a response.</string>
     <string name="up_allow">Accept</string>
     <string name="up_deny">Deny</string>

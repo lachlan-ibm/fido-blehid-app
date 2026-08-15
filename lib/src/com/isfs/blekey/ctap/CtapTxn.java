@@ -3,6 +3,9 @@
  */
 package com.isfs.blekey.ctap;
 
+import java.security.KeyPair;
+import java.util.concurrent.CountDownLatch;
+
 import com.isfs.blekey.data.Passkey;
 
 /**
@@ -13,7 +16,23 @@ import com.isfs.blekey.data.Passkey;
  * Supports multiple transport types: USB HID, BLE FIDO, and Bluetooth Classic HID.
  */
 public class CtapTxn {
-    
+
+    /**
+     * Tracks the out-of-band UX collection state for this CID.
+     * Written by the app thread; read by the CTAP/BT callback thread.
+     * Volatile provides the single-writer/single-reader happens-before guarantee.
+     */
+    public enum CidUxState {
+        /** No UX has been started for this CID yet. */
+        IDLE,
+        /** UX collection is in progress (Allow/Deny dialog or biometric pending). */
+        IN_PROGRESS,
+        /** User approved and IKM is cached. Protected commands may run immediately. */
+        APPROVED,
+        /** User denied or timed out. Protected commands return OPERATION_DENIED. */
+        DENIED
+    }
+
     /**
      * Transport type for CTAP transactions.
      */
@@ -54,7 +73,7 @@ public class CtapTxn {
     private String passkeyFileName;
 
     /**
-     * The transport type for this transaction (default: BT_CLASSIC_HID for backward compatibility).
+     * The transport type for this transaction (default: BT_CLASSIC_HID).
      */
     private TransportType transport = TransportType.BT_CLASSIC_HID;
 
@@ -71,7 +90,7 @@ public class CtapTxn {
 
     /**
      * True once the user has approved a UP prompt on this channel.
-     * Cached here so makeCredential / getAssertion can proceed without a second prompt.
+     * Cached so makeCredential / getAssertion can proceed without repeated prompts.
      */
     private boolean userPresent = false;
 
@@ -83,25 +102,11 @@ public class CtapTxn {
     private boolean userDenied = false;
 
     /**
-     * True once the ECDH IKM has been derived and cached on this channel.
-     * Allows makeCredential / getAssertion to skip ECDH re-derivation on the same CID.
-     */
-    private boolean ikmCached = false;
-
-    /**
-     * Raw ECDH IKM derived during the first bio-gate opening on this channel.
-     * Cached so subsequent CTAP commands can recompute the HKDF seed without re-bio.
-     * Null until the first successful bio-gate on this CID.
-     * Must NOT be serialised to disk.
-     */
-    private byte[] platformIkm = null;
-
-    /**
      * Ephemeral ECDH key pair generated for this CID's key-agreement ceremony.
      * Populated by AuthenticatorAPI.getKey(); consumed and nulled by getTkn().
      * Must NOT be serialised to disk.
      */
-    private java.security.KeyPair ecdhKeyPair = null;
+    private KeyPair ecdhKeyPair = null;
 
     /**
      * The CtapHid instance whose response is deferred pending user presence.
@@ -110,11 +115,22 @@ public class CtapTxn {
     private CtapHid pendingDeferredCmd = null;
 
     /**
-     * Default constructor for creating an empty CTAP transaction.
-     * Uses USB_HID transport by default for backward compatibility.
+     * Out-of-band UX state for this CID. Volatile: main-looper writer, CTAP-thread reader.
+     */
+    private volatile CidUxState uxState = CidUxState.IDLE;
+
+    /**
+     * Latch armed by getInfo; released by deliverUpApproved/deliverUpDenied/timeout.
+     * Protected commands block on this latch when uxState == IN_PROGRESS.
+     */
+    private CountDownLatch uxLatch = null;
+
+    /**
+     * POJO constructor for creating an empty CTAP transaction.
+     * Uses USB_HID transport by default.
      */
     public CtapTxn() {
-        // Default constructor
+        // POJO constructor
     }
     
     /**
@@ -351,34 +367,6 @@ public class CtapTxn {
     public void setUserDenied(boolean v) { this.userDenied = v; }
 
     /**
-     * Returns true if the ECDH IKM has been derived and cached on this channel.
-     *
-     * @return true if IKM is cached
-     */
-    public boolean isIkmCached() { return ikmCached; }
-
-    /**
-     * Sets the IKM-cached flag.
-     *
-     * @param v true to mark the channel IKM as cached
-     */
-    public void setIkmCached(boolean v) { this.ikmCached = v; }
-
-    /**
-     * Gets the cached ECDH IKM for this channel.
-     *
-     * @return A copy of the platform IKM, or null if not yet derived
-     */
-    public byte[] getPlatformIkm() { return platformIkm != null ? platformIkm.clone() : null; }
-
-    /**
-     * Caches the ECDH IKM for this channel.
-     *
-     * @param ikm The IKM to cache (defensive copy is made)
-     */
-    public void setPlatformIkm(byte[] ikm) { this.platformIkm = ikm != null ? ikm.clone() : null; }
-
-    /**
      * Returns the ephemeral ECDH key pair for this channel's PIN ceremony.
      * Null until GETKEY has been processed on this CID.
      *
@@ -411,6 +399,57 @@ public class CtapTxn {
         CtapHid cmd = this.pendingDeferredCmd;
         this.pendingDeferredCmd = null;
         return cmd;
+    }
+
+    // -------------------------------------------------------------------------
+    // CidUxState / latch API (UPUV_DECOUPLE_GETINFO_TRIGGER_PLAN)
+    // -------------------------------------------------------------------------
+
+    /** Returns the current out-of-band UX state for this CID. */
+    public CidUxState getUxState() { return uxState; }
+
+    /** Sets the out-of-band UX state. Call only from the main looper. */
+    public void setUxState(CidUxState s) { this.uxState = s; }
+
+    /** Returns the raw latch reference (for propagation in updateCidTransaction). */
+    public java.util.concurrent.CountDownLatch getUxLatch() { return uxLatch; }
+
+    /** Sets the latch directly (used by updateCidTransaction to propagate across txn updates). */
+    public void setUxLatch(java.util.concurrent.CountDownLatch latch) { this.uxLatch = latch; }
+
+    /**
+     * Arms a fresh CountDownLatch(1) for this CID's UX ceremony.
+     * Called by getInfo immediately before posting onUpUvRequired.
+     */
+    public void armUxLatch() {
+        uxLatch = new java.util.concurrent.CountDownLatch(1);
+    }
+
+    /**
+     * Releases the latch (count 1→0), waking any CTAP thread blocked in awaitUxLatch.
+     * Called by deliverUpApproved / deliverUpDenied / deliverTimeoutInternal / onCidInactivityExpired.
+     * Safe to call when uxLatch is null (no-op) or already fired (no-op).
+     */
+    public void releaseUxLatch() {
+        java.util.concurrent.CountDownLatch l = uxLatch;
+        if (l != null) l.countDown();
+    }
+
+    /**
+     * Blocks the calling thread until the UX latch fires or the timeout elapses.
+     *
+     * @param timeoutMs maximum wait in milliseconds
+     * @return true if the latch was released before the timeout; false on timeout or interrupt
+     */
+    public boolean awaitUxLatch(long timeoutMs) {
+        java.util.concurrent.CountDownLatch l = uxLatch;
+        if (l == null) return true; // no latch — treat as already concluded
+        try {
+            return l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 }
 

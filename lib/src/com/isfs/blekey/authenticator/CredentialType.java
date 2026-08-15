@@ -57,5 +57,3 @@ public enum CredentialType {
         return NONE;
     }
 }
-
-// Made with Bob

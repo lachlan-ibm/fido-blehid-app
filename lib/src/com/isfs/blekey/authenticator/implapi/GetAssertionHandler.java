@@ -7,12 +7,10 @@ import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.authenticator.Fido2Authenticator;
 import com.isfs.blekey.authenticator.UpUvRequestCtx;
 import com.isfs.blekey.authenticator.UxInteractionLock;
-import com.isfs.blekey.authenticator.AuthenticatorAPI.DeferredResponseSender;
-import com.isfs.blekey.authenticator.AuthenticatorAPI.UpUvCallback;
-import com.isfs.blekey.authenticator.UpUvRequestCtx.ChainCallback;
 import com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.Cbor;
 import com.isfs.blekey.util.KeyUtils;
@@ -39,6 +37,9 @@ public class GetAssertionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GetAssertionHandler.class);
 
+    /** Maximum ms to wait for the out-of-band UX latch before timing out (§5.2). */
+    private static final long UP_WAIT_TIMEOUT_MS = 25_000L;
+
     private GetAssertionHandler() {}
 
     // -------------------------------------------------------------------------
@@ -56,16 +57,44 @@ public class GetAssertionHandler {
             txn.setPasskey(null);
         }
 
-        if (txn.isUserPresent()) {
-            logger.debug("getAssertion: UP already present on txn — running synchronously");
+        // Fast path: app-global bio grant active — covers any CID, not just the one that
+        // collected UP. A fresh CtapTxn always has isUserPresent=false, so the old guard
+        // of txn.isUserPresent() && isGrantActive() was never true on a new session.
+        if (UxInteractionLock.get().isGrantActive()) {
+            logger.debug("getAssertion: grant active — fast path, no UP prompt");
             try {
                 return executeGetAssertion(txn, req);
             } catch (Exception e) {
-                logger.error("getAssertion failed", e);
+                logger.error("getAssertion fast-path failed", e);
                 return error(Ctap2StatusCode.OTHER);
             }
         }
 
+        // Denied path: CID was already denied this session.
+        if (txn.getUxState() == CidUxState.DENIED || txn.isUserDenied()) {
+            logger.warn("getAssertion: CID denied — OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
+        // Latch-wait path: getInfo already started the UX; wait for it to complete.
+        if (txn.getUxState() == CidUxState.IN_PROGRESS) {
+            logger.debug("getAssertion: UX in progress — waiting on latch (max {}ms)", UP_WAIT_TIMEOUT_MS);
+            boolean completed = txn.awaitUxLatch(UP_WAIT_TIMEOUT_MS);
+            if (!completed || txn.getUxState() != CidUxState.APPROVED) {
+                logger.warn("getAssertion: UX latch timeout or denied — OPERATION_DENIED");
+                return error(Ctap2StatusCode.OPERATION_DENIED);
+            }
+            logger.debug("getAssertion: latch-wait path — latch fired, UX APPROVED");
+            try {
+                return executeGetAssertion(txn, req);
+            } catch (Exception e) {
+                logger.error("getAssertion post-latch failed", e);
+                return error(Ctap2StatusCode.OTHER);
+            }
+        }
+
+        // Legacy deferred path: getInfo was not called first (platform skipped it),
+        // or lock held by another CID. Preserve existing behaviour unchanged.
         AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
         if (cb == null) {
             logger.warn("getAssertion: no UpUvCallback — OPERATION_DENIED");
@@ -84,10 +113,12 @@ public class GetAssertionHandler {
             new UpUvRequestCtx(rpIdStr, txn,
                 java.util.List.of((chainCb) ->
                     onGetAssertionUpApproved(chainCb, txn, reqFinal)),
-                UpUvRequestCtx.KEEPALIVE_UP_NEEDED
+                UpUvRequestCtx.KEEPALIVE_UP_NEEDED,
+                true,  // requiresBiometric
+                UpUvRequestCtx.CeremonyType.GET_ASSERTION
             )
         );
-        return null; // deferred
+        return null; // deferred (legacy path)
     }
 
     private static void onGetAssertionUpApproved(

@@ -30,10 +30,14 @@ import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.authenticator.AuthenticatorAPI.UpUvCallback;
 import com.isfs.blekey.authenticator.UpUvRequestCtx;
 import com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome;
+import com.isfs.blekey.authenticator.UxInteractionLock;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.fidoble.KeepaliveManager;
+import com.isfs.blekey.util.KeyUtils;
+import java.security.PrivateKey;
+import javax.crypto.KeyAgreement;
 
 /**
  * Foreground service that keeps the classic Bluetooth HID device service running persistently.
@@ -99,6 +103,8 @@ public class HIDForegroundService extends Service {
 
     private final Handler upHandler = new Handler(Looper.getMainLooper());
     private Runnable timeoutRunnable = null;
+    /** Fires 15 s after the last completed lock-owning command to evict the CID (G7). */
+    private Runnable cidInactivityRunnable = null;
 
     private PowerManager.WakeLock upWakeLock = null;
 
@@ -239,6 +245,7 @@ public class HIDForegroundService extends Service {
         CtapHid.setOnCancelCallback(() -> upHandler.post(() -> {
             UpActivityDelegate d = activityDelegate;
             if (d instanceof CancelListener) ((CancelListener) d).onUpCancelled();
+            cancelCidInactivityTimer();
             stopUpKeepalive();
             releaseUpWakeLock();
             clearPendingUpState();
@@ -296,10 +303,9 @@ public class HIDForegroundService extends Service {
 
             CtapTxn txn = pendingUpTxn;
 
-            // If the CID already proved biometric in a prior ceremony this session and
-            // the platform IKM is cached on the txn, run the chain directly — no
-            // second prompt needed.
-            if (AuthenticatorAPI.isUpLockOwner(txn.getCid()) && txn.isIkmCached()) {
+            // If the app-global bio grant is active, run the chain directly — no
+            // second biometric prompt needed.
+            if (UxInteractionLock.get().isGrantActive()) {
                 pendingContext.buildResponse(Outcome.APPROVED, response -> {
                     if (response != null) sendDeferred(txn, response);
                     finishUpDelivery();
@@ -324,6 +330,15 @@ public class HIDForegroundService extends Service {
                 return;
             }
 
+            // GET_INFO: send the pre-built CBOR response NOW (Allow-tap time) per plan
+            // constraint C2. The bio that follows is only for recordBioGrant / Keystore gate.
+            // buildResponse marks delivered=true; the bio-success call below is a no-op.
+            if (pendingContext.getCeremonyType() == UpUvRequestCtx.CeremonyType.GET_INFO) {
+                pendingContext.buildResponse(Outcome.APPROVED, response -> {
+                    if (response != null) sendDeferred(txn, response);
+                });
+            }
+
             // Stage-2 timeout covering the biometric window.
             timeoutRunnable = this::deliverTimeoutInternal;
             upHandler.postDelayed(timeoutRunnable, getUpBioTimeoutMs());
@@ -331,8 +346,49 @@ public class HIDForegroundService extends Service {
             ((BiometricDelegate) d).showBiometricPrompt(
                 /* onSuccess */ () -> upHandler.post(() -> {
                     cancelTimeout();
+
+                    // ---------------------------------------------------------------
+                    // STRICT WRITE ORDER
+                    // The CTAP thread may be blocking on awaitUxLatch(). All txn state
+                    // must be fully written before releaseUxLatch() fires, because the
+                    // CTAP thread reads these values the instant it wakes.
+                    //
+                    // Record the app-global bio grant NOW while the Keystore auth window
+                    // is open. IKM derivation on the CTAP thread (CredentialSeedDeriver)
+                    // will fast-path via isGrantActive() the moment it wakes.
+                    try {
+                        PrivateKey platKey = KeyUtils.getPlatformKey();
+                        if (platKey != null) {
+                            KeyAgreement ka = KeyAgreement.getInstance("ECDH");
+                            ka.init(platKey);
+                            ka.doPhase(KeyUtils.getKeystoreManager().getEC256PublicKey(), true);
+                            byte[] ikm = ka.generateSecret();
+                            long validityMs = KeyUtils.getKeystoreManager().getBiometricValidityMs();
+                            UxInteractionLock.get().recordBioGrant(ikm, validityMs);
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "deliverUpApproved: IKM derivation failed", e);
+                    }
+                    // mark user present.
+                    txn.setUserPresent(true);
+                    // set APPROVED (volatile write — visible to CTAP thread
+                    // immediately after the latch fires via happens-before on countDown).
+                    txn.setUxState(CtapTxn.CidUxState.APPROVED);
+                    // release latch — CTAP thread wakes HERE.
+                    txn.releaseUxLatch();
+                    // ---------------------------------------------------------------
+
+                    // For the deferred path the chain is non-empty and buildResponse
+                    // sends the CTAP response via sendDeferred. For the latch-wait path the
+                    // chain is empty (Collections.emptyList()) so buildResponse calls
+                    // cb.done(null) → sendDeferred(txn, null) → null-guard no-ops.
                     pendingContext.buildResponse(Outcome.APPROVED, response -> {
                         if (response != null) sendDeferred(txn, response);
+                        // Release the CID mutex so the next getInfo on any CID can
+                        // acquire the lock immediately. On the latch-wait path (MKCRED/
+                        // GETASSERT) this is a no-op because the CTAP thread already
+                        // called releaseUpLock via its own post-ceremony cleanup.
+                        AuthenticatorAPI.releaseUpLock(txn.getCid());
                         finishUpDelivery();
                     });
                 }),
@@ -345,13 +401,17 @@ public class HIDForegroundService extends Service {
     public void deliverUpDenied() {
         upHandler.post(() -> {
             cancelTimeout();
+            cancelCidInactivityTimer();
             cancelUpNotification();
             // Mark the channel as denied BEFORE sending the response so that any
             // follow-up command arriving on the same CID (e.g. a U2F MSG retry) is
             // rejected immediately without opening a new biometric prompt.
             if (pendingUpTxn != null) {
+                pendingUpTxn.setUxState(CtapTxn.CidUxState.DENIED);  // §6.1.2
                 pendingUpTxn.setUserDenied(true);
+                pendingUpTxn.releaseUxLatch();   // wake any CTAP thread blocking on latch
                 AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
+                UxInteractionLock.get().revokeGrant();
             }
             if (pendingContext != null) {
                 pendingContext.buildResponse(Outcome.DENIED, response -> {
@@ -374,42 +434,6 @@ public class HIDForegroundService extends Service {
         NotificationManagerCompat.from(this).cancel(UP_NOTIFICATION_ID);
     }
 
-    // -------------------------------------------------------------------------
-    // UpHandler — inner class: bridges CTAP thread → service state → UI
-    // -------------------------------------------------------------------------
-
-    // UPUV_GATE_SIMPLIFICATION: SecureStorageHandler commented out — no longer needed.
-    // Retained here for future reinstatement if the bio-gate path is restored.
-    /*
-    private final class SecureStorageHandler implements SecureStorageCallback {
-
-        @Override
-        public void onPlatformKeyRequired(AuthenticatorAPI.PlatformKeyContext ctx) {
-            upHandler.post(() -> {
-                UpActivityDelegate d = activityDelegate;
-                if (d instanceof BiometricDelegate) {
-                    ((BiometricDelegate) d).showBiometricPrompt(
-                        new AuthenticatorAPI.PlatformKeyContext(
-                            ctx.getSignature(),
-                            () -> {
-                                // Bio succeeded — auth window is open.
-                                if (!appConfigLoaded) {
-                                    applyAppConfig(); // safe: ECDH auth gate is now open
-                                    appConfigLoaded = true;
-                                }
-                                ctx.onUnlocked(); // continue the CTAP ceremony
-                            },
-                            ctx::onFailed
-                        )
-                    );
-                } else {
-                    // Activity not visible — cannot show BiometricPrompt from background.
-                    ctx.onFailed();
-                }
-            });
-        }
-    }
-    */
 
     private final class UpHandler implements UpUvCallback {
         @Override
@@ -469,10 +493,15 @@ public class HIDForegroundService extends Service {
     }
 
     private void deliverTimeoutInternal() {
+        cancelCidInactivityTimer();
         cancelUpNotification();
         UpActivityDelegate d = activityDelegate;
         if (d instanceof TimeoutListener) ((TimeoutListener) d).onUpTimeout();
-        if (pendingUpTxn != null) AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
+        if (pendingUpTxn != null) {
+            pendingUpTxn.setUxState(CtapTxn.CidUxState.DENIED);  // §6.1.3
+            pendingUpTxn.releaseUxLatch();   // wake any CTAP thread blocking on latch
+            AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
+        }
         if (pendingContext != null) {
             sendDeferred(pendingUpTxn,
                 AuthenticatorAPI.buildErrorResponse(Ctap2StatusCode.USER_ACTION_TIMEOUT));
@@ -483,6 +512,55 @@ public class HIDForegroundService extends Service {
     private void sendDeferred(CtapTxn txn, byte[] response) {
         HIDPasskey pk = getHIDPasskey();
         if (pk != null) pk.sendDeferredResponse(txn, response);
+        if (txn != null && txn.getCid() != null) {
+            resetCidInactivityTimer(txn.getCid());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CID inactivity timer (G7)
+    // -------------------------------------------------------------------------
+
+    private void resetCidInactivityTimer(byte[] cid) {
+        if (cidInactivityRunnable != null) {
+            upHandler.removeCallbacks(cidInactivityRunnable);
+        }
+        cidInactivityRunnable = () -> onCidInactivityExpired(cid);
+        upHandler.postDelayed(cidInactivityRunnable,
+            UxInteractionLock.LOCK_TIMEOUT_MS);
+    }
+
+    private void cancelCidInactivityTimer() {
+        if (cidInactivityRunnable != null) {
+            upHandler.removeCallbacks(cidInactivityRunnable);
+            cidInactivityRunnable = null;
+        }
+    }
+
+    private void onCidInactivityExpired(byte[] cid) {
+        cidInactivityRunnable = null;
+        Log.d(TAG, "CID inactivity expired: " + bytesToHex(cid));
+        CtapTxn txn = CtapHid.getCidTransaction(cid);
+        if (txn != null) {
+            // §6.1.4 — wake any CTAP thread that is blocking on awaitUxLatch for this CID.
+            txn.setUxState(CtapTxn.CidUxState.DENIED);
+            txn.releaseUxLatch();
+            CtapHid deferredCmd = txn.takeDeferredCmd();
+            if (deferredCmd != null) {
+                try {
+                    deferredCmd.injectDeferredResponse(
+                        new byte[]{ (byte) Ctap2StatusCode.KEEPALIVE_CANCEL.getCode() });
+                } catch (Exception e) {
+                    Log.e(TAG, "onCidInactivityExpired: inject failed", e);
+                }
+            }
+        }
+        CtapHid.evictCid(cid);
+        AuthenticatorAPI.releaseUpLock(cid);
+        UxInteractionLock.get().revokeGrant();
+        if (pendingUpTxn != null && java.util.Arrays.equals(pendingUpTxn.getCid(), cid)) {
+            finishUpDelivery();
+        }
     }
 
     private void finishUpDelivery() {

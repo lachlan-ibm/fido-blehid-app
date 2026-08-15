@@ -8,15 +8,16 @@ import com.isfs.blekey.authenticator.implapi.MakeCredentialHandler;
 import com.isfs.blekey.authenticator.implapi.pin.PinFlowHandler;
 import com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
-import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.util.Cbor;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -76,8 +77,8 @@ public class AuthenticatorAPI {
 
     /**
      * Thin send-back shim passed into every deferred CTAP operation.
-     * Implemented by HIDForegroundService; keeps AuthenticatorAPI free of any
-     * reference to HIDPasskey or Android APIs.
+     * Implemented by HIDForegroundService; keep lib free of any
+     * reference to Android APIs or app layer.
      */
     public interface DeferredResponseSender {
         void send(CtapTxn txn, byte[] response);
@@ -181,11 +182,11 @@ public class AuthenticatorAPI {
      * Advertises FIDO_2_1 and FIDO_2_0, includes PIN/UV Auth Protocol 1 and clientPin.
      */
     static byte[] buildGetInfoCtap2Response() {
-        java.util.LinkedHashMap<String, Boolean> capabilities = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Boolean> capabilities = new LinkedHashMap<>();
         capabilities.put("rk", true);
         capabilities.put("plat", true);
         capabilities.put("clientPin", true);
-        java.util.LinkedHashMap<Integer, Object> info = new java.util.LinkedHashMap<>();
+        LinkedHashMap<Integer, Object> info = new LinkedHashMap<>();
         info.put(0x01, new String[]{"FIDO_2_1", "FIDO_2_0"});
         info.put(0x02, new String[]{"hmac-secret"});
         info.put(0x03, new byte[16]);
@@ -201,10 +202,10 @@ public class AuthenticatorAPI {
      * adds {@code "U2F_V2"} to the versions array.
      */
     static byte[] buildGetInfoCtap1CompatResponse() {
-        java.util.LinkedHashMap<String, Boolean> capabilities = new java.util.LinkedHashMap<>();
+        LinkedHashMap<String, Boolean> capabilities = new LinkedHashMap<>();
         capabilities.put("rk", true);
         capabilities.put("plat", true);
-        java.util.LinkedHashMap<Integer, Object> info = new java.util.LinkedHashMap<>();
+        LinkedHashMap<Integer, Object> info = new LinkedHashMap<>();
         info.put(0x01, new String[]{"FIDO_2_0", "U2F_V2"});
         info.put(0x02, new String[]{"hmac-secret"});
         info.put(0x03, new byte[16]);
@@ -264,36 +265,56 @@ public class AuthenticatorAPI {
 
     /**
      * Processes a getInfo request (CTAP2 authenticatorGetInfo command).
-     * Deferred behind an Allow/Deny dialog (keepalive STATUS_PROCESSING).
+     *
+     * <p>If the CID is idle and the UX lock is free, the response is <em>deferred</em>:
+     * the pre-built CBOR bytes are stashed inside the {@link UpUvRequestCtx} as
+     * {@code inlineResponse} and {@code null} is returned.  {@code CtapHid.cbor()}
+     * then takes the deferred path (sets {@code deferredCmd}, returns without sending).
+     * When the user taps Allow, {@code HIDForegroundService.deliverUpApproved()} calls
+     * {@code buildResponse(APPROVED, cb)}, which routes {@code inlineResponse} through
+     * {@link UpUvRequestCtx.ChainRunner} → {@code cb.done(responseBytes)} →
+     * {@code sendDeferred(txn, responseBytes)} — putting the bytes on the wire only
+     * after the user has consented.  The biometric prompt follows immediately after.</p>
+     *
+     * <p>Falls through to a synchronous return only when no callback is registered
+     * (test / offline path).</p>
      */
     protected static byte[] getInfo(CtapTxn txn, Map<Integer, Object> req) {
-        if (upUvCallback == null) {
-            logger.warn("getInfo: no UpUvCallback — OPERATION_DENIED");
-            return new byte[]{ (byte) Ctap2StatusCode.OPERATION_DENIED.getCode() };
+        boolean ctap1 = appConfig.isCtap1CompatMode();
+        byte[] responseBytes = ctap1 ? buildGetInfoCtap1CompatResponse()
+                                     : buildGetInfoCtap2Response();
+        UxInteractionLock lock = UxInteractionLock.get();
+        if(lock.isGrantActive()) {
+            logger.debug("getInfo: grant active; UP set, ctap1CompatMode={}", ctap1);
+            return responseBytes; // User present we can sent response
         }
-        final boolean ctap1 = appConfig.isCtap1CompatMode();
-        if (!UxInteractionLock.get().tryAcquire(txn.getCid())) {
-            logger.warn("getInfo: CID does not own UP lock — CHANNEL_BUSY");
-            return new byte[]{ (byte) Ctap2StatusCode.CHANNEL_BUSY.getCode() };
+        if (txn != null
+                && txn.getUxState() == CidUxState.IDLE
+                && lock.tryAcquire(txn.getCid())) {
+            txn.setUxState(CidUxState.IN_PROGRESS);
+            txn.armUxLatch();
+            UpUvCallback cb = upUvCallback;
+            if (cb != null) {
+                logger.debug("getInfo: deferring response pending user Accept, ctap1CompatMode={}", ctap1);
+                // Pass responseBytes as inlineResponse — ChainRunner delivers them via
+                // cb.done(responseBytes) once the user taps Allow.
+                cb.onUpUvRequired(new UpUvRequestCtx(
+                    null,
+                    txn,
+                    responseBytes,
+                    UpUvRequestCtx.KEEPALIVE_PROCESSING,
+                    true,
+                    UpUvRequestCtx.CeremonyType.GET_INFO
+                ));
+                return null; // deferred — CtapHid.cbor() will wait for injectDeferredResponse
+            } else {
+                lock.release(txn.getCid());
+                txn.setUxState(CidUxState.IDLE);
+            }
         }
-        upUvCallback.onUpUvRequired(
-            new UpUvRequestCtx(null, txn,
-                java.util.List.of((cb) -> onGetInfoUpApproved(cb, txn, ctap1)),
-                UpUvRequestCtx.KEEPALIVE_PROCESSING
-            )
-        );
-        return null; // deferred
-    }
 
-    private static void onGetInfoUpApproved(
-            UpUvRequestCtx.ChainCallback cb,
-            CtapTxn txn,
-            boolean ctap1) {
-        txn.setUserPresent(true);
-        CtapHid.updateCidTransaction(txn.getCid(), txn);
-        byte[] response = ctap1 ? buildGetInfoCtap1CompatResponse() : buildGetInfoCtap2Response();
-        if (deferredResponseSender != null) deferredResponseSender.send(txn, response);
-        cb.done(null);
+        logger.debug("getInfo: returning synchronously, ctap1CompatMode={}", ctap1);
+        return responseBytes;
     }
 
     // -------------------------------------------------------------------------

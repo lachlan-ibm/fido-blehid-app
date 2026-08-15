@@ -13,12 +13,14 @@ import com.isfs.blekey.authenticator.implapi.pin.PinUvAuthResult;
 import com.isfs.blekey.authenticator.implapi.pin.PinVerifier;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.util.KeyUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -32,6 +34,9 @@ import java.util.Map;
 public class MakeCredentialHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(MakeCredentialHandler.class);
+
+    /** Maximum ms to wait for the out-of-band UX latch before timing out (§5.3). */
+    private static final long UP_WAIT_TIMEOUT_MS = 25_000L;
 
     private MakeCredentialHandler() {}
 
@@ -57,16 +62,44 @@ public class MakeCredentialHandler {
         }
         logger.debug("Creating credential of type: {}", validation.type);
 
-        if (txn.isUserPresent()) {
-            logger.debug("makeCredential: UP already present on txn — running synchronously");
+        // Fast path: app-global bio grant active — covers any CID, not just the one that
+        // collected UP. A fresh CtapTxn always has isUserPresent=false, so the old guard
+        // of txn.isUserPresent() && isGrantActive() was never true on a new session.
+        if (UxInteractionLock.get().isGrantActive()) {
+            logger.debug("makeCredential: grant active — fast path, no UP prompt");
             try {
                 return executeMakeCredential(validation, txn, req);
             } catch (Exception e) {
-                logger.error("makeCredential failed", e);
+                logger.error("makeCredential fast-path failed", e);
                 return error(Ctap2StatusCode.OTHER);
             }
         }
 
+        // Denied path: CID was already denied this session.
+        if (txn.getUxState() == CidUxState.DENIED || txn.isUserDenied()) {
+            logger.warn("makeCredential: CID denied — OPERATION_DENIED");
+            return error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
+        // Latch-wait path: getInfo already started the UX; wait for it to complete.
+        if (txn.getUxState() == CidUxState.IN_PROGRESS) {
+            logger.debug("makeCredential: UX in progress — waiting on latch (max {}ms)", UP_WAIT_TIMEOUT_MS);
+            boolean completed = txn.awaitUxLatch(UP_WAIT_TIMEOUT_MS);
+            if (!completed || txn.getUxState() != CidUxState.APPROVED) {
+                logger.warn("makeCredential: UX latch timeout or denied — OPERATION_DENIED");
+                return error(Ctap2StatusCode.OPERATION_DENIED);
+            }
+            logger.debug("makeCredential: latch-wait path — latch fired, UX APPROVED");
+            try {
+                return executeMakeCredential(validation, txn, req);
+            } catch (Exception e) {
+                logger.error("makeCredential post-latch failed", e);
+                return error(Ctap2StatusCode.OTHER);
+            }
+        }
+
+        // Legacy deferred path: getInfo was not called first (platform skipped it),
+        // or lock held by another CID. Preserve existing behaviour unchanged.
         AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
         if (cb == null) {
             logger.warn("makeCredential: no UpUvCallback — OPERATION_DENIED");
@@ -84,12 +117,14 @@ public class MakeCredentialHandler {
         }
         cb.onUpUvRequired(
             new UpUvRequestCtx(rpIdStr, txn,
-                java.util.List.of((chainCb) ->
+                List.of((chainCb) ->
                     onMakeCredentialUpApproved(chainCb, txn, valFinal, reqFinal)),
-                UpUvRequestCtx.KEEPALIVE_UP_NEEDED
+                UpUvRequestCtx.KEEPALIVE_UP_NEEDED,
+                true,  // requiresBiometric
+                UpUvRequestCtx.CeremonyType.MAKE_CREDENTIAL
             )
         );
-        return null; // deferred
+        return null; // deferred (legacy path)
     }
 
     private static void onMakeCredentialUpApproved(
@@ -162,7 +197,8 @@ public class MakeCredentialHandler {
                 CredentialSeedDeriver.configureCredentialAnchor(
                     a, txn.getPasskey().getPrivateKey(), rpIdBytes, appConfig);
             } else {
-                a.setSymKeys(KeyUtils.getPasskeySeed(rpIdBytes, txn.getPlatformIkm(), appConfig));
+                a.setSymKeys(KeyUtils.getPasskeySeed(rpIdBytes,
+                    UxInteractionLock.get().getCachedIkm(), appConfig));
             }
             return a;
         } catch (IllegalArgumentException | IllegalStateException e) {

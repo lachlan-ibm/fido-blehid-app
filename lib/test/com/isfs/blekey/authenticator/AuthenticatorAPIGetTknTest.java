@@ -98,9 +98,11 @@ public class AuthenticatorAPIGetTknTest {
         // Cast to Object to avoid Java treating byte[] as a varargs array.
         tryAcquire.invoke(lock, (Object) cid);
 
-        // Mark IKM as cached so the fast-path condition is satisfied.
-        txn.setPlatformIkm(new byte[32]);   // dummy 32-byte IKM
-        txn.setIkmCached(true);
+        // Arm the app-global bio grant so getTkn's isGrantActive() fast-path is taken.
+        Method recordBioGrant = lockClass.getDeclaredMethod(
+                "recordBioGrant", byte[].class, long.class);
+        recordBioGrant.setAccessible(true);
+        recordBioGrant.invoke(lock, new byte[32], 15_000L);
     }
 
     /**
@@ -120,6 +122,14 @@ public class AuthenticatorAPIGetTknTest {
         Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
         expiresAtMs.setAccessible(true);
         expiresAtMs.set(lock, 0L);
+
+        Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
+        cachedIkm.setAccessible(true);
+        cachedIkm.set(lock, null);
+
+        Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
+        grantExpiresAtMs.setAccessible(true);
+        grantExpiresAtMs.set(lock, 0L);
     }
 
     /**
@@ -242,5 +252,125 @@ public class AuthenticatorAPIGetTknTest {
         assertNotNull(response, "Should return OPERATION_DENIED, not null");
         assertEquals(Ctap2StatusCode.OPERATION_DENIED.getCode(), statusByte(response),
                 "Expected OPERATION_DENIED when no callback is registered");
+    }
+
+    // -------------------------------------------------------------------------
+    // New tests — plan §10.1
+    // -------------------------------------------------------------------------
+
+    /**
+     * When another CID owns the UxInteractionLock and a callback is registered,
+     * getTkn for a different CID must return CHANNEL_BUSY immediately — not deferred.
+     * Regression guard for G4.
+     */
+    @Test
+    public void testGetTkn_OtherCidHoldsLock_ReturnsChannelBusy() throws Exception {
+        byte[] OTHER_CID = {0x0A, 0x0B, 0x0C, 0x0D};
+
+        Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
+        Method getLock = lockClass.getDeclaredMethod("get");
+        getLock.setAccessible(true);
+        Object lock = getLock.invoke(null);
+        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
+        tryAcquire.setAccessible(true);
+        tryAcquire.invoke(lock, (Object) OTHER_CID);
+
+        // Register a no-op callback so the null-callback guard is not hit first.
+        AuthenticatorAPI.setUpUvCallback(ctx -> {});
+
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+        // grant not active → fast-path skipped → falls through to tryAcquire → CHANNEL_BUSY
+
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(0x06, new byte[16]);
+
+        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
+        assertNotNull(response, "Must return CHANNEL_BUSY, not null");
+        assertEquals(Ctap2StatusCode.CHANNEL_BUSY.getCode(), statusByte(response),
+                "Expected CHANNEL_BUSY when another CID owns the lock");
+    }
+
+    /**
+     * POST-REFACTOR (plan §4.2): getKey must return SUCCESS with no UpUvCallback registered.
+     * PRE-REFACTOR: returns OPERATION_DENIED — this test is the acceptance criterion for §4.2.
+     */
+    @Test
+    public void testGetKey_NoCallback_PostRefactor_ReturnsSuccess() throws Exception {
+        // upUvCallback is null from setUp.
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+
+        Method pinRequest = PinFlowHandler.class
+                .getDeclaredMethod("pinRequest", CtapTxn.class, Map.class);
+        pinRequest.setAccessible(true);
+
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(2, 0x02); // subCommand = GETKEY
+
+        byte[] response = (byte[]) pinRequest.invoke(null, txn, req);
+        assertNotNull(response, "getKey must return a response synchronously after refactor");
+        assertEquals(0x00, statusByte(response),
+                "getKey must return SUCCESS (0x00) after §4.2 refactor");
+    }
+
+    /**
+     * POST-REFACTOR (plan §4.2): getKey must return SUCCESS even when another CID holds
+     * the UxInteractionLock. PRE-REFACTOR: returns CHANNEL_BUSY.
+     */
+    @Test
+    public void testGetKey_OtherCidHoldsLock_PostRefactor_ReturnsSuccess() throws Exception {
+        byte[] OTHER_CID = {0x0A, 0x0B, 0x0C, 0x0D};
+
+        Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
+        Method getLock = lockClass.getDeclaredMethod("get");
+        getLock.setAccessible(true);
+        Object lock = getLock.invoke(null);
+        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
+        tryAcquire.setAccessible(true);
+        tryAcquire.invoke(lock, (Object) OTHER_CID);
+
+        AuthenticatorAPI.setUpUvCallback(ctx -> {}); // stub so pre-refactor null-guard is not hit
+
+        CtapTxn txn = new CtapTxn();
+        txn.setCid(TEST_CID);
+
+        Method pinRequest = PinFlowHandler.class
+                .getDeclaredMethod("pinRequest", CtapTxn.class, Map.class);
+        pinRequest.setAccessible(true);
+
+        Map<Integer, Object> req = new HashMap<>();
+        req.put(2, 0x02); // GETKEY
+
+        byte[] response = (byte[]) pinRequest.invoke(null, txn, req);
+        assertNotNull(response, "getKey must not return null when lock held by another CID after refactor");
+        assertEquals(0x00, statusByte(response),
+                "getKey must return SUCCESS regardless of lock state after §4.2 refactor");
+    }
+
+    /**
+     * executeGetKey(txn) must store the ephemeral ECDH key pair on the txn and return
+     * a SUCCESS response whose CBOR body contains a COSE key at map key 0x01.
+     */
+    @Test
+    public void testExecuteGetKey_StoresEcdhKeyPairAndReturnsCoseKey() throws Exception {
+        CtapTxn txn = new CtapTxn();
+
+        byte[] response = PinFlowHandler.executeGetKey(txn);
+
+        assertNotNull(response, "executeGetKey must return a non-null response");
+        assertEquals(0x00, response[0] & 0xFF, "executeGetKey must return status byte 0x00");
+        assertNotNull(txn.getEcdhKeyPair(),
+                "executeGetKey must store the ephemeral ECDH key pair on txn");
+
+        byte[] cborBody = java.util.Arrays.copyOfRange(response, 1, response.length);
+        @SuppressWarnings("unchecked")
+        java.util.Map<Integer, Object> decoded =
+                (java.util.Map<Integer, Object>) com.isfs.blekey.util.Cbor.decode(cborBody);
+        assertNotNull(decoded, "Response CBOR must decode to a map");
+        assertTrue(decoded.containsKey(0x01),
+                "CBOR map must contain key 0x01 (keyAgreement)");
+        assertTrue(decoded.get(0x01) instanceof java.util.Map,
+                "keyAgreement value must itself be a COSE key map");
     }
 }

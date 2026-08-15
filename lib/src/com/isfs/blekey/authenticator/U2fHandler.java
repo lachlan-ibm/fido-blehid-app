@@ -5,6 +5,7 @@ package com.isfs.blekey.authenticator;
 
 import com.isfs.blekey.authenticator.implapi.CredentialSeedDeriver;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.util.CertUtils;
 import com.isfs.blekey.util.KeyUtils;
 
 import org.slf4j.Logger;
@@ -226,7 +227,7 @@ public class U2fHandler {
     // -------------------------------------------------------------------------
 
     private static byte[] deriveU2fKeyHandleKey(CtapTxn txn) {
-        byte[] ikm = txn != null ? txn.getPlatformIkm() : null;
+        byte[] ikm = com.isfs.blekey.authenticator.UxInteractionLock.get().getCachedIkm();
         if (ikm == null) return null;
         try {
             byte[] info = "U2F-KEY-HANDLE".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -305,8 +306,8 @@ public class U2fHandler {
     private static byte[] buildU2fAttestationCert(CtapTxn txn, KeyPair credKp) throws Exception {
         X509Certificate caCert = (txn != null && txn.getPasskey() != null)
             ? txn.getPasskey().getCertificate() : null;
-        return com.isfs.blekey.util.CertUtils.generateU2FCertificate(
-            caCert, "CN=Aye.Bt.Key U2F", credKp, 9999).getEncoded();
+        return CertUtils.generateU2FCertificate(caCert, "CN=Aye.Bt.Key U2F", credKp, 9999)
+                        .getEncoded();
     }
 
     // -------------------------------------------------------------------------

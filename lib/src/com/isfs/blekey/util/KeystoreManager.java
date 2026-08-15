@@ -54,10 +54,20 @@ public interface KeystoreManager {
     /**
      * Deletes the application's master key from the keystore.
      * This should be used with caution as it will make all encrypted data unrecoverable.
-     * 
+     *
      * @return true if the key was successfully deleted, false otherwise
      */
     boolean deleteAppKey();
+
+    /**
+     * Returns the biometric auth validity period in ms.
+     * Implementations should return the value used when creating the EC256 key
+     * (setUserAuthenticationValidityDurationSeconds × 1000).
+     * Default is 15 000 ms (matches LOCK_TIMEOUT_MS) for non-Android environments.
+     */
+    default long getBiometricValidityMs() {
+        return 15_000L;
+    }
 }
 
 // Made with Bob

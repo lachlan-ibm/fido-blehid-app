@@ -1233,7 +1233,7 @@ public class ServerActivity extends AppCompatActivity
     @Override
     public void showUpDialog(@Nullable String rpId) {
         if (isInForeground) {
-            showUserPresenceDialog();
+            showUserPresenceDialog(rpId);
         } else {
             // Activity is paused (backgrounded) but not destroyed — activityDelegate is still
             // set so UpHandler called us instead of postUpNotification().  Post the notification
@@ -1250,7 +1250,10 @@ public class ServerActivity extends AppCompatActivity
 
     @Override
     public void showBiometricPrompt(Runnable onSuccess, Runnable onFailed) {
-        biometricHelper.authenticate(
+        // BiometricPrompt.authenticate() must be called on the main thread while
+        // the Activity is resumed. runOnUiThread ensures this regardless of which
+        // thread deliverUpApproved() posts from.
+        runOnUiThread(() -> biometricHelper.authenticate(
             getString(R.string.bio_prompt_title),
             getString(R.string.bio_prompt_subtitle),
             new BiometricAuthHelper.AuthenticationCallback() {
@@ -1268,7 +1271,7 @@ public class ServerActivity extends AppCompatActivity
                     onFailed.run();
                 }
             }
-        );
+        ));
     }
 
     // -------------------------------------------------------------------------
@@ -1297,11 +1300,18 @@ public class ServerActivity extends AppCompatActivity
     // -------------------------------------------------------------------------
 
     private void showUserPresenceDialog() {
+        showUserPresenceDialog(null);
+    }
+
+    private void showUserPresenceDialog(@Nullable String rpId) {
         dismissDialogIfShowing();
+        String title = (rpId != null)
+            ? getString(R.string.up_rp_wants_to_authenticate, rpId)
+            : getString(R.string.up_getinfo_title);
         // AlertDialog lays out buttons left-to-right as: Negative | Positive.
         // Assigning Allow→Negative and Deny→Positive:  [Allow]  [Deny]
         userPresenceDialog = new AlertDialog.Builder(this)
-            .setTitle(getString(R.string.up_getinfo_title))
+            .setTitle(title)
             .setMessage(getString(R.string.up_getinfo_message))
             .setNegativeButton(R.string.up_allow, (d, w) -> {
                 dismissDialogIfShowing();

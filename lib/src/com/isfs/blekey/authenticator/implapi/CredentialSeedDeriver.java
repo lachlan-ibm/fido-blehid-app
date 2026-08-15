@@ -4,6 +4,7 @@
 package com.isfs.blekey.authenticator.implapi;
 
 import com.isfs.blekey.authenticator.Fido2Authenticator;
+import com.isfs.blekey.authenticator.UxInteractionLock;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.util.KeyUtils;
@@ -63,14 +64,17 @@ public class CredentialSeedDeriver {
             byte[] rpIdBytes,
             AppConfig appConfig) {
 
-        // Fast path: IKM already cached on this CID.
-        if (txn != null && txn.isIkmCached() && txn.getPlatformIkm() != null) {
-            logger.debug("derivePasskeySeed: using cached IKM");
-            try {
-                return KeyUtils.getPasskeySeed(rpIdBytes, txn.getPlatformIkm(), appConfig);
-            } catch (Exception e) {
-                logger.warn("derivePasskeySeed: cached-IKM seed derivation failed — retrying", e);
-                // Fall through to fresh derivation
+        // Fast path: app-global bio grant is active — IKM already derived this session.
+        if (UxInteractionLock.get().isGrantActive()) {
+            byte[] cachedIkm = UxInteractionLock.get().getCachedIkm();
+            if (cachedIkm != null) {
+                logger.debug("derivePasskeySeed: using cached IKM from global grant");
+                try {
+                    return KeyUtils.getPasskeySeed(rpIdBytes, cachedIkm, appConfig);
+                } catch (Exception e) {
+                    logger.warn("derivePasskeySeed: cached-IKM seed derivation failed — retrying", e);
+                    // Fall through to fresh derivation
+                }
             }
         }
 
@@ -88,10 +92,7 @@ public class CredentialSeedDeriver {
             ka.doPhase(pubKey, true);
             byte[] ikm = ka.generateSecret();
 
-            if (txn != null) {
-                txn.setPlatformIkm(ikm);
-                txn.setIkmCached(true);
-            }
+            // IKM is now owned by UxInteractionLock — do not cache on txn.
             return KeyUtils.getPasskeySeed(rpIdBytes, ikm, appConfig);
         } catch (Exception e) {
             logger.error("derivePasskeySeed: ECDH self-agreement failed", e);
