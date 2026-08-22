@@ -3,13 +3,15 @@
  */
 package com.isfs.blekey.authenticator;
 
+import com.isfs.blekey.authenticator.UxInteractionLock.UxState;
+import com.isfs.blekey.authenticator.implapi.CtapResponse;
 import com.isfs.blekey.authenticator.implapi.GetAssertionHandler;
 import com.isfs.blekey.authenticator.implapi.MakeCredentialHandler;
+import com.isfs.blekey.authenticator.implapi.UpUvGate;
 import com.isfs.blekey.authenticator.implapi.pin.PinFlowHandler;
 import com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
-import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.util.Cbor;
 import org.slf4j.Logger;
@@ -144,20 +146,19 @@ public class AuthenticatorAPI {
     // -------------------------------------------------------------------------
 
     /**
-     * Releases the UP interaction lock held by the given CID.
-     * Called by HIDForegroundService on denial or timeout.
+     * The Ux lock been denied recently; don't ask again.
+     * 
      */
-    public static void releaseUpLock(byte[] cid) {
-        UxInteractionLock.get().release(cid);
+    public static void setUxLockDenied(long windowMs) {
+        UxInteractionLock.get().setUserDenied(windowMs);
     }
 
     /**
-     * Returns {@code true} if the given CID currently owns the UP interaction lock.
-     * Called by {@code HIDForegroundService.deliverUpApproved()} to decide whether
-     * to skip the Stage-2 biometric prompt.
+     * Releases the UP interaction lock held by the given CID.
+     * Called by HIDForegroundService on denial or timeout.
      */
-    public static boolean isUpLockOwner(byte[] cid) {
-        return UxInteractionLock.get().isOwner(cid);
+    public static void resetUpLock() {
+        UxInteractionLock.get().reset();
     }
 
     // -------------------------------------------------------------------------
@@ -170,7 +171,7 @@ public class AuthenticatorAPI {
      * without having visibility into the private {@code error()} method.
      */
     public static byte[] buildErrorResponse(Ctap2StatusCode code) {
-        return new byte[]{ (byte) code.getCode() };
+        return CtapResponse.error(code);
     }
 
     // -------------------------------------------------------------------------
@@ -276,45 +277,33 @@ public class AuthenticatorAPI {
      * {@code sendDeferred(txn, responseBytes)} — putting the bytes on the wire only
      * after the user has consented.  The biometric prompt follows immediately after.</p>
      *
-     * <p>Falls through to a synchronous return only when no callback is registered
+     * <p>Will only return if Ux is being attempted or has been approved
      * (test / offline path).</p>
      */
     protected static byte[] getInfo(CtapTxn txn, Map<Integer, Object> req) {
         boolean ctap1 = appConfig.isCtap1CompatMode();
         byte[] responseBytes = ctap1 ? buildGetInfoCtap1CompatResponse()
                                      : buildGetInfoCtap2Response();
-        UxInteractionLock lock = UxInteractionLock.get();
-        if(lock.isGrantActive()) {
+        if (UxInteractionLock.get().isGrantActive()) {
             logger.debug("getInfo: grant active; UP set, ctap1CompatMode={}", ctap1);
-            return responseBytes; // User present we can sent response
-        }
-        if (txn != null
-                && txn.getUxState() == CidUxState.IDLE
-                && lock.tryAcquire(txn.getCid())) {
-            txn.setUxState(CidUxState.IN_PROGRESS);
-            txn.armUxLatch();
-            UpUvCallback cb = upUvCallback;
-            if (cb != null) {
-                logger.debug("getInfo: deferring response pending user Accept, ctap1CompatMode={}", ctap1);
-                // Pass responseBytes as inlineResponse — ChainRunner delivers them via
-                // cb.done(responseBytes) once the user taps Allow.
-                cb.onUpUvRequired(new UpUvRequestCtx(
-                    null,
-                    txn,
-                    responseBytes,
-                    UpUvRequestCtx.KEEPALIVE_PROCESSING,
-                    true,
-                    UpUvRequestCtx.CeremonyType.GET_INFO
-                ));
-                return null; // deferred — CtapHid.cbor() will wait for injectDeferredResponse
-            } else {
-                lock.release(txn.getCid());
-                txn.setUxState(CidUxState.IDLE);
-            }
+            return responseBytes;
         }
 
-        logger.debug("getInfo: returning synchronously, ctap1CompatMode={}", ctap1);
-        return responseBytes;
+        boolean fired = UpUvGate.fireIfIdle(txn, () -> new UpUvRequestCtx(
+            null,
+            txn,
+            responseBytes, //Send response once approved; do not wait for bio auth
+            true,
+            UpUvRequestCtx.CeremonyType.GET_INFO
+        ));
+        if (fired) {
+            logger.debug("[{}]:getInfo: requesting UPUV session from idle lock", Arrays.toString(txn.getCid()));
+            return null;
+        }
+        UxState state = UxInteractionLock.get().getUxState(); 
+        logger.debug("getInfo: UxState [{}], ctap1CompatMode={}", state, ctap1);
+        return (!UxState.DENIED.equals(state)) ? //Approved should have active grant; in-progress is above
+                responseBytes : new byte[]{ (byte) Ctap2StatusCode.OPERATION_DENIED.getCode() };
     }
 
     // -------------------------------------------------------------------------
@@ -323,11 +312,15 @@ public class AuthenticatorAPI {
 
     /**
      * Processes an authenticatorSelection request (CTAP2.1 command 0x0B).
-     * UP is not required — return success immediately.
+     * UP determined by state of ux lock; approved == ok to reply
      */
     private static byte[] authenticatorSelection(CtapTxn txn) {
-        logger.debug("authenticatorSelection: returning success");
-        return new byte[]{ 0x00 };
+        if (!UxState.DENIED.equals(UxInteractionLock.get().getUxState())) {
+            logger.debug("authenticatorSelection: grant active; UP set");
+            return new byte[]{ (byte) Ctap2StatusCode.SUCCESS.getCode() };
+        }
+        logger.debug("authenticatorSelection: UP denied returning denied");
+        return new byte[]{ (byte) Ctap2StatusCode.OPERATION_DENIED.getCode() };
     }
 
     // -------------------------------------------------------------------------

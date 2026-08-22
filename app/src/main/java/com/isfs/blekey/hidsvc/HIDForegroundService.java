@@ -37,6 +37,8 @@ import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.fidoble.KeepaliveManager;
 import com.isfs.blekey.util.KeyUtils;
 import java.security.PrivateKey;
+import java.util.Arrays;
+
 import javax.crypto.KeyAgreement;
 
 /**
@@ -70,6 +72,8 @@ public class HIDForegroundService extends Service {
     public static final int UP_DIALOG_TIMEOUT_MS = 8_000;   // 8 s
     /** Stage 2 :: user to meet biometric challenge after Allow. */
     public static final int UP_BIO_TIMEOUT_MS = 12_000;     // 12 s
+    /** Stage 0 :: device is backgrounded/screen-off; waiting for app to foreground. */
+    public static final int UP_BACKGROUND_TIMEOUT_MS = 5_000;   // 5 s
 
     private int getUpDialogTimeoutMs() {
         return getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE)
@@ -79,6 +83,11 @@ public class HIDForegroundService extends Service {
     private int getUpBioTimeoutMs() {
         return getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE)
                 .getInt("up_bio_timeout_ms", UP_BIO_TIMEOUT_MS);
+    }
+
+    private int getUpBackgroundTimeoutMs() {
+        return getSharedPreferences("HIDServicePrefs", Context.MODE_PRIVATE)
+                .getInt("up_background_timeout_ms", UP_BACKGROUND_TIMEOUT_MS);
     }
 
     // -------------------------------------------------------------------------
@@ -103,6 +112,8 @@ public class HIDForegroundService extends Service {
 
     private final Handler upHandler = new Handler(Looper.getMainLooper());
     private Runnable timeoutRunnable = null;
+    /** Non-null while Stage 0 (background) timeout is running. */
+    private Runnable backgroundTimeoutRunnable = null;
     /** Fires 15 s after the last completed lock-owning command to evict the CID (G7). */
     private Runnable cidInactivityRunnable = null;
 
@@ -373,9 +384,9 @@ public class HIDForegroundService extends Service {
                     txn.setUserPresent(true);
                     // set APPROVED (volatile write — visible to CTAP thread
                     // immediately after the latch fires via happens-before on countDown).
-                    txn.setUxState(CtapTxn.CidUxState.APPROVED);
+                    UxInteractionLock.get().setUxState(UxInteractionLock.UxState.APPROVED);
                     // release latch — CTAP thread wakes HERE.
-                    txn.releaseUxLatch();
+                    UxInteractionLock.get().releaseLatch();
                     // ---------------------------------------------------------------
 
                     // For the deferred path the chain is non-empty and buildResponse
@@ -384,11 +395,6 @@ public class HIDForegroundService extends Service {
                     // cb.done(null) → sendDeferred(txn, null) → null-guard no-ops.
                     pendingContext.buildResponse(Outcome.APPROVED, response -> {
                         if (response != null) sendDeferred(txn, response);
-                        // Release the CID mutex so the next getInfo on any CID can
-                        // acquire the lock immediately. On the latch-wait path (MKCRED/
-                        // GETASSERT) this is a no-op because the CTAP thread already
-                        // called releaseUpLock via its own post-ceremony cleanup.
-                        AuthenticatorAPI.releaseUpLock(txn.getCid());
                         finishUpDelivery();
                     });
                 }),
@@ -407,11 +413,9 @@ public class HIDForegroundService extends Service {
             // follow-up command arriving on the same CID (e.g. a U2F MSG retry) is
             // rejected immediately without opening a new biometric prompt.
             if (pendingUpTxn != null) {
-                pendingUpTxn.setUxState(CtapTxn.CidUxState.DENIED);  // §6.1.2
-                pendingUpTxn.setUserDenied(true);
-                pendingUpTxn.releaseUxLatch();   // wake any CTAP thread blocking on latch
-                AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
-                UxInteractionLock.get().revokeGrant();
+                UxInteractionLock.get().setUxState(UxInteractionLock.UxState.DENIED);
+                UxInteractionLock.get().releaseLatch();   // wake any CTAP thread blocking on latch
+                AuthenticatorAPI.setUxLockDenied(UP_BIO_TIMEOUT_MS);
             }
             if (pendingContext != null) {
                 pendingContext.buildResponse(Outcome.DENIED, response -> {
@@ -445,20 +449,18 @@ public class HIDForegroundService extends Service {
             CtapTxn txn    = context.getTxn();
             byte[]  cid    = txn.getCid();
             String  cidKey = bytesToHex(cid);
-            stopUpKeepalive();
-            keepaliveManager.startKeepalive(cidKey, KeepaliveManager.STATUS_PROCESSING);
+            if (context.requiresKeepalive()) {
+                stopUpKeepalive();
+                keepaliveManager.startKeepalive(cidKey, KeepaliveManager.STATUS_UP_NEEDED);
+            }
 
             // Store pending state on the service before posting to UI thread.
             pendingContext = context;
             pendingUpTxn   = txn;
-            startUpTimeout();
 
             upHandler.post(() -> {
-                keepaliveManager.updateStatus(cidKey, context.getKeepaliveStatus());
-
                 // UP already collected on this txn and the command needs biometric only
-                // (e.g. getTkn after getInfo) — skip the Allow/Deny dialog and go straight
-                // to the biometric prompt.
+                // skip the Allow/Deny dialog and go straight to the biometric prompt.
                 if (txn.isUserPresent() && context.requiresBiometric()) {
                     Log.d(TAG, "UP: txn already has UP + requiresBiometric — skipping dialog, delivering approved");
                     deliverUpApproved();
@@ -468,8 +470,12 @@ public class HIDForegroundService extends Service {
                 Log.d(TAG, "UP: posting to UI thread for cidKey=" + cidKey);
                 UpActivityDelegate d = activityDelegate;
                 if (d != null) {
+                    // App is in the foreground — arm Stage 1 and show the dialog immediately.
+                    startUpTimeout();
                     d.showUpDialog(context.getRpId());
                 } else {
+                    // App is backgrounded / screen off — arm Stage 0 and post the notification.
+                    startBackgroundTimeout();
                     postUpNotification();
                 }
             });
@@ -490,6 +496,19 @@ public class HIDForegroundService extends Service {
             upHandler.removeCallbacks(timeoutRunnable);
             timeoutRunnable = null;
         }
+        cancelBackgroundTimeout();
+    }
+
+    private void startBackgroundTimeout() {
+        backgroundTimeoutRunnable = this::deliverTimeoutInternal;
+        upHandler.postDelayed(backgroundTimeoutRunnable, getUpBackgroundTimeoutMs());
+    }
+
+    private void cancelBackgroundTimeout() {
+        if (backgroundTimeoutRunnable != null) {
+            upHandler.removeCallbacks(backgroundTimeoutRunnable);
+            backgroundTimeoutRunnable = null;
+        }
     }
 
     private void deliverTimeoutInternal() {
@@ -498,9 +517,8 @@ public class HIDForegroundService extends Service {
         UpActivityDelegate d = activityDelegate;
         if (d instanceof TimeoutListener) ((TimeoutListener) d).onUpTimeout();
         if (pendingUpTxn != null) {
-            pendingUpTxn.setUxState(CtapTxn.CidUxState.DENIED);  // §6.1.3
-            pendingUpTxn.releaseUxLatch();   // wake any CTAP thread blocking on latch
-            AuthenticatorAPI.releaseUpLock(pendingUpTxn.getCid());
+            AuthenticatorAPI.setUxLockDenied(UP_BIO_TIMEOUT_MS);
+            UxInteractionLock.get().releaseLatch();   // wake any CTAP thread blocking on latch
         }
         if (pendingContext != null) {
             sendDeferred(pendingUpTxn,
@@ -511,7 +529,7 @@ public class HIDForegroundService extends Service {
 
     private void sendDeferred(CtapTxn txn, byte[] response) {
         HIDPasskey pk = getHIDPasskey();
-        if (pk != null) pk.sendDeferredResponse(txn, response);
+        if (pk != null && response != null) pk.sendDeferredResponse(txn, response);
         if (txn != null && txn.getCid() != null) {
             resetCidInactivityTimer(txn.getCid());
         }
@@ -543,8 +561,8 @@ public class HIDForegroundService extends Service {
         CtapTxn txn = CtapHid.getCidTransaction(cid);
         if (txn != null) {
             // §6.1.4 — wake any CTAP thread that is blocking on awaitUxLatch for this CID.
-            txn.setUxState(CtapTxn.CidUxState.DENIED);
-            txn.releaseUxLatch();
+            UxInteractionLock.get().setUxState(UxInteractionLock.UxState.DENIED);
+            UxInteractionLock.get().releaseLatch();
             CtapHid deferredCmd = txn.takeDeferredCmd();
             if (deferredCmd != null) {
                 try {
@@ -556,9 +574,7 @@ public class HIDForegroundService extends Service {
             }
         }
         CtapHid.evictCid(cid);
-        AuthenticatorAPI.releaseUpLock(cid);
-        UxInteractionLock.get().revokeGrant();
-        if (pendingUpTxn != null && java.util.Arrays.equals(pendingUpTxn.getCid(), cid)) {
+        if (pendingUpTxn != null && Arrays.equals(pendingUpTxn.getCid(), cid)) {
             finishUpDelivery();
         }
     }
@@ -584,9 +600,14 @@ public class HIDForegroundService extends Service {
         if (upWakeLock != null && upWakeLock.isHeld()) return;
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm == null) return;
+        // Worst case: Stage 0 (5s) + Stage 1 (8s) + Stage 2 (12s) + 2s safety margin.
+        long maxMs = getUpBackgroundTimeoutMs()
+                   + getUpDialogTimeoutMs()
+                   + getUpBioTimeoutMs()
+                   + 2_000L;
         upWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "blekey:upPrompt");
-        upWakeLock.acquire(getUpBioTimeoutMs() + 2_000L);
-        Log.d(TAG, "UP wake lock acquired");
+        upWakeLock.acquire(maxMs);
+        Log.d(TAG, "UP wake lock acquired for " + maxMs + " ms");
     }
 
     private void releaseUpWakeLock() {
@@ -597,13 +618,26 @@ public class HIDForegroundService extends Service {
         upWakeLock = null;
     }
 
-    /** Called by {@code ServerActivity.showUpDialog} when the activity is backgrounded. */
+    /** Called by {@code ServerFragment.showUpDialog} when the fragment is backgrounded. */
     public void postUpNotificationPublic() {
         postUpNotification();
     }
 
+    /**
+     * Called by the fragment when it resumes and a UP ceremony is still in progress.
+     * Transitions Stage 0 → Stage 1 and returns the rpId so the caller can show the dialog.
+     * Returns null if no ceremony is pending.
+     */
+    @Nullable
+    public String transitionToForeground() {
+        if (pendingContext == null) return null;
+        cancelBackgroundTimeout();
+        if (timeoutRunnable == null) startUpTimeout();   // arm Stage 1 (guard re-entry)
+        return pendingContext.getRpId();
+    }
+
     private void postUpNotification() {
-        Intent tapIntent = new Intent(this, com.isfs.blekey.activity.ServerActivity.class)
+        Intent tapIntent = new Intent(this, com.isfs.blekey.MainActivity.class)
             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                     | Intent.FLAG_ACTIVITY_SINGLE_TOP
                     | Intent.FLAG_ACTIVITY_NEW_TASK);

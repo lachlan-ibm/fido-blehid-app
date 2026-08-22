@@ -13,7 +13,7 @@ import android.widget.Toast;
 import android.widget.Button;
 
 import com.isfs.blekey.activity.ManageActivity;
-import com.isfs.blekey.activity.ServerActivity;
+import com.isfs.blekey.activity.ServerFragment;
 import com.isfs.blekey.activity.QRScannerActivity;
 import com.isfs.blekey.util.AndroidKeystoreManager;
 import com.isfs.blekey.util.KeyUtils;
@@ -22,22 +22,13 @@ import com.isfs.blekey.util.CameraPermissionHelper;
 
 /**
  * Main entry point for the BLE HID Passkey application.
- * This activity provides a simple user interface with a toggle button
- * that launches the PasskeyActivity when clicked.
+ * Hosts {@link ServerFragment} inline below the button strip.
  */
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     private static final int CAMERA_PERMISSION_REQUEST_CODE = 1001;
 
-    /**
-     * Initializes the activity, sets up the UI and configures the toggle button
-     * to launch the PasskeyActivity when clicked.
-     *
-     * @param savedInstanceState If the activity is being re-initialized after previously
-     *                           being shut down, this contains the data it most recently
-     *                           supplied in onSaveInstanceState(Bundle).
-     */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -60,10 +51,6 @@ public class MainActivity extends AppCompatActivity {
      * Sets up click listeners for all buttons using lambda expressions.
      */
     private void setupButtons() {
-        Button serverButton = findViewById(R.id.serverButton);
-        serverButton.setOnClickListener(v ->
-            startActivity(new Intent(this, ServerActivity.class)));
-        
         Button manageButton = findViewById(R.id.manageButton);
         manageButton.setOnClickListener(v ->
             startActivity(new Intent(this, ManageActivity.class)));
@@ -76,6 +63,19 @@ public class MainActivity extends AppCompatActivity {
                 requestCameraPermission();
             }
         });
+    }
+
+    /**
+     * Forwards the intent to {@link ServerFragment} so it can cancel the stale
+     * UP notification.  Fires when the user taps the UP heads-up alert while
+     * MainActivity is already on the back stack (singleTop re-use).
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        ServerFragment f = (ServerFragment) getSupportFragmentManager()
+                .findFragmentById(R.id.serverFragmentContainer);
+        if (f != null) f.onNewIntent(intent);
     }
     
     /**

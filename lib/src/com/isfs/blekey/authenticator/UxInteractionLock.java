@@ -3,7 +3,11 @@
  */
 package com.isfs.blekey.authenticator;
 
-import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * CID-exclusive mutex for UP and UV ceremonies (15-second window).
@@ -24,16 +28,26 @@ import java.util.Arrays;
  */
 public final class UxInteractionLock {
 
+    /**
+     * Tracks the out-of-band UX collection state for this CID.
+     * Written by the app thread; read by the CTAP/BT callback thread.
+     * Volatile provides the single-writer/single-reader happens-before guarantee.
+     */
+    public enum UxState {
+        /** No UX has been started recently. */
+        IDLE,
+        /** UX collection is in progress (Allow/Deny dialog or biometric pending). */
+        IN_PROGRESS,
+        /** User approved and IKM is cached. Protected commands may run immediately. */
+        APPROVED,
+        /** User denied or timed out. Protected commands return OPERATION_DENIED. */
+        DENIED
+    }
+
+
     public static final long LOCK_TIMEOUT_MS = 15_000L;
 
     private static final UxInteractionLock INSTANCE = new UxInteractionLock();
-
-    // -------------------------------------------------------------------------
-    // CID mutex fields (unchanged)
-    // -------------------------------------------------------------------------
-
-    private byte[] ownerCid    = null;
-    private long   expiresAtMs = 0L;
 
     // -------------------------------------------------------------------------
     // App-global bio grant fields
@@ -41,42 +55,39 @@ public final class UxInteractionLock {
 
     /** App-global cached ECDH IKM. Written after bio success; read by any CID. */
     private volatile byte[] cachedIkm = null;
+    private volatile long   expiresAtMs = 0L;
+    private UxState uxState = UxState.IDLE;
 
-    /** Monotonic wall-clock ms at which the current bio grant expires. 0 = no grant. */
-    private volatile long grantExpiresAtMs = 0L;
+    // -------------------------------------------------------------------------
+    // Latch — armed when IN_PROGRESS, released on approve/deny/timeout/reset
+    // -------------------------------------------------------------------------
+
+    /** Latch armed when state transitions to IN_PROGRESS; released on approve/deny/timeout. */
+    private volatile CountDownLatch uxLatch = null;
+
+    // -------------------------------------------------------------------------
+    // Self-resetting timer
+    // -------------------------------------------------------------------------
+
+    private final ScheduledExecutorService scheduler =
+        Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ux-lock-reset-timer");
+            t.setDaemon(true);
+            return t;
+        });
+    private ScheduledFuture<?> resetFuture = null;
 
     private UxInteractionLock() {}
 
     public static UxInteractionLock get() { return INSTANCE; }
 
-    // -------------------------------------------------------------------------
-    // CID mutex methods (unchanged)
-    // -------------------------------------------------------------------------
-
-    public synchronized boolean tryAcquire(byte[] cid) {
-        // A null CID means no CTAP channel is established; treat as non-participant —
-        // the call passes through without claiming the lock.
-        if (cid == null) return true;
-        long now = System.currentTimeMillis();
-        if (ownerCid != null && now < expiresAtMs && !Arrays.equals(ownerCid, cid)) {
-            return false;
-        }
-        ownerCid    = cid.clone();
-        expiresAtMs = now + LOCK_TIMEOUT_MS;
-        return true;
-    }
-
-    public synchronized void release(byte[] cid) {
-        if (Arrays.equals(ownerCid, cid)) {
-            ownerCid    = null;
-            expiresAtMs = 0L;
-        }
-    }
-
-    public synchronized boolean isOwner(byte[] cid) {
-        return ownerCid != null
-            && Arrays.equals(ownerCid, cid)
-            && System.currentTimeMillis() < expiresAtMs;
+    public synchronized void reset() {
+        cancelResetTimer();
+        releaseLatch();
+        expiresAtMs = 0L;
+        cachedIkm = null;
+        uxState = UxState.IDLE;
+        uxLatch = null;
     }
 
     // -------------------------------------------------------------------------
@@ -92,12 +103,24 @@ public final class UxInteractionLock {
      */
     public synchronized void recordBioGrant(byte[] ikm, long windowMs) {
         this.cachedIkm        = ikm.clone();
-        this.grantExpiresAtMs = System.currentTimeMillis() + windowMs;
+        this.expiresAtMs = System.currentTimeMillis() + windowMs;
     }
 
     /** Returns true when the IKM grant is currently active. */
-    public boolean isGrantActive() {
-        return cachedIkm != null && System.currentTimeMillis() < grantExpiresAtMs;
+    public synchronized boolean isGrantActive() {
+        return cachedIkm != null && System.currentTimeMillis() < expiresAtMs;
+    }
+
+    /** Return true if Ux has recently been denied */
+    public synchronized boolean isUserDenied() {
+        return this.uxState == UxState.DENIED && System.currentTimeMillis() < expiresAtMs;
+    }
+
+    public synchronized void setUserDenied(long windowMs) {
+        cancelResetTimer();
+        this.uxState = UxState.DENIED;
+        this.expiresAtMs = System.currentTimeMillis() + windowMs;
+        scheduleReset(windowMs);
     }
 
     /** Returns the cached IKM (defensive copy), or null if grant is not active. */
@@ -106,10 +129,87 @@ public final class UxInteractionLock {
         return cachedIkm.clone();
     }
 
-    /** Revokes the grant. Call on explicit deny or CID inactivity expiry. */
-    public synchronized void revokeGrant() {
-        cachedIkm        = null;
-        grantExpiresAtMs = 0L;
+    /** Returns the current UX state for this CID. */
+    public synchronized UxState getUxState() { return uxState; }
+
+    /** Sets the UX state. */
+    public synchronized void setUxState(UxState s) { this.uxState = s; }
+
+    // -------------------------------------------------------------------------
+    // Latch API
+    // -------------------------------------------------------------------------
+
+    /**
+     * Allocates a fresh {@link CountDownLatch}(1). Call immediately before
+     * {@code onUpUvRequired} so Branch 3 callers have a latch to block on.
+     */
+    public synchronized void armLatch() {
+        uxLatch = new CountDownLatch(1);
+    }
+
+    /**
+     * Counts down the latch. Safe to call if the latch is null or already fired.
+     */
+    public synchronized void releaseLatch() {
+        CountDownLatch l = uxLatch;
+        if (l != null) l.countDown();
+    }
+
+    /**
+     * Blocks the calling thread until the latch fires or {@code timeoutMs} elapses.
+     *
+     * @param timeoutMs maximum wait in milliseconds
+     * @return {@code true} if the latch fired before the timeout; {@code false} on timeout
+     */
+    public boolean awaitLatch(long timeoutMs) {
+        CountDownLatch l;
+        synchronized (this) { l = uxLatch; }
+        if (l == null) return false;
+        try {
+            return l.await(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /**
+     * Convenience: sets state to {@link UxState#IN_PROGRESS} and arms the latch atomically.
+     * Call at every site that calls {@code cb.onUpUvRequired()}.
+     */
+    public synchronized void setStateInProgress() {
+        uxState = UxState.IN_PROGRESS;
+        armLatch();
+    }
+
+    // -------------------------------------------------------------------------
+    // Self-resetting timer
+    // -------------------------------------------------------------------------
+
+    /**
+     * Arms the internal reset timer. After {@code windowMs} the lock automatically
+     * transitions back to IDLE. Safe to call from any thread.
+     */
+    public synchronized void scheduleReset(long windowMs) {
+        cancelResetTimer();
+        resetFuture = scheduler.schedule(this::resetInternal, windowMs,
+            TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void resetInternal() {
+        resetFuture = null;
+        releaseLatch();
+        uxState = UxState.IDLE;
+        cachedIkm = null;
+        expiresAtMs = 0L;
+        uxLatch = null;
+    }
+
+    private synchronized void cancelResetTimer() {
+        if (resetFuture != null) {
+            resetFuture.cancel(false);
+            resetFuture = null;
+        }
     }
 }
 

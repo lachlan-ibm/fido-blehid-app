@@ -13,14 +13,12 @@ import com.isfs.blekey.authenticator.implapi.pin.PinUvAuthResult;
 import com.isfs.blekey.authenticator.implapi.pin.PinVerifier;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
-import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.util.KeyUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,9 +32,6 @@ import java.util.Map;
 public class MakeCredentialHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(MakeCredentialHandler.class);
-
-    /** Maximum ms to wait for the out-of-band UX latch before timing out (§5.3). */
-    private static final long UP_WAIT_TIMEOUT_MS = 25_000L;
 
     private MakeCredentialHandler() {}
 
@@ -58,93 +53,21 @@ public class MakeCredentialHandler {
             CredentialValidator.canMakeCredential(req, txn.getPasskey());
         if (!validation.isValid()) {
             logger.error("Credential validation failed: {}", validation.errorCode);
-            return error(validation.errorCode);
+            return CtapResponse.error(validation.errorCode);
         }
         logger.debug("Creating credential of type: {}", validation.type);
 
-        // Fast path: app-global bio grant active — covers any CID, not just the one that
-        // collected UP. A fresh CtapTxn always has isUserPresent=false, so the old guard
-        // of txn.isUserPresent() && isGrantActive() was never true on a new session.
-        if (UxInteractionLock.get().isGrantActive()) {
-            logger.debug("makeCredential: grant active — fast path, no UP prompt");
-            try {
-                return executeMakeCredential(validation, txn, req);
-            } catch (Exception e) {
-                logger.error("makeCredential fast-path failed", e);
-                return error(Ctap2StatusCode.OTHER);
-            }
-        }
-
-        // Denied path: CID was already denied this session.
-        if (txn.getUxState() == CidUxState.DENIED || txn.isUserDenied()) {
-            logger.warn("makeCredential: CID denied — OPERATION_DENIED");
-            return error(Ctap2StatusCode.OPERATION_DENIED);
-        }
-
-        // Latch-wait path: getInfo already started the UX; wait for it to complete.
-        if (txn.getUxState() == CidUxState.IN_PROGRESS) {
-            logger.debug("makeCredential: UX in progress — waiting on latch (max {}ms)", UP_WAIT_TIMEOUT_MS);
-            boolean completed = txn.awaitUxLatch(UP_WAIT_TIMEOUT_MS);
-            if (!completed || txn.getUxState() != CidUxState.APPROVED) {
-                logger.warn("makeCredential: UX latch timeout or denied — OPERATION_DENIED");
-                return error(Ctap2StatusCode.OPERATION_DENIED);
-            }
-            logger.debug("makeCredential: latch-wait path — latch fired, UX APPROVED");
-            try {
-                return executeMakeCredential(validation, txn, req);
-            } catch (Exception e) {
-                logger.error("makeCredential post-latch failed", e);
-                return error(Ctap2StatusCode.OTHER);
-            }
-        }
-
-        // Legacy deferred path: getInfo was not called first (platform skipped it),
-        // or lock held by another CID. Preserve existing behaviour unchanged.
-        AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
-        if (cb == null) {
-            logger.warn("makeCredential: no UpUvCallback — OPERATION_DENIED");
-            return error(Ctap2StatusCode.OPERATION_DENIED);
-        }
-
         @SuppressWarnings("unchecked")
         String rpIdStr = (String) ((Map<String, Object>) req.get(0x02)).get("id");
-        final CredentialValidationResult valFinal = validation;
-        final Map<Integer, Object> reqFinal = req;
 
-        if (!UxInteractionLock.get().tryAcquire(txn.getCid())) {
-            logger.warn("makeCredential: CID does not own UP lock — CHANNEL_BUSY");
-            return error(Ctap2StatusCode.CHANNEL_BUSY);
-        }
-        cb.onUpUvRequired(
-            new UpUvRequestCtx(rpIdStr, txn,
-                List.of((chainCb) ->
-                    onMakeCredentialUpApproved(chainCb, txn, valFinal, reqFinal)),
-                UpUvRequestCtx.KEEPALIVE_UP_NEEDED,
-                true,  // requiresBiometric
-                UpUvRequestCtx.CeremonyType.MAKE_CREDENTIAL
-            )
+        return UpUvGate.await(
+            txn,
+            "makeCredential",
+            rpIdStr,
+            UpUvGate.LatchStrategy.SYNC,
+            UpUvRequestCtx.CeremonyType.MAKE_CREDENTIAL,
+            () -> executeMakeCredential(validation, txn, req)
         );
-        return null; // deferred (legacy path)
-    }
-
-    private static void onMakeCredentialUpApproved(
-            UpUvRequestCtx.ChainCallback chainCb,
-            CtapTxn txn,
-            CredentialValidationResult val,
-            Map<Integer, Object> req) {
-        txn.setUserPresent(true);
-        try {
-            byte[] response = executeMakeCredential(val, txn, req);
-            AuthenticatorAPI.DeferredResponseSender sender =
-                AuthenticatorAPI.getDeferredResponseSender();
-            if (sender != null) sender.send(txn, response);
-        } catch (Exception e) {
-            logger.error("makeCredential chain action failed", e);
-            AuthenticatorAPI.DeferredResponseSender sender =
-                AuthenticatorAPI.getDeferredResponseSender();
-            if (sender != null) sender.send(txn, error(Ctap2StatusCode.OTHER));
-        }
-        chainCb.done(null);
     }
 
     // -------------------------------------------------------------------------
@@ -160,7 +83,7 @@ public class MakeCredentialHandler {
         PinUvAuthResult pinUvResult;
         if (options.uv || req.containsKey(0x08 /* PIN_UV_AUTH_PARAM */)) {
             pinUvResult = PinVerifier.verify(req, txn);
-            if (pinUvResult.errorCode != null) return error(pinUvResult.errorCode);
+            if (pinUvResult.errorCode != null) return CtapResponse.error(pinUvResult.errorCode);
         } else {
             pinUvResult = PinUvAuthResult.NO_VERIFICATION;
         }
@@ -170,15 +93,15 @@ public class MakeCredentialHandler {
         AttestationMaterial attestation =
             AttestationBuilder.loadAttestationMaterial(validation.type, txn);
         Fido2Authenticator authenticator = validateAndCreateAuthenticator(txn, req);
-        if (authenticator == null) return error(Ctap2StatusCode.OTHER);
+        if (authenticator == null) return CtapResponse.error(Ctap2StatusCode.OTHER);
 
         CredentialCreationResult credentialResult =
             AttestationBuilder.buildCredentialData(req, authenticator, attestation);
-        if (!credentialResult.isSuccess()) return error(credentialResult.errorCode);
+        if (!credentialResult.isSuccess()) return CtapResponse.error(credentialResult.errorCode);
 
         Ctap2StatusCode storeError = handleResidentCredentialStorage(
             validation.type, req, authenticator, txn);
-        if (storeError != null) return error(storeError);
+        if (storeError != null) return CtapResponse.error(storeError);
 
         return AttestationBuilder.buildMakeCredentialResponse(
             credentialResult.authenticatorData,
@@ -222,13 +145,6 @@ public class MakeCredentialHandler {
         return null;
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private static byte[] error(Ctap2StatusCode code) {
-        return new byte[]{ (byte) code.getCode() };
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -4,12 +4,12 @@
 package com.isfs.blekey.authenticator.implapi.pin;
 
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
-import com.isfs.blekey.authenticator.AuthenticatorAPI.UpUvCallback;
 import com.isfs.blekey.authenticator.UpUvRequestCtx;
 import com.isfs.blekey.authenticator.UxInteractionLock;
+import com.isfs.blekey.authenticator.implapi.CtapResponse;
+import com.isfs.blekey.authenticator.implapi.UpUvGate;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
-import com.isfs.blekey.ctap.CtapTxn.CidUxState;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.ByteUtils;
 import com.isfs.blekey.util.Cbor;
@@ -26,7 +26,7 @@ import java.security.KeyPair;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.SecureRandom;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 
 import javax.crypto.Cipher;
@@ -101,7 +101,7 @@ public class PinFlowHandler {
                 return getTkn(txn, req);
             default:
                 logger.debug("PinFlowHandler: Invalid PIN subcommand: {}", cmd);
-                return error(Ctap2StatusCode.INVALID_COMMAND);
+                return CtapResponse.error(Ctap2StatusCode.INVALID_COMMAND);
         }
     }
 
@@ -123,40 +123,23 @@ public class PinFlowHandler {
      * the COSE key response.
      */
     public static byte[] executeGetKey(CtapTxn txn) {
-        // Attempt to start out-of-band UX collection for this CID.
-        // Guard: only when txn exists, uxState is IDLE, and the lock is free.
-        // If another CID holds the lock, uxState stays IDLE and protected commands
-        // will return CHANNEL_BUSY via the existing legacy path (unchanged).
-        //DO NOT PROMPT FOR UPUV IF A GRANT IS ACTIVE THE BIO GATE IS ALREADY IN PROGRESS OR COMPLETE
-        //DO NOT START ANOTHER ONE
-        if (!UxInteractionLock.get().isGrantActive()
-                && txn.getCid() != null
-                && txn.getUxState() == CidUxState.IDLE
-                && UxInteractionLock.get().tryAcquire(txn.getCid())) {
-            txn.setUxState(CidUxState.IN_PROGRESS);
-            txn.armUxLatch();
-            UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
-            if (cb != null) {
-                logger.debug("getKey: starting out-of-band UX for CID {}", Arrays.toString(txn.getCid()));
-                cb.onUpUvRequired(new UpUvRequestCtx(
-                    null,
-                    txn,
-                    java.util.Collections.emptyList(),
-                    UpUvRequestCtx.KEEPALIVE_PROCESSING,
-                    true   // requiresBiometric: platform key is needed
-                ));
-            } else {
-                // No callback registered — release lock and reset state.
-                UxInteractionLock.get().release(txn.getCid());
-                txn.setUxState(CidUxState.IDLE);
-            }
-        }
+        // Attempt to start out-of-band UX collection for this CID if it is idle.
+        // DO NOT PROMPT FOR UPUV IF A GRANT IS ACTIVE — the bio gate is already in
+        // progress or complete; do not start another one. UxTrigger.fireIfIdle()
+        // guards all of these conditions internally.
+        UpUvGate.fireIfIdle(txn, () -> new UpUvRequestCtx(
+            null,
+            txn,
+            Collections.emptyList(),
+            true   // requiresBiometric: platform key is needed
+        ));
+
         KeyPair ecdhPair;
         try {
             ecdhPair = KeyUtils.generateKeyPair("EC", 256);
         } catch (Exception e) {
             logger.error("getKey: failed to generate ephemeral ECDH key pair", e);
-            return error(Ctap2StatusCode.OTHER);
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
         }
         if (txn != null) {
             txn.setEcdhKeyPair(ecdhPair);
@@ -167,7 +150,7 @@ public class PinFlowHandler {
         byte[] keyBytes = Cbor.encode(rsp);
         logger.debug("getKey: CBOR-encoded response hex dump:");
         logger.debug("{}", ByteUtils.hexDump(keyBytes, "GETKEY Response"));
-        return success(keyBytes);
+        return CtapResponse.success(keyBytes);
     }
 
     // -------------------------------------------------------------------------
@@ -179,84 +162,29 @@ public class PinFlowHandler {
      * Always requires UV (biometric). Runs synchronously if lock is owned + IKM cached;
      * otherwise defers behind UP + biometric dialog.
      */
-    /** Maximum ms to wait for the out-of-band UX latch before timing out (§5.4). */
-    private static final long UP_WAIT_TIMEOUT_MS = 25_000L;
-
     private static byte[] getTkn(CtapTxn txn, Map<Integer, ?> req) {
+        if (txn == null) {
+            logger.warn("getTkn: null txn — OPERATION_DENIED");
+            return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
         // Grant fast-path: bio done app-wide — no dialog or notification needed.
         // IKM is owned by UxInteractionLock; CredentialSeedDeriver reads from it directly.
-        if (txn != null && UxInteractionLock.get().isGrantActive()) {
+        // The fast-path sets userPresent before calling processTkn to match prior behaviour.
+        if (UxInteractionLock.get().isGrantActive()) {
             logger.debug("getTkn: grant active — processing synchronously, no notification");
             txn.setUserPresent(true);
             return processTkn(txn, req);
         }
 
-        // Denied path: CID was already denied this session.
-        if (txn != null && (txn.getUxState() == CidUxState.DENIED || txn.isUserDenied())) {
-            logger.warn("getTkn: CID denied — OPERATION_DENIED");
-            return error(Ctap2StatusCode.OPERATION_DENIED);
-        }
-
-        // Latch-wait path: GETKEY already started the UX; wait off-thread to avoid ANR.
-        if (txn != null && txn.getUxState() == CidUxState.IN_PROGRESS) {
-            logger.debug("getTkn: UX in progress — registering deferred latch listener");
-            final Map<Integer, ?> reqSnapshot = req;
-            Thread latchWaiter = new Thread(() -> {
-                boolean completed = txn.awaitUxLatch(UP_WAIT_TIMEOUT_MS);
-                byte[] response;
-                if (!completed || txn.getUxState() != CidUxState.APPROVED) {
-                    logger.warn("getTkn: latch timeout or denied — OPERATION_DENIED");
-                    response = error(Ctap2StatusCode.OPERATION_DENIED);
-                } else {
-                    logger.debug("getTkn: latch fired APPROVED — processing token");
-                    response = processTkn(txn, reqSnapshot);
-                }
-                AuthenticatorAPI.DeferredResponseSender sender =
-                    AuthenticatorAPI.getDeferredResponseSender();
-                if (sender != null) {
-                    sender.send(txn, response);
-                } else {
-                    logger.error("getTkn: no DeferredResponseSender — response dropped");
-                }
-            }, "getTkn-latch-waiter");
-            latchWaiter.setDaemon(true);
-            latchWaiter.start();
-            return null; // deferred
-        }
-
-        // Legacy deferred path: getInfo was not called first (platform skipped it),
-        // or lock held by another CID. Preserve existing behaviour unchanged.
-        AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
-        if (cb == null) {
-            logger.warn("getTkn: no UpUvCallback — OPERATION_DENIED");
-            return error(Ctap2StatusCode.OPERATION_DENIED);
-        }
-
-        final Map<Integer, ?> reqFinal = req;
-
-        if (!UxInteractionLock.get().tryAcquire(txn.getCid())) {
-            logger.warn("getTkn: CID does not own UP lock — CHANNEL_BUSY");
-            return error(Ctap2StatusCode.CHANNEL_BUSY);
-        }
-        cb.onUpUvRequired(
-            new UpUvRequestCtx(null, txn,
-                java.util.List.of((chainCb) -> onGetTknUpApproved(chainCb, txn, reqFinal)),
-                UpUvRequestCtx.KEEPALIVE_PROCESSING,
-                true,  // requiresBiometric: UV always required for getTkn
-                UpUvRequestCtx.CeremonyType.GET_TKN
-            )
+        return UpUvGate.await(
+            txn,
+            "getTkn",
+            null,                              // rpId not applicable for PIN
+            UpUvGate.LatchStrategy.ASYNC,      // must not block BLE handler thread
+            UpUvRequestCtx.CeremonyType.GET_TKN,
+            () -> processTkn(txn, req)
         );
-        return null; // deferred (legacy path)
-    }
-
-    private static void onGetTknUpApproved(UpUvRequestCtx.ChainCallback chainCb,
-                                            CtapTxn txn,
-                                            Map<Integer, ?> req) {
-        if (txn != null) txn.setUserPresent(true);
-        byte[] response = processTkn(txn, req);
-        AuthenticatorAPI.DeferredResponseSender sender = AuthenticatorAPI.getDeferredResponseSender();
-        if (sender != null) sender.send(txn, response);
-        chainCb.done(null);
     }
 
     // -------------------------------------------------------------------------
@@ -266,7 +194,7 @@ public class PinFlowHandler {
     private static byte[] pinRty(CtapTxn txn, Map<Integer, Object> req) {
         Map<Integer, Object> rsp = Map.of(0x03, PinSessionRegistry.getPinRetries());
         PinSessionRegistry.decrementRetries();
-        return success(Cbor.encode(rsp));
+        return CtapResponse.success(Cbor.encode(rsp));
     }
 
     // -------------------------------------------------------------------------
@@ -279,15 +207,15 @@ public class PinFlowHandler {
     public static byte[] processTkn(CtapTxn txn, Map<Integer, ?> req) {
         PinHashValidationResult validation = validateAndExtractPinHash(req);
         if (!validation.isValid()) {
-            return error(validation.getErrorCode());
+            return CtapResponse.error(validation.getErrorCode());
         }
         PublicKey clientKey = extractClientPublicKey(req);
         if (clientKey == null) {
-            return error(Ctap2StatusCode.INVALID_PARAMETER);
+            return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
         }
         byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
         if (sharedSecret == null) {
-            return error(Ctap2StatusCode.OTHER);
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
         }
         return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret);
     }
@@ -345,7 +273,7 @@ public class PinFlowHandler {
         try {
             PinVerificationResult pinVerification = decryptAndVerifyPin(pinHashEnc, sharedSecret);
             if (!pinVerification.isValid()) {
-                return error(pinVerification.getErrorCode());
+                return CtapResponse.error(pinVerification.getErrorCode());
             }
 
             byte[] pinHash = pinVerification.getPinHash(); // 16 bytes
@@ -422,33 +350,18 @@ public class PinFlowHandler {
     private static byte[] handleCryptographicException(Exception e) {
         if (e instanceof NoSuchAlgorithmException || e instanceof NoSuchPaddingException) {
             logger.error("Cryptographic algorithm not available", e);
-            return error(Ctap2StatusCode.OTHER);
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
         }
         if (e instanceof InvalidKeyException
                 || e instanceof InvalidAlgorithmParameterException) {
             logger.error("Invalid cryptographic parameters", e);
-            return error(Ctap2StatusCode.INVALID_PARAMETER);
+            return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
         }
         if (e instanceof GeneralSecurityException) {
             logger.error("Cryptographic operation failed", e);
-            return error(Ctap2StatusCode.PIN_AUTH_INVALID);
+            return CtapResponse.error(Ctap2StatusCode.PIN_AUTH_INVALID);
         }
         logger.error("Unexpected exception during PIN token generation", e);
-        return error(Ctap2StatusCode.OTHER);
-    }
-
-    // -------------------------------------------------------------------------
-    // Response helpers
-    // -------------------------------------------------------------------------
-
-    private static byte[] success(byte[] rsp) {
-        byte[] out = new byte[rsp.length + 1];
-        out[0] = (byte) Ctap2StatusCode.SUCCESS.getCode();
-        System.arraycopy(rsp, 0, out, 1, rsp.length);
-        return out;
-    }
-
-    private static byte[] error(Ctap2StatusCode code) {
-        return new byte[]{ (byte) code.getCode() };
+        return CtapResponse.error(Ctap2StatusCode.OTHER);
     }
 }

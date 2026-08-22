@@ -24,12 +24,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class UpUvRequestCtx {
 
-    /** Keepalive status: background work in progress (no physical interaction needed yet). */
-    public static final byte KEEPALIVE_PROCESSING = (byte) 0x01;
-
-    /** Keepalive status: waiting for a physical user-presence button press. */
-    public static final byte KEEPALIVE_UP_NEEDED  = (byte) 0x02;
-
     /** The outcome chosen by the user (or system). */
     public enum Outcome {
         /** Approval: grants the pending CTAP operation. */
@@ -71,19 +65,9 @@ public final class UpUvRequestCtx {
     private final List<ChainAction> actions;
     private final byte[]            inlineResponse;
     private final AtomicBoolean     delivered = new AtomicBoolean(false);
-    private final byte              keepaliveStatus;
     private final boolean           requiresBiometric;
     private final CeremonyType      ceremonyType;
 
-    /**
-     * Creates a minimal context with no chain actions.
-     *
-     * @param rpId Relying-party identifier.
-     * @param txn  The live {@link CtapTxn} for this channel.
-     */
-    public UpUvRequestCtx(String rpId, CtapTxn txn) {
-        this(rpId, txn, Collections.emptyList());
-    }
 
     /**
      * GET_INFO constructor: carries the pre-built CBOR response bytes so that
@@ -94,18 +78,15 @@ public final class UpUvRequestCtx {
      * @param rpId              Relying-party identifier (may be {@code null} for GET_INFO).
      * @param txn               The live {@link CtapTxn} for this channel.
      * @param inlineResponse    Pre-built CTAP response bytes to deliver on approval.
-     * @param keepaliveStatus   {@link #KEEPALIVE_PROCESSING} or {@link #KEEPALIVE_UP_NEEDED}.
      * @param requiresBiometric {@code true} when the app layer must show a biometric prompt.
      * @param ceremonyType      Identifies the ceremony for dialog text selection.
      */
     public UpUvRequestCtx(String rpId, CtapTxn txn, byte[] inlineResponse,
-                          byte keepaliveStatus, boolean requiresBiometric,
-                          CeremonyType ceremonyType) {
+                          boolean requiresBiometric, CeremonyType ceremonyType) {
         this.rpId              = rpId;
         this.txn               = txn;
         this.actions           = Collections.emptyList();
         this.inlineResponse    = inlineResponse;
-        this.keepaliveStatus   = keepaliveStatus;
         this.requiresBiometric = requiresBiometric;
         this.ceremonyType      = ceremonyType;
     }
@@ -118,33 +99,20 @@ public final class UpUvRequestCtx {
      * @param actions Ordered list of actions to run after approval (empty = none).
      */
     public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions) {
-        this(rpId, txn, actions, KEEPALIVE_UP_NEEDED);
+        this(rpId, txn, actions, true);
     }
 
-    /**
-     * Creates a context with a specified keepalive status.
-     *
-     * @param rpId            Relying-party identifier.
-     * @param txn             The live {@link CtapTxn} for this channel.
-     * @param actions         Ordered list of actions to run after approval (empty = none).
-     * @param keepaliveStatus {@link #KEEPALIVE_PROCESSING} or {@link #KEEPALIVE_UP_NEEDED}.
-     */
-    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions, byte keepaliveStatus) {
-        this(rpId, txn, actions, keepaliveStatus, false);
-    }
 
     /**
-     * Creates a context with biometric flag but no ceremony type hint (defaults to GET_INFO).
+     * Creates a context with biometric flag but no ceremony type hint (defaults to GET_TKN).
      *
      * @param rpId              Relying-party identifier.
      * @param txn               The live {@link CtapTxn} for this channel.
      * @param actions           Ordered list of actions to run after approval (empty = none).
-     * @param keepaliveStatus   {@link #KEEPALIVE_PROCESSING} or {@link #KEEPALIVE_UP_NEEDED}.
      * @param requiresBiometric {@code true} when the app layer must show a biometric prompt.
      */
-    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions, byte keepaliveStatus,
-                     boolean requiresBiometric) {
-        this(rpId, txn, actions, keepaliveStatus, requiresBiometric, CeremonyType.GET_INFO);
+    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions, boolean requiresBiometric) {
+        this(rpId, txn, actions, requiresBiometric, CeremonyType.GET_TKN);
     }
 
     /**
@@ -153,18 +121,16 @@ public final class UpUvRequestCtx {
      * @param rpId              Relying-party identifier.
      * @param txn               The live {@link CtapTxn} for this channel.
      * @param actions           Ordered list of actions to run after approval (empty = none).
-     * @param keepaliveStatus   {@link #KEEPALIVE_PROCESSING} or {@link #KEEPALIVE_UP_NEEDED}.
      * @param requiresBiometric {@code true} when the app layer must show a biometric prompt
      *                          before running the chain.
      * @param ceremonyType      identifies the ceremony for dialog text selection.
      */
-    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions, byte keepaliveStatus,
+    public UpUvRequestCtx(String rpId, CtapTxn txn, List<ChainAction> actions,
                      boolean requiresBiometric, CeremonyType ceremonyType) {
         this.rpId              = rpId;
         this.txn               = txn;
         this.actions           = actions;
         this.inlineResponse    = null;
-        this.keepaliveStatus   = keepaliveStatus;
         this.requiresBiometric = requiresBiometric;
         this.ceremonyType      = ceremonyType;
     }
@@ -175,12 +141,6 @@ public final class UpUvRequestCtx {
     /** Returns the live transaction associated with this request. */
     public CtapTxn getTxn()  { return txn;  }
 
-    /**
-     * Returns the keepalive status that should be sent while waiting for this ceremony.
-     * {@link #KEEPALIVE_PROCESSING} for GETKEY / GETTKN; {@link #KEEPALIVE_UP_NEEDED} for
-     * makeCredential / getAssertion.
-     */
-    public byte getKeepaliveStatus() { return keepaliveStatus; }
 
     /**
      * Returns {@code true} when the app layer must present a biometric prompt before
@@ -191,6 +151,17 @@ public final class UpUvRequestCtx {
 
     /** Returns the ceremony type for dialog text selection. */
     public CeremonyType getCeremonyType() { return ceremonyType; }
+
+    /**
+     * Returns {@code true} if the transport layer should start a keepalive loop.
+     * Only {@code makeCredential} and {@code getAssertion} block waiting for user
+     * presence; all other ceremonies return immediately.
+     */
+    public boolean requiresKeepalive() {
+        return ceremonyType == CeremonyType.GET_INFO
+            || ceremonyType == CeremonyType.MAKE_CREDENTIAL
+            || ceremonyType == CeremonyType.GET_ASSERTION;
+    }
 
     /**
      * Builds the CTAP wire response for the given {@code outcome} and delivers it via

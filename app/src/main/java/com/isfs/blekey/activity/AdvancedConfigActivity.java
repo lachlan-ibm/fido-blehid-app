@@ -54,8 +54,9 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     private static final String PREFS_KEY_HKDF_INFO     = "hkdf_info";
     private static final String PREFS_KEY_AUTO_START    = "auto_start_enabled";
     private static final String PREFS_KEY_CTAP1_COMPAT  = "ctap1_compat_mode";
-    private static final String PREFS_KEY_UP_DIALOG_TIMEOUT = "up_dialog_timeout_ms";
-    private static final String PREFS_KEY_UP_BIO_TIMEOUT    = "up_bio_timeout_ms";
+    private static final String PREFS_KEY_UP_DIALOG_TIMEOUT     = "up_dialog_timeout_ms";
+    private static final String PREFS_KEY_UP_BIO_TIMEOUT        = "up_bio_timeout_ms";
+    private static final String PREFS_KEY_UP_BACKGROUND_TIMEOUT = "up_background_timeout_ms";
 
     private static final int UP_TIMEOUT_MIN_MS =  1_000;   //  1 s
     private static final int UP_TIMEOUT_MAX_MS = 45_000;   // 45 s
@@ -66,6 +67,8 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     private SwitchCompat      ctap1CompatSwitch;
     private TextView          pinRetriesValue;
 
+    private TextInputLayout   upBackgroundTimeoutLayout;
+    private TextInputEditText upBackgroundTimeoutEdit;
     private TextInputLayout   upDialogTimeoutLayout;
     private TextInputEditText upDialogTimeoutEdit;
     private TextInputLayout   upBioTimeoutLayout;
@@ -131,15 +134,20 @@ public class AdvancedConfigActivity extends AppCompatActivity {
             finish();
         });
 
-        upDialogTimeoutLayout = findViewById(R.id.upDialogTimeoutLayout);
-        upDialogTimeoutEdit   = findViewById(R.id.upDialogTimeoutEdit);
-        upBioTimeoutLayout    = findViewById(R.id.upBioTimeoutLayout);
-        upBioTimeoutEdit      = findViewById(R.id.upBioTimeoutEdit);
+        upBackgroundTimeoutLayout = findViewById(R.id.upBackgroundTimeoutLayout);
+        upBackgroundTimeoutEdit   = findViewById(R.id.upBackgroundTimeoutEdit);
+        upDialogTimeoutLayout     = findViewById(R.id.upDialogTimeoutLayout);
+        upDialogTimeoutEdit       = findViewById(R.id.upDialogTimeoutEdit);
+        upBioTimeoutLayout        = findViewById(R.id.upBioTimeoutLayout);
+        upBioTimeoutEdit          = findViewById(R.id.upBioTimeoutEdit);
 
-        int dialogMs = prefs.getInt(PREFS_KEY_UP_DIALOG_TIMEOUT,
+        int backgroundMs = prefs.getInt(PREFS_KEY_UP_BACKGROUND_TIMEOUT,
+                HIDForegroundService.UP_BACKGROUND_TIMEOUT_MS);
+        int dialogMs     = prefs.getInt(PREFS_KEY_UP_DIALOG_TIMEOUT,
                 HIDForegroundService.UP_DIALOG_TIMEOUT_MS);
-        int bioMs    = prefs.getInt(PREFS_KEY_UP_BIO_TIMEOUT,
+        int bioMs        = prefs.getInt(PREFS_KEY_UP_BIO_TIMEOUT,
                 HIDForegroundService.UP_BIO_TIMEOUT_MS);
+        upBackgroundTimeoutEdit.setText(String.valueOf(backgroundMs));
         upDialogTimeoutEdit.setText(String.valueOf(dialogMs));
         upBioTimeoutEdit.setText(String.valueOf(bioMs));
 
@@ -239,17 +247,20 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         hkdfInfoLayout.setError(null);
 
         // --- timeout validation ---
-        Integer dialogMs = parseTimeout(upDialogTimeoutEdit, upDialogTimeoutLayout,
+        Integer backgroundMs = parseTimeout(upBackgroundTimeoutEdit, upBackgroundTimeoutLayout,
                 R.string.adv_config_up_timeout_invalid);
-        Integer bioMs    = parseTimeout(upBioTimeoutEdit, upBioTimeoutLayout,
+        Integer dialogMs     = parseTimeout(upDialogTimeoutEdit, upDialogTimeoutLayout,
                 R.string.adv_config_up_timeout_invalid);
-        if (dialogMs == null || bioMs == null) return;
+        Integer bioMs        = parseTimeout(upBioTimeoutEdit, upBioTimeoutLayout,
+                R.string.adv_config_up_timeout_invalid);
+        if (backgroundMs == null || dialogMs == null || bioMs == null) return;
 
         // Persist timeouts immediately (non-destructive, no platform key needed)
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
-                .putInt(PREFS_KEY_UP_DIALOG_TIMEOUT, dialogMs)
-                .putInt(PREFS_KEY_UP_BIO_TIMEOUT,    bioMs)
+                .putInt(PREFS_KEY_UP_BACKGROUND_TIMEOUT, backgroundMs)
+                .putInt(PREFS_KEY_UP_DIALOG_TIMEOUT,     dialogMs)
+                .putInt(PREFS_KEY_UP_BIO_TIMEOUT,        bioMs)
                 .apply();
 
         // HKDF info change is destructive — confirm, then bio-gate the crypto.

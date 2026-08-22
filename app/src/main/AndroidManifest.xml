@@ -51,19 +51,13 @@
         <activity
             android:name="com.isfs.blekey.MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/AppTheme.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Server Activity-->
-        <activity
-            android:name="com.isfs.blekey.activity.ServerActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:theme="@style/AppTheme.NoActionBar" />
         
         <!-- Register ManageActivity -->
         <activity
@@ -107,7 +101,7 @@
             android:name=".activity.AdvancedConfigActivity"
             android:label="@string/adv_config_title"
             android:exported="false"
-            android:parentActivityName=".activity.ServerActivity"
+            android:parentActivityName=".MainActivity"
             android:theme="@style/AppTheme.MaterialNoActionBar" />
 
         <!-- Deep Link Handler for QR Code Scanning -->

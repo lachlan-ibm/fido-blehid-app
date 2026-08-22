@@ -17,21 +17,6 @@ import com.isfs.blekey.data.Passkey;
  */
 public class CtapTxn {
 
-    /**
-     * Tracks the out-of-band UX collection state for this CID.
-     * Written by the app thread; read by the CTAP/BT callback thread.
-     * Volatile provides the single-writer/single-reader happens-before guarantee.
-     */
-    public enum CidUxState {
-        /** No UX has been started for this CID yet. */
-        IDLE,
-        /** UX collection is in progress (Allow/Deny dialog or biometric pending). */
-        IN_PROGRESS,
-        /** User approved and IKM is cached. Protected commands may run immediately. */
-        APPROVED,
-        /** User denied or timed out. Protected commands return OPERATION_DENIED. */
-        DENIED
-    }
 
     /**
      * Transport type for CTAP transactions.
@@ -66,11 +51,6 @@ public class CtapTxn {
      * The PIN hash (32 bytes) for the passkey.
      */
     private byte[] pinHash;
-
-    /**
-     * The passkey file name used to open the passkey.
-     */
-    private String passkeyFileName;
 
     /**
      * The transport type for this transaction (default: BT_CLASSIC_HID).
@@ -114,16 +94,6 @@ public class CtapTxn {
      */
     private CtapHid pendingDeferredCmd = null;
 
-    /**
-     * Out-of-band UX state for this CID. Volatile: main-looper writer, CTAP-thread reader.
-     */
-    private volatile CidUxState uxState = CidUxState.IDLE;
-
-    /**
-     * Latch armed by getInfo; released by deliverUpApproved/deliverUpDenied/timeout.
-     * Protected commands block on this latch when uxState == IN_PROGRESS.
-     */
-    private CountDownLatch uxLatch = null;
 
     /**
      * POJO constructor for creating an empty CTAP transaction.
@@ -261,14 +231,6 @@ public class CtapTxn {
         return pinHash != null ? pinHash.clone() : null;
     }
 
-    /**
-     * Sets the passkey file name for this transaction.
-     *
-     * @param fileName The passkey file name
-     */
-    public void setPasskeyFileName(String fileName) {
-        this.passkeyFileName = fileName;
-    }
 
     /**
      * Gets the passkey file name for this transaction.
@@ -276,7 +238,7 @@ public class CtapTxn {
      * @return The passkey file name
      */
     public String getPasskeyFileName() {
-        return passkeyFileName;
+        return passkey == null ? null : passkey.getFileName();
     }
 
     /**
@@ -401,56 +363,6 @@ public class CtapTxn {
         return cmd;
     }
 
-    // -------------------------------------------------------------------------
-    // CidUxState / latch API (UPUV_DECOUPLE_GETINFO_TRIGGER_PLAN)
-    // -------------------------------------------------------------------------
-
-    /** Returns the current out-of-band UX state for this CID. */
-    public CidUxState getUxState() { return uxState; }
-
-    /** Sets the out-of-band UX state. Call only from the main looper. */
-    public void setUxState(CidUxState s) { this.uxState = s; }
-
-    /** Returns the raw latch reference (for propagation in updateCidTransaction). */
-    public java.util.concurrent.CountDownLatch getUxLatch() { return uxLatch; }
-
-    /** Sets the latch directly (used by updateCidTransaction to propagate across txn updates). */
-    public void setUxLatch(java.util.concurrent.CountDownLatch latch) { this.uxLatch = latch; }
-
-    /**
-     * Arms a fresh CountDownLatch(1) for this CID's UX ceremony.
-     * Called by getInfo immediately before posting onUpUvRequired.
-     */
-    public void armUxLatch() {
-        uxLatch = new java.util.concurrent.CountDownLatch(1);
-    }
-
-    /**
-     * Releases the latch (count 1→0), waking any CTAP thread blocked in awaitUxLatch.
-     * Called by deliverUpApproved / deliverUpDenied / deliverTimeoutInternal / onCidInactivityExpired.
-     * Safe to call when uxLatch is null (no-op) or already fired (no-op).
-     */
-    public void releaseUxLatch() {
-        java.util.concurrent.CountDownLatch l = uxLatch;
-        if (l != null) l.countDown();
-    }
-
-    /**
-     * Blocks the calling thread until the UX latch fires or the timeout elapses.
-     *
-     * @param timeoutMs maximum wait in milliseconds
-     * @return true if the latch was released before the timeout; false on timeout or interrupt
-     */
-    public boolean awaitUxLatch(long timeoutMs) {
-        java.util.concurrent.CountDownLatch l = uxLatch;
-        if (l == null) return true; // no latch — treat as already concluded
-        try {
-            return l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-    }
 }
 
 // Made with Bob

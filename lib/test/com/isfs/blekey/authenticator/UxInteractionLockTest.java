@@ -28,15 +28,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class UxInteractionLockTest {
 
-    private static final byte[] CID_A = {0x01, 0x02, 0x03, 0x04};
-    private static final byte[] CID_B = {0x0A, 0x0B, 0x0C, 0x0D};
-
     /** The singleton lock instance obtained via reflection. */
     private Object lock;
-
-    private Method tryAcquire;
-    private Method release;
-    private Method isOwner;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -47,16 +40,6 @@ public class UxInteractionLockTest {
         getInstance.setAccessible(true);
         lock = getInstance.invoke(null);
 
-        tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
-        tryAcquire.setAccessible(true);
-
-        release = lockClass.getDeclaredMethod("release", byte[].class);
-        release.setAccessible(true);
-
-        isOwner = lockClass.getDeclaredMethod("isOwner", byte[].class);
-        isOwner.setAccessible(true);
-
-        // Always start and end each test with a clean lock state.
         resetLock();
     }
 
@@ -68,10 +51,6 @@ public class UxInteractionLockTest {
     private void resetLock() throws Exception {
         Class<?> lockClass = lock.getClass();
 
-        Field ownerCidField = lockClass.getDeclaredField("ownerCid");
-        ownerCidField.setAccessible(true);
-        ownerCidField.set(lock, null);
-
         Field expiresField = lockClass.getDeclaredField("expiresAtMs");
         expiresField.setAccessible(true);
         expiresField.set(lock, 0L);
@@ -80,95 +59,13 @@ public class UxInteractionLockTest {
         cachedIkm.setAccessible(true);
         cachedIkm.set(lock, null);
 
-        Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
-        grantExpiresAtMs.set(lock, 0L);
-    }
+        Field uxState = lockClass.getDeclaredField("uxState");
+        uxState.setAccessible(true);
+        uxState.set(lock, com.isfs.blekey.authenticator.UxInteractionLock.UxState.IDLE);
 
-    /**
-     * The same CID can re-acquire an already-held lock (idempotent / refreshes the window).
-     */
-    @Test
-    void sameCidCanReacquire() throws Exception {
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_A),
-            "First tryAcquire(CID_A) should succeed");
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_A),
-            "Second tryAcquire(CID_A) should also succeed (same owner)");
-    }
-
-    /**
-     * A different CID is blocked while the lock is held by CID_A.
-     */
-    @Test
-    void differentCidBlockedWhileLockHeld() throws Exception {
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_A),
-            "CID_A acquires the lock");
-        assertFalse((boolean) tryAcquire.invoke(lock, (Object) CID_B),
-            "CID_B should be blocked while CID_A holds the lock");
-    }
-
-    /**
-     * After CID_A releases, CID_B can acquire.
-     */
-    @Test
-    void releaseAllowsOtherCid() throws Exception {
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_A));
-        release.invoke(lock, (Object) CID_A);
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_B),
-            "CID_B should acquire after CID_A releases");
-    }
-
-    /**
-     * isOwner returns true only for the holder and false for others.
-     */
-    @Test
-    void isOwnerReflectsCurrentHolder() throws Exception {
-        tryAcquire.invoke(lock, (Object) CID_A);
-        assertTrue((boolean) isOwner.invoke(lock, (Object) CID_A),
-            "CID_A is the owner after acquiring");
-        assertFalse((boolean) isOwner.invoke(lock, (Object) CID_B),
-            "CID_B is not the owner");
-    }
-
-    /**
-     * Lock auto-expires: after the timeout elapses, another CID can acquire.
-     *
-     * <p>We shorten the timeout to 50 ms via reflection to avoid a 15-second sleep.
-     */
-    @Test
-    void lockExpiresAfterTimeout() throws Exception {
-        Class<?> lockClass = lock.getClass();
-
-        // On Java 17+ changing static-final fields is blocked; instead we directly
-        // set expiresAtMs to an already-expired value to simulate lock expiry.
-        Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
-        expiresAtMs.setAccessible(true);
-        Field ownerCid = lockClass.getDeclaredField("ownerCid");
-        ownerCid.setAccessible(true);
-
-        // Simulate: CID_A acquired the lock but its window expired 1 second ago.
-        ownerCid.set(lock, CID_A.clone());
-        expiresAtMs.set(lock, System.currentTimeMillis() - 1_000L);
-
-        // isOwner should now return false because the lock expired.
-        assertFalse((boolean) isOwner.invoke(lock, (Object) CID_A),
-            "isOwner should be false for expired lock");
-
-        // CID_B should now be able to acquire.
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_B),
-            "CID_B should acquire after CID_A's lock expired");
-    }
-
-    /**
-     * releaseUpLock public shim delegates to the lock correctly.
-     * After the shim releases, another CID can acquire via reflection.
-     */
-    @Test
-    void releaseUpLockShimWorks() throws Exception {
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_A));
-        AuthenticatorAPI.releaseUpLock(CID_A);
-        assertTrue((boolean) tryAcquire.invoke(lock, (Object) CID_B),
-            "CID_B should acquire after public releaseUpLock(CID_A) is called");
+        Field uxLatch = lockClass.getDeclaredField("uxLatch");
+        uxLatch.setAccessible(true);
+        uxLatch.set(lock, null);
     }
 
     // -------------------------------------------------------------------------
@@ -214,9 +111,9 @@ public class UxInteractionLockTest {
         cachedIkm.setAccessible(true);
         cachedIkm.set(lock, new byte[]{7, 8, 9});
 
-        Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
-        grantExpiresAtMs.set(lock, System.currentTimeMillis() - 1_000L);
+        Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
+        expiresAtMs.setAccessible(true);
+        expiresAtMs.set(lock, System.currentTimeMillis() - 1_000L);
 
         Method isGrantActive = lockClass.getDeclaredMethod("isGrantActive");
         isGrantActive.setAccessible(true);
@@ -249,12 +146,12 @@ public class UxInteractionLockTest {
         }
         extendIssuedGrant.setAccessible(true);
 
-        Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
+        Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
+        expiresAtMs.setAccessible(true);
 
-        // No grant active — call must be a no-op (grantExpiresAtMs stays 0).
+        // No grant active — call must be a no-op (expiresAtMs stays 0).
         extendIssuedGrant.invoke(lock, 10_000L);
-        assertEquals(0L, (long) grantExpiresAtMs.get(lock),
+        assertEquals(0L, (long) expiresAtMs.get(lock),
                 "extendIssuedGrant must be a no-op when no grant is active");
 
         // Arm a grant and verify the window advances.
@@ -263,9 +160,9 @@ public class UxInteractionLockTest {
         recordBioGrant.setAccessible(true);
         recordBioGrant.invoke(lock, new byte[4], 15_000L);
 
-        long before = (long) grantExpiresAtMs.get(lock);
+        long before = (long) expiresAtMs.get(lock);
         extendIssuedGrant.invoke(lock, 5_000L);
-        long after = (long) grantExpiresAtMs.get(lock);
+        long after = (long) expiresAtMs.get(lock);
         assertTrue(after > before,
                 "extendIssuedGrant must advance grantExpiresAtMs when grant is active");
     }
@@ -281,19 +178,23 @@ public class UxInteractionLockTest {
         recordBioGrant.setAccessible(true);
         recordBioGrant.invoke(lock, new byte[]{0x01}, 15_000L);
 
-        Method revokeGrant = lockClass.getDeclaredMethod("revokeGrant");
-        revokeGrant.setAccessible(true);
-        revokeGrant.invoke(lock);
+        // Clear the grant state directly via reflection (no revokeGrant method needed).
+        Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
+        cachedIkm.setAccessible(true);
+        cachedIkm.set(lock, null);
+        Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
+        expiresAtMs.setAccessible(true);
+        expiresAtMs.set(lock, 0L);
 
         Method isGrantActive = lockClass.getDeclaredMethod("isGrantActive");
         isGrantActive.setAccessible(true);
         assertFalse((boolean) isGrantActive.invoke(lock),
-                "isGrantActive() must be false after revokeGrant");
+                "isGrantActive() must be false after grant is revoked");
 
         Method getCachedIkm = lockClass.getDeclaredMethod("getCachedIkm");
         getCachedIkm.setAccessible(true);
         assertNull(getCachedIkm.invoke(lock),
-                "getCachedIkm() must return null after revokeGrant");
+                "getCachedIkm() must return null after grant is revoked");
     }
 
     /**

@@ -85,7 +85,6 @@ public class PinSessionRegistry {
         txn.setPinAuthTkn(pinToken);
         txn.setPinHash(pinHash);
         txn.setPasskey(pkeyFile);
-        txn.setPasskeyFileName(pkeyFile.getFileName());
         txn.setUserPresent(true);
         logger.debug("PIN token stored in transaction, size: {} bytes",
                      pinToken != null ? pinToken.length : 0);

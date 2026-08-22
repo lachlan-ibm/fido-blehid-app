@@ -80,13 +80,12 @@
     <string name="cancel">Cancel</string>
     <string name="manage_credentials">Manage Credentials</string>
 
-    <!-- ServerActivity UI labels -->
-    <string name="server_status">Server Status</string>
+    <!-- ServerFragment UI labels -->
     <string name="device_name_label">Device Name: %1$s</string>
     <string name="reconnect">Reconnect</string>
     <string name="disconnect">Disconnect</string>
 
-    <!-- ServerActivity activity log messages -->
+    <!-- ServerFragment log messages -->
     <string name="log_advertising_started">Advertising started</string>
     <string name="log_device_connected">Device connected: %1$s</string>
     <string name="log_device_disconnected">Device disconnected: %1$s</string>
@@ -139,7 +138,6 @@
     <string name="open_settings">Open Settings</string>
     <!-- Advanced Configuration strings -->
     <string name="adv_config_title">Advanced Configuration</string>
-    <string name="adv_config_row_label">Advanced configuration</string>
     <string name="adv_config_button_desc">Open advanced configuration</string>
     <string name="adv_config_hkdf_info_label">HKDF Domain Separation String (info)</string>
     <string name="adv_config_hkdf_info_hint">e.g. FIDO2-PASSKEY-SEED</string>
@@ -177,6 +175,7 @@
     <string name="up_notification_text">Tap to approve the authentication request</string>
 
     <!-- UP timeout configuration strings -->
+    <string name="adv_config_up_background_timeout_label">Background wait timeout (ms, 1000–45000)</string>
     <string name="adv_config_up_dialog_timeout_label">UP dialog timeout (ms, 1000–45000)</string>
     <string name="adv_config_up_bio_timeout_label">Biometric challenge timeout (ms, 1000–45000)</string>
     <string name="adv_config_up_timeout_invalid">Must be an integer between %1$d and %2$d ms</string>

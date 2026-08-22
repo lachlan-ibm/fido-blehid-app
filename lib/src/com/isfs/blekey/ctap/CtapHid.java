@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import com.isfs.blekey.authenticator.UxInteractionLock;
 import com.isfs.blekey.util.Cbor;
 
 /**
@@ -195,9 +196,6 @@ public class CtapHid {
             } else {
                 logger.warn("=== PIN HASH TRACKING: Existing txn has NULL PIN hash!");
             }
-            if (existingTxn.getPasskeyFileName() != null) {
-                txn.setPasskeyFileName(existingTxn.getPasskeyFileName());
-            }
             // Propagate cached user presence so makeCredential / getAssertion still proceed
             if (existingTxn.isUserPresent()) {
                 txn.setUserPresent(true);
@@ -213,13 +211,7 @@ public class CtapHid {
                 txn.setEcdhKeyPair(existingTxn.getEcdhKeyPair());
                 logger.debug("Preserved ecdhKeyPair when updating CID transaction");
             }
-            // Propagate UX state and latch so the latch-wait path survives a txn update.
-            txn.setUxState(existingTxn.getUxState());
-            if (existingTxn.getUxLatch() != null) {
-                txn.setUxLatch(existingTxn.getUxLatch());
-                logger.debug("Preserved uxState={} and uxLatch when updating CID transaction",
-                    existingTxn.getUxState());
-            }
+
         } else {
             logger.warn("=== PIN HASH TRACKING: No existing transaction found for CID!");
         }
@@ -788,7 +780,11 @@ public class CtapHid {
      * @throws IOException if an error occurs while creating the response
      */
     private void wink(byte[] data) throws IOException {
-        ctapAck(0, null);
+        if (UxInteractionLock.get().isUserDenied() )  {
+            ctapErr(Ctap2StatusCode.OPERATION_DENIED);
+        } else {
+            ctapAck(0, null);
+        }
     }
 
     /**

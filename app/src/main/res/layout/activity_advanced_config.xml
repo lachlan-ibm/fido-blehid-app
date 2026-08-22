@@ -96,6 +96,23 @@
 
         </LinearLayout>
 
+        <!-- UP Background Timeout -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/upBackgroundTimeoutLayout"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:hint="@string/adv_config_up_background_timeout_label">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/upBackgroundTimeoutEdit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:maxLength="6" />
+        </com.google.android.material.textfield.TextInputLayout>
+
         <!-- UP Dialog Timeout -->
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/upDialogTimeoutLayout"
@@ -152,25 +169,33 @@
             android:text="@string/adv_config_pin_retries_desc"
             style="@style/TextAppearance.MaterialComponents.Body2" />
 
-        <TextView
-            android:id="@+id/pinRetriesValue"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:textSize="28sp"
-            android:textStyle="bold"
-            android:textColor="@color/ibm_black" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/resetPinRetriesButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/adv_config_pin_retries_reset_button"
-            app:strokeColor="@color/design_default_color_error"
-            android:textColor="@color/design_default_color_error"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+            <TextView
+                android:id="@+id/pinRetriesValue"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:textSize="28sp"
+                android:textStyle="bold"
+                android:textColor="@color/ibm_black" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/resetPinRetriesButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/adv_config_pin_retries_reset_button"
+                app:strokeColor="@color/design_default_color_error"
+                android:textColor="@color/design_default_color_error"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+
+        </LinearLayout>
 
         <!-- HKDF Info Section -->
         <TextView

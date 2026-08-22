@@ -17,9 +17,9 @@
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:padding="18dp">
 
     <!-- App Name Header -->
     <TextView
@@ -30,36 +30,15 @@
         android:textColor="@color/ibm_blue"
         android:textSize="28sp"
         android:gravity="center"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="32dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="16dp"
         android:letterSpacing="0.02" />
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="@color/cool_gray_30"
-        android:layout_marginBottom="24dp" />
-
-    <!-- Connect to Devices -->
-    <Button
-        android:id="@+id/serverButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:minHeight="64dp"
-        android:text="@string/pair_device"
-        android:backgroundTint="@color/ibm_blue"
-        android:textColor="@color/ibm_white"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:paddingVertical="20dp"
-        android:paddingHorizontal="24dp"
-        android:layout_marginBottom="16dp"
-        android:drawableStart="@drawable/device_pairing"
-        android:drawablePadding="16dp"
-        android:letterSpacing="0.02"
-        android:elevation="4dp"
-        android:stateListAnimator="@null"
-        style="@android:style/Widget.Material.Button" />
+        android:layout_marginBottom="18dp" />
 
     <!-- Manage Passkeys -->
     <Button
@@ -103,4 +82,17 @@
         style="@android:style/Widget.Material.Button" />
 
     </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/cool_gray_30" />
+
+    <androidx.fragment.app.FragmentContainerView
+        android:id="@+id/serverFragmentContainer"
+        android:name="com.isfs.blekey.activity.ServerFragment"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
 </LinearLayout>

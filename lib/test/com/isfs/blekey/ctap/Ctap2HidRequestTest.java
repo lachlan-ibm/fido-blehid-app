@@ -122,9 +122,6 @@ public class Ctap2HidRequestTest {
         com.isfs.blekey.ctap.CtapTxn txn = new com.isfs.blekey.ctap.CtapTxn(
                 channelId, null, pinToken, passkey, pinHash);
         
-        // Set just the filename (not absolute path) - resolvePasskeyFile() will combine with FIDO2_HOME
-        txn.setPasskeyFileName(passkeyFileName);
-
         // Pre-approve user presence so makeCredential / getAssertion succeed in tests
         // without needing a real UI interaction.
         txn.setUserPresent(true);
@@ -183,8 +180,8 @@ public class Ctap2HidRequestTest {
         // Register a synchronous UP/UV callback so UX ceremonies complete without UI.
         // Mirrors the strict write order in HIDForegroundService.deliverUpApproved():
         //   1. setUserPresent(true)
-        //   2. setUxState(APPROVED)   ← latch-waiter thread reads this after waking
-        //   3. releaseUxLatch()       ← wakes the latch-waiter thread
+        //   2. setUxState(APPROVED) on UxInteractionLock ← latch-waiter thread reads this after waking
+        //   3. releaseLatch() on UxInteractionLock       ← wakes the latch-waiter thread
         //   4. buildResponse(APPROVED, ...) ← handles legacy deferred-chain path
         com.isfs.blekey.authenticator.AuthenticatorAPI.setUpUvCallback(
             context -> {
@@ -192,8 +189,9 @@ public class Ctap2HidRequestTest {
                 // Steps 1–3: match HIDForegroundService biometric-success path so that
                 // PinFlowHandler's latch-waiter thread sees APPROVED and unblocks.
                 txn.setUserPresent(true);
-                txn.setUxState(com.isfs.blekey.ctap.CtapTxn.CidUxState.APPROVED);
-                txn.releaseUxLatch();
+                com.isfs.blekey.authenticator.UxInteractionLock.get().setUxState(
+                    com.isfs.blekey.authenticator.UxInteractionLock.UxState.APPROVED);
+                com.isfs.blekey.authenticator.UxInteractionLock.get().releaseLatch();
                 // Step 4: handle legacy deferred-chain path (makeCredential/getAssertion).
                 context.buildResponse(
                     com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome.APPROVED,

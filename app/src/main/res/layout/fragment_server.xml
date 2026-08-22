@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+ Copyright IBM 2025
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="8dp"
+    android:background="@android:color/white">
+
+    <!-- Server Status Section -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@color/cool_gray_10"
+        android:padding="10dp"
+        android:layout_marginBottom="10dp"
+        android:elevation="2dp">
+
+        <!-- Server Status Header with BT Icon -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+
+            <TextView
+                android:id="@+id/bleDeviceNameText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="@color/ibm_black"
+                android:letterSpacing="0.02" />
+
+            <!-- Bluetooth Status Icon -->
+            <ImageView
+                android:id="@+id/btStatusIcon"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@android:drawable/stat_sys_data_bluetooth"
+                android:contentDescription="Bluetooth Status"
+                android:tint="@color/device_connected"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="true" />
+            
+            <!-- Advanced configuration button -->
+            <ImageButton
+                android:id="@+id/advancedConfigButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_cog"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/adv_config_button_desc"
+                android:tint="@color/ibm_blue" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Bluetooth Devices Section -->
+    <TextView
+        android:id="@+id/connectedDevicesTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/local_devices"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/noDevicesText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/no_devices_connected"
+        android:textAlignment="center"
+        android:visibility="gone"
+        android:layout_marginBottom="16dp" />
+
+    <ListView
+        android:id="@+id/devicesList"
+        android:layout_width="match_parent"
+        android:layout_height="240dp"
+        android:divider="@android:color/darker_gray"
+        android:dividerHeight="0.5dp"
+        android:visibility="visible" />
+
+</LinearLayout>
