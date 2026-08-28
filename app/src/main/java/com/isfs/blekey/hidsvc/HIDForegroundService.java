@@ -28,13 +28,13 @@ import androidx.core.app.NotificationManagerCompat;
 import com.isfs.blekey.R;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.authenticator.AuthenticatorAPI.UpUvCallback;
+import com.isfs.blekey.authenticator.KeepaliveManager;
 import com.isfs.blekey.authenticator.UpUvRequestCtx;
 import com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome;
 import com.isfs.blekey.authenticator.UxInteractionLock;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
-import com.isfs.blekey.fidoble.KeepaliveManager;
 import com.isfs.blekey.util.KeyUtils;
 import java.security.PrivateKey;
 import java.util.Arrays;
@@ -103,7 +103,7 @@ public class HIDForegroundService extends Service {
     // UP ownership — moved from ServerActivity (Flaw 1 fix)
     // -------------------------------------------------------------------------
 
-    private KeepaliveManager keepaliveManager;
+    private final KeepaliveManager keepaliveManager = new HidKeepaliveManager();
 
     /** Pending context; non-null while a UP ceremony is in progress. */
     private volatile UpUvRequestCtx pendingContext = null;
@@ -196,12 +196,6 @@ public class HIDForegroundService extends Service {
         createNotificationChannel();
         createUpNotificationChannel();
         registerBatteryReceiver();
-
-        // Keepalive sender: write frames through BTHIDService once it is initialised.
-        // The lambda captures `this` so it always uses the live hidService reference.
-        keepaliveManager = new KeepaliveManager(frame -> {
-            if (hidService != null) hidService.sendInputReport(frame);
-        });
     }
 
     @Override
@@ -250,6 +244,7 @@ public class HIDForegroundService extends Service {
         // AuthenticatorAPI.setSecureStorageCallback(new SecureStorageHandler());
         AuthenticatorAPI.setDeferredResponseSender(
             (txn, response) -> sendDeferred(txn, response));
+        AuthenticatorAPI.setKeepaliveManager(keepaliveManager);
 
         // Cancel hook — CTAP cancel frame injects KEEPALIVE_CANCEL into the deferred CtapHid;
         // we clean up the service-side state and ask the delegate to dismiss its dialog.
@@ -271,7 +266,8 @@ public class HIDForegroundService extends Service {
         AuthenticatorAPI.setUpUvCallback(null);
         // AuthenticatorAPI.setSecureStorageCallback(null); // UPUV_GATE_SIMPLIFICATION
         AuthenticatorAPI.setDeferredResponseSender(null);
-        if (keepaliveManager != null) { keepaliveManager.shutdown(); keepaliveManager = null; }
+        AuthenticatorAPI.setKeepaliveManager(null);
+        ((HidKeepaliveManager) keepaliveManager).shutdown();
         unregisterBatteryReceiver();
         if (hidService != null) {
             hidService.unregisterHidDevice();
@@ -433,11 +429,117 @@ public class HIDForegroundService extends Service {
         return pendingContext != null;
     }
 
+    /**
+     * Returns the transaction associated with the current pending UP ceremony, or
+     * {@code null} if none is in progress.  Used by {@link com.isfs.blekey.activity.UvPinEntryActivity}
+     * to store the opened {@link com.isfs.blekey.data.Passkey} before calling
+     * {@link #deliverUpApproved()}.
+     */
+    public CtapTxn getPendingUpTxn() {
+        return pendingUpTxn;
+    }
+
     /** Cancels the pending UP notification (called by activity when dialog is visible). */
     public void cancelUpNotification() {
         NotificationManagerCompat.from(this).cancel(UP_NOTIFICATION_ID);
     }
 
+
+    // -------------------------------------------------------------------------
+    // HidKeepaliveManager — BT Classic HID keepalive implementation
+    // -------------------------------------------------------------------------
+
+    private final class HidKeepaliveManager implements KeepaliveManager {
+
+        private static final long KEEPALIVE_INTERVAL_MS = 100L;
+
+        private final android.os.HandlerThread keepaliveThread;
+        private final android.os.Handler keepaliveHandler;
+
+        /** Active sessions keyed by CID hex string. */
+        private final java.util.Map<String, KeepaliveSession> activeSessions =
+                new java.util.concurrent.ConcurrentHashMap<>();
+
+        HidKeepaliveManager() {
+            keepaliveThread = new android.os.HandlerThread("HidKeepalive");
+            keepaliveThread.start();
+            keepaliveHandler = new android.os.Handler(keepaliveThread.getLooper());
+        }
+
+        @Override
+        public void startKeepalive(CtapTxn txn, byte status) {
+            String key = cidHex(txn);
+            stopByKey(key);
+            KeepaliveSession session = new KeepaliveSession(key, status);
+            activeSessions.put(key, session);
+            Log.d(TAG, "HidKeepalive start key=" + key + " status=0x" + String.format("%02X", status));
+            schedule(session);
+        }
+
+        @Override
+        public void stopKeepalive(CtapTxn txn) {
+            stopByKey(cidHex(txn));
+        }
+
+        private void stopByKey(String key) {
+            KeepaliveSession session = activeSessions.remove(key);
+            if (session != null) {
+                session.active = false;
+                keepaliveHandler.removeCallbacksAndMessages(session);
+                Log.d(TAG, "HidKeepalive stop key=" + key);
+            }
+        }
+
+        void shutdown() {
+            for (KeepaliveSession s : activeSessions.values()) s.active = false;
+            activeSessions.clear();
+            keepaliveHandler.removeCallbacksAndMessages(null);
+            keepaliveThread.quitSafely();
+        }
+
+        private void schedule(KeepaliveSession session) {
+            keepaliveHandler.postDelayed(session.runnable, session, KEEPALIVE_INTERVAL_MS);
+        }
+
+        private void sendFrame(KeepaliveSession session) {
+            if (hidService == null) return;
+            byte[] cid = hexToBytes(session.key);
+            if (cid == null) return;
+            hidService.sendInputReport(CtapHid.buildHidKeepaliveFrame(cid, session.status));
+        }
+
+        private String cidHex(CtapTxn txn) {
+            return bytesToHex(txn.getCid());
+        }
+
+        private byte[] hexToBytes(String hex) {
+            if (hex == null || hex.length() % 2 != 0) return null;
+            byte[] b = new byte[hex.length() / 2];
+            for (int i = 0; i < b.length; i++) {
+                b[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+            }
+            return b;
+        }
+
+        private final class KeepaliveSession {
+            final String key;
+            volatile byte status;
+            volatile boolean active = true;
+
+            KeepaliveSession(String key, byte status) {
+                this.key = key;
+                this.status = status;
+            }
+
+            final Runnable runnable = () -> {
+                if (!active) return;
+                sendFrame(this);
+                if (active) schedule(this);
+            };
+        }
+    }
+
+    // -------------------------------------------------------------------------
 
     private final class UpHandler implements UpUvCallback {
         @Override
@@ -449,17 +551,24 @@ public class HIDForegroundService extends Service {
             CtapTxn txn    = context.getTxn();
             byte[]  cid    = txn.getCid();
             String  cidKey = bytesToHex(cid);
-            if (context.requiresKeepalive()) {
-                stopUpKeepalive();
-                keepaliveManager.startKeepalive(cidKey, KeepaliveManager.STATUS_UP_NEEDED);
-            }
 
             // Store pending state on the service before posting to UI thread.
             pendingContext = context;
             pendingUpTxn   = txn;
 
             upHandler.post(() -> {
-                // UP already collected on this txn and the command needs biometric only
+                // GET_TKN_UV: launch the PIN-entry Activity directly — no Allow/Deny dialog.
+                if (context.getCeremonyType() == UpUvRequestCtx.CeremonyType.GET_TKN_UV) {
+                    Log.d(TAG, "UP: GET_TKN_UV — launching UvPinEntryActivity");
+                    startUpTimeout();
+                    Intent pinIntent = new Intent(HIDForegroundService.this,
+                            com.isfs.blekey.activity.UvPinEntryActivity.class);
+                    pinIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(pinIntent);
+                    return;
+                }
+
+                // UP already collected on this txn and the command needs biometric only —
                 // skip the Allow/Deny dialog and go straight to the biometric prompt.
                 if (txn.isUserPresent() && context.requiresBiometric()) {
                     Log.d(TAG, "UP: txn already has UP + requiresBiometric — skipping dialog, delivering approved");
@@ -586,8 +695,8 @@ public class HIDForegroundService extends Service {
     }
 
     private void stopUpKeepalive() {
-        if (pendingUpTxn != null && keepaliveManager != null) {
-            keepaliveManager.stopKeepalive(bytesToHex(pendingUpTxn.getCid()));
+        if (pendingUpTxn != null) {
+            keepaliveManager.stopKeepalive(pendingUpTxn);
         }
     }
 

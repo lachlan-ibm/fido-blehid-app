@@ -66,6 +66,7 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     private SwitchCompat      autoStartSwitch;
     private SwitchCompat      ctap1CompatSwitch;
     private TextView          pinRetriesValue;
+    private TextView          uvRetriesValue;
 
     private TextInputLayout   upBackgroundTimeoutLayout;
     private TextInputEditText upBackgroundTimeoutEdit;
@@ -159,6 +160,7 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         findViewById(R.id.resetPlatformKeyButton).setOnClickListener(v -> onResetPlatformKeyClicked());
 
         pinRetriesValue = findViewById(R.id.pinRetriesValue);
+        uvRetriesValue  = findViewById(R.id.uvRetriesValue);
         refreshPinRetriesDisplay();
         findViewById(R.id.resetPinRetriesButton).setOnClickListener(v -> onResetPinRetriesClicked());
     }
@@ -357,10 +359,10 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     // -------------------------------------------------------------------------
 
     private void refreshPinRetriesDisplay() {
-        int current = AuthenticatorAPI.getPinRetries();
-        pinRetriesValue.setText(
-                getString(R.string.adv_config_pin_retries_value,
-                          current, AuthenticatorAPI.getMaxPinRetries()));
+        pinRetriesValue.setText(getString(R.string.adv_config_pin_retries_value,
+                AuthenticatorAPI.getPinRetries(), AuthenticatorAPI.getMaxPinRetries()));
+        uvRetriesValue.setText(getString(R.string.adv_config_uv_retries_value,
+                AuthenticatorAPI.getUvRetries(), AuthenticatorAPI.getMaxUvRetries()));
     }
 
     private void onResetPinRetriesClicked() {

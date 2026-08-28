@@ -202,9 +202,12 @@ public class HIDPasskey {
         try {
             cmd.injectDeferredResponse(cborResponse);
             byte[] frame;
+            int frameCount = 0;
             while ((frame = cmd.getResponseSegment()) != null) {
+                frameCount++;
                 if (_transport != null) {
                     _transport.sendInputReport(frame);
+                    logger.info("=== DEFERRED RESPONSE: Frame #{} sent successfully", frameCount);
                 } else {
                     logger.error("sendDeferredResponse: _transport is NULL — cannot send frame");
                     break;

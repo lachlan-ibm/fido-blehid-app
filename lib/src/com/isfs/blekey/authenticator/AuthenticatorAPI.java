@@ -74,6 +74,22 @@ public class AuthenticatorAPI {
     }
 
     // -------------------------------------------------------------------------
+    // KeepaliveManager
+    // -------------------------------------------------------------------------
+
+    /** Keepalive hook — volatile so background threads see updates immediately. */
+    private static volatile KeepaliveManager keepaliveManager = null;
+
+    public static void setKeepaliveManager(KeepaliveManager km) {
+        keepaliveManager = km;
+    }
+
+    /** Returns the current keepalive manager; accessible to sub-package handlers. */
+    public static KeepaliveManager getKeepaliveManager() {
+        return keepaliveManager;
+    }
+
+    // -------------------------------------------------------------------------
     // DeferredResponseSender
     // -------------------------------------------------------------------------
 
@@ -120,7 +136,7 @@ public class AuthenticatorAPI {
     }
 
     // -------------------------------------------------------------------------
-    // PIN retry accessors (delegated to PinSessionRegistry)
+    // PIN / UV retry accessors (delegated to PinSessionRegistry)
     // -------------------------------------------------------------------------
 
     /** Returns the number of PIN retry attempts remaining before lockout. */
@@ -133,12 +149,23 @@ public class AuthenticatorAPI {
         return PinSessionRegistry.MAX_PIN_RETRIES;
     }
 
+    /** Returns the number of built-in UV retry attempts remaining before lockout. */
+    public static int getUvRetries() {
+        return PinSessionRegistry.getUvRetries();
+    }
+
+    /** Returns the maximum number of built-in UV attempts allowed before lockout. */
+    public static int getMaxUvRetries() {
+        return PinSessionRegistry.MAX_UV_RETRIES;
+    }
+
     /**
-     * Resets the PIN retry counter to the maximum value.
+     * Resets both the PIN and UV retry counters to their maximum values.
      * Call only from an operator-authenticated UI gesture.
      */
     public static void resetPinRetries() {
         PinSessionRegistry.resetPinRetries();
+        PinSessionRegistry.resetUvRetries();
     }
 
     // -------------------------------------------------------------------------
@@ -185,7 +212,9 @@ public class AuthenticatorAPI {
     static byte[] buildGetInfoCtap2Response() {
         LinkedHashMap<String, Boolean> capabilities = new LinkedHashMap<>();
         capabilities.put("rk", true);
-        capabilities.put("plat", true);
+        capabilities.put("up", true);
+        capabilities.put("uv", true); // built-in pin auth activity
+        capabilities.put("pinUvAuthToken", true);
         capabilities.put("clientPin", true);
         LinkedHashMap<Integer, Object> info = new LinkedHashMap<>();
         info.put(0x01, new String[]{"FIDO_2_1", "FIDO_2_0"});
@@ -205,7 +234,7 @@ public class AuthenticatorAPI {
     static byte[] buildGetInfoCtap1CompatResponse() {
         LinkedHashMap<String, Boolean> capabilities = new LinkedHashMap<>();
         capabilities.put("rk", true);
-        capabilities.put("plat", true);
+        capabilities.put("up", true);
         LinkedHashMap<Integer, Object> info = new LinkedHashMap<>();
         info.put(0x01, new String[]{"FIDO_2_0", "U2F_V2"});
         info.put(0x02, new String[]{"hmac-secret"});
@@ -242,6 +271,7 @@ public class AuthenticatorAPI {
      */
     public static byte[] process(CtapTxn txn, int api, Map<Integer, Object> request) {
         AuthenticatorCmd cmd = AuthenticatorCmd.fromInt(api);
+        logger.debug(String.format("%d", cmd.getValue()));
         switch (cmd) {
             case MKCRED:
                 return MakeCredentialHandler.makeCredential(txn, request);

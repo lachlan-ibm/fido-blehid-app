@@ -863,15 +863,32 @@ public class CtapHid {
      * @return zero-padded 64-byte HID input report
      */
     public static byte[] buildHidErrorFrame(byte[] cid, Ctap2StatusCode code) {
+        return buildHidFrame(cid, (byte) CtapHidCmd.ERROR.getValue(), (byte) code.getCode());
+    }
+
+    /**
+     * Builds a zero-padded 64-byte {@code CTAPHID_KEEPALIVE} HID input report frame.
+     *
+     * <p>Format: {@code CID[4] | 0xBB | 0x00 | 0x01 | status | 0x00...×56}</p>
+     *
+     * @param cid    4-byte channel identifier
+     * @param status keepalive status byte (0x01 = PROCESSING, 0x02 = UP_NEEDED)
+     * @return zero-padded 64-byte HID input report
+     */
+    public static byte[] buildHidKeepaliveFrame(byte[] cid, byte status) {
+        return buildHidFrame(cid, (byte) CtapHidCmd.KEEP_ALIVE.getValue(), status);
+    }
+
+    private static byte[] buildHidFrame(byte[] cid, byte cmd, byte status) {
         byte[] frame = new byte[64]; // zero-padded to 64 bytes
         frame[0] = cid[0];
         frame[1] = cid[1];
         frame[2] = cid[2];
         frame[3] = cid[3];
-        frame[4] = (byte) (0x80 | CtapHidCmd.ERROR.getValue()); // 0xBF
+        frame[4] = (byte) (0x80 | cmd);
         frame[5] = 0x00;  // BCNT high byte
         frame[6] = 0x01;  // BCNT low byte = 1
-        frame[7] = (byte) code.getCode();
-        return frame;
+        frame[7] = status;
+        return frame;     
     }
 }

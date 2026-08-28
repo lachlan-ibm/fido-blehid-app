@@ -4,6 +4,7 @@
 package com.isfs.blekey.authenticator;
 
 import com.isfs.blekey.ctap.CtapTxn;
+
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,6 +38,7 @@ public final class UpUvRequestCtx {
         GET_INFO,
         GET_KEY,
         GET_TKN,
+        GET_TKN_UV,
         MAKE_CREDENTIAL,
         GET_ASSERTION
     }
@@ -151,17 +153,6 @@ public final class UpUvRequestCtx {
 
     /** Returns the ceremony type for dialog text selection. */
     public CeremonyType getCeremonyType() { return ceremonyType; }
-
-    /**
-     * Returns {@code true} if the transport layer should start a keepalive loop.
-     * Only {@code makeCredential} and {@code getAssertion} block waiting for user
-     * presence; all other ceremonies return immediately.
-     */
-    public boolean requiresKeepalive() {
-        return ceremonyType == CeremonyType.GET_INFO
-            || ceremonyType == CeremonyType.MAKE_CREDENTIAL
-            || ceremonyType == CeremonyType.GET_ASSERTION;
-    }
 
     /**
      * Builds the CTAP wire response for the given {@code outcome} and delivers it via

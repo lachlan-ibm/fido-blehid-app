@@ -33,6 +33,8 @@ import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.authenticator.AuthenticatorCmd;
 import com.isfs.blekey.authenticator.TestConfig;
 import com.isfs.blekey.authenticator.TestHelper;
+import com.isfs.blekey.authenticator.UpUvRequestCtx;
+import com.isfs.blekey.authenticator.UxInteractionLock;
 import com.isfs.blekey.authenticator.implapi.pin.PinSubCmd;
 import com.isfs.blekey.data.Passkey;
 
@@ -117,7 +119,14 @@ public class Ctap2HidRequestTest {
         
         // Write the passkey to the temp file so it exists
         com.isfs.blekey.data.Passkey.writeKey(passkey, pinHash, tempFile);
-        
+
+        // Stamp the file name onto the in-memory passkey so that
+        // ResidentCredentialStore.resolvePasskeyFile() can locate the file.
+        java.lang.reflect.Field fileNameField =
+                com.isfs.blekey.data.Passkey.class.getDeclaredField("fileName");
+        fileNameField.setAccessible(true);
+        fileNameField.set(passkey, passkeyFileName);
+
         // Create a CtapTxn with the passkey (no cmd parameter needed for test setup)
         com.isfs.blekey.ctap.CtapTxn txn = new com.isfs.blekey.ctap.CtapTxn(
                 channelId, null, pinToken, passkey, pinHash);
@@ -189,12 +198,11 @@ public class Ctap2HidRequestTest {
                 // Steps 1–3: match HIDForegroundService biometric-success path so that
                 // PinFlowHandler's latch-waiter thread sees APPROVED and unblocks.
                 txn.setUserPresent(true);
-                com.isfs.blekey.authenticator.UxInteractionLock.get().setUxState(
-                    com.isfs.blekey.authenticator.UxInteractionLock.UxState.APPROVED);
-                com.isfs.blekey.authenticator.UxInteractionLock.get().releaseLatch();
+                UxInteractionLock.get().setUxState(UxInteractionLock.UxState.APPROVED);
+                UxInteractionLock.get().recordBioGrant(new byte[32], 30_000L);
+                UxInteractionLock.get().releaseLatch();
                 // Step 4: handle legacy deferred-chain path (makeCredential/getAssertion).
-                context.buildResponse(
-                    com.isfs.blekey.authenticator.UpUvRequestCtx.Outcome.APPROVED,
+                context.buildResponse(UpUvRequestCtx.Outcome.APPROVED,
                     bytes -> {
                         com.isfs.blekey.ctap.CtapHid deferred = txn.takeDeferredCmd();
                         if (deferred != null && bytes != null) {
@@ -277,8 +285,9 @@ public class Ctap2HidRequestTest {
             throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
-            byte[] seg = ctapHid.getResponseSegment();
-            if (seg != null) return seg;
+            if (ctapHid.isResponseReady()) {
+                return ctapHid.getResponseSegment();
+            }
             Thread.sleep(10);
         }
         return null;
@@ -291,10 +300,6 @@ public class Ctap2HidRequestTest {
         get.setAccessible(true);
         Object lock = get.invoke(null);
 
-        java.lang.reflect.Field ownerCid = lockClass.getDeclaredField("ownerCid");
-        ownerCid.setAccessible(true);
-        ownerCid.set(lock, null);
-
         java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
         expiresAtMs.setAccessible(true);
         expiresAtMs.set(lock, 0L);
@@ -302,10 +307,6 @@ public class Ctap2HidRequestTest {
         java.lang.reflect.Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
         cachedIkm.setAccessible(true);
         cachedIkm.set(lock, null);
-
-        java.lang.reflect.Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
-        grantExpiresAtMs.set(lock, 0L);
     }
 
     /**
@@ -597,12 +598,14 @@ public class Ctap2HidRequestTest {
         // Use the PIN hash created in setUp
         // This is the same PIN hash that was used to create the CtapTxn
         
-        // Encrypt PIN hash with shared secret
+        // Encrypt only the lower 16 bytes of the PIN hash (CTAP spec: pinHashEnc =
+        // AES-CBC(sharedSecret, LEFT(pinHash, 16))).  Passkey.openKey() expects a
+        // 16-byte lower-hash argument; passing 32 bytes causes it to reject the call.
         SecretKeySpec secretKeySpec = new SecretKeySpec(sharedSecret, "AES");
         IvParameterSpec ivSpec = new IvParameterSpec(new byte[16]); // All zeros IV
         Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, ivSpec);
-        byte[] encryptedPinHash = cipher.doFinal(pinHash);
+        byte[] encryptedPinHash = cipher.doFinal(java.util.Arrays.copyOf(pinHash, 16));
         
         // Create parameters map for getPINToken
         Map<Integer, Object> params = new HashMap<>();

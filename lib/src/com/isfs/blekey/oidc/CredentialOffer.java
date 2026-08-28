@@ -74,7 +74,7 @@ public class CredentialOffer {
         
         this.rawOffer = offerMap;
         this.receivedAtMillis = receivedAtMillis;
-        
+        logger.debug(offerMap.toString());
         // Required: credential_issuer
         this.credentialIssuer = (String) offerMap.get("credential_issuer");
         if (this.credentialIssuer == null || this.credentialIssuer.isEmpty()) {
@@ -83,6 +83,9 @@ public class CredentialOffer {
         
         // Required: credentials (array of credential types)
         Object credentialsObj = offerMap.get("credentials");
+        if (credentialsObj == null) {
+            credentialsObj = offerMap.get("credential_configuration_ids"); //DC container uses this key; why?
+        }
         if (credentialsObj == null) {
             throw new OidcException("credentials is required in credential offer");
         }

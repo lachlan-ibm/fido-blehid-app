@@ -5,8 +5,6 @@ package com.isfs.blekey.authenticator;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.security.KeyPair;
 import java.util.HashMap;
@@ -71,37 +69,9 @@ public class AuthenticatorAPIUxSyncTest {
     // -------------------------------------------------------------------------
 
     private static void resetUpLock() throws Exception {
-        Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
-        Method get = lockClass.getDeclaredMethod("get");
-        get.setAccessible(true);
-        Object lock = get.invoke(null);
-
-        Field ownerCid = lockClass.getDeclaredField("ownerCid");
-        ownerCid.setAccessible(true);
-        ownerCid.set(lock, null);
-
-        Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
-        expiresAtMs.setAccessible(true);
-        expiresAtMs.set(lock, 0L);
-
-        Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
-        cachedIkm.setAccessible(true);
-        cachedIkm.set(lock, null);
-
-        Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
-        grantExpiresAtMs.set(lock, 0L);
+        UxInteractionLock.get().reset();
     }
 
-    private static void preAcquireLock(byte[] cid) throws Exception {
-        Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
-        Method get = lockClass.getDeclaredMethod("get");
-        get.setAccessible(true);
-        Object lock = get.invoke(null);
-        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
-        tryAcquire.setAccessible(true);
-        tryAcquire.invoke(lock, (Object) cid);
-    }
 
     // -------------------------------------------------------------------------
     // getInfo tests (G1, G2)
@@ -130,18 +100,21 @@ public class AuthenticatorAPIUxSyncTest {
      */
     @Test
     public void testGetInfo_OtherCidHoldsLock_ReturnsSuccess() throws Exception {
-        byte[] OTHER_CID = {0x0A, 0x0B, 0x0C, 0x0D};
-        byte[] MY_CID    = {0x01, 0x02, 0x03, 0x04};
+        byte[] MY_CID = {0x01, 0x02, 0x03, 0x04};
 
-        preAcquireLock(OTHER_CID);
-        AuthenticatorAPI.setUpUvCallback(ctx -> {}); // stub so pre-refactor null-guard is not hit
+        // Simulate another CID already holding the UX lock (IN_PROGRESS).
+        // fireIfIdle skips when state != IDLE, so getInfo falls through to the
+        // non-null return at line 305 of AuthenticatorAPI.getInfo().
+        UxInteractionLock.get().setStateInProgress();
+
+        AuthenticatorAPI.setUpUvCallback(ctx -> {}); // stub — must not be called
 
         CtapTxn txn = new CtapTxn();
         txn.setCid(MY_CID);
 
         byte[] response = AuthenticatorAPI.getInfo(txn, new HashMap<>());
 
-        assertNotNull(response, "getInfo must not return null when lock held by another CID");
+        assertNotNull(response, "getInfo must not return null when lock is IN_PROGRESS");
         assertEquals(0x00, response[0] & 0xFF,
                 "getInfo must return SUCCESS regardless of lock state after §4.1 refactor");
     }
@@ -160,7 +133,6 @@ public class AuthenticatorAPIUxSyncTest {
 
         CtapTxn txn = new CtapTxn();
         txn.setCid(new byte[]{0x01, 0x02, 0x03, 0x04});
-        preAcquireLock(txn.getCid());
 
         byte[] response = AuthenticatorAPI.getInfo(txn, new HashMap<>());
         if (response == null) response = capturedResponse.get();
@@ -193,7 +165,6 @@ public class AuthenticatorAPIUxSyncTest {
 
         CtapTxn txn = new CtapTxn();
         txn.setCid(new byte[]{0x01, 0x02, 0x03, 0x04});
-        preAcquireLock(txn.getCid());
 
         byte[] response = AuthenticatorAPI.getInfo(txn, new HashMap<>());
         if (response == null) response = capturedResponse.get();

@@ -44,7 +44,8 @@ public class IssuerMetadata {
     
     private final String credentialIssuer;
     private final String credentialEndpoint;
-    private final String tokenEndpoint;
+    private String tokenEndpoint;
+    private final List<Map<String, Object>> authorization_servers;
     private final List<Map<String, Object>> credentialsSupported;
     private final Map<String, Object> rawMetadata;
     
@@ -54,7 +55,7 @@ public class IssuerMetadata {
      * @param metadataMap The parsed issuer metadata JSON
      * @throws OidcException if required fields are missing
      */
-    public IssuerMetadata(Map<String, Object> metadataMap) throws OidcException {
+    public IssuerMetadata(Map<String, Object> metadataMap, HttpClient httpClient) throws OidcException {
         if (metadataMap == null) {
             throw new OidcException("Issuer metadata cannot be null");
         }
@@ -92,9 +93,53 @@ public class IssuerMetadata {
         } else {
             this.credentialsSupported = new ArrayList<>();
         }
+
+        this.authorization_servers = new ArrayList<>();
+        Object authServers = metadataMap.get("authorization_servers");
+        if (authServers instanceof List) {
+            for (Object svrObj : (List<Object>) authServers) {
+                Map<String, Object> asMetadata = fetchAuthServerMetadata((String) svrObj, httpClient);
+                if (asMetadata != null) {
+                    this.authorization_servers.add(asMetadata);
+                }
+            }
+        }
+
+        if (this.tokenEndpoint == null) {
+            for (Map<String, Object> asDoc : this.authorization_servers) {
+                if (asDoc.get("token_endpoint") instanceof String) {
+                    this.tokenEndpoint = (String) asDoc.get("token_endpoint");
+                    break;
+                }
+            }
+        }
         
         logger.debug("Parsed issuer metadata: issuer={}, credentialEndpoint={}, tokenEndpoint={}, credentialsSupported={}",
                     credentialIssuer, credentialEndpoint, tokenEndpoint, credentialsSupported.size());
+    }
+
+
+    private static Map<String, Object> fetchAuthServerMetadata(String authServerUrl, HttpClient httpClient) {
+        String base = authServerUrl.endsWith("/") ? authServerUrl.substring(0, authServerUrl.length() - 1) : authServerUrl;
+        for (String path : new String[]{
+                "/.well-known/oauth-authorization-server",
+                "/.well-known/openid-configuration"}) {
+            try {
+                Map<String, String> headers = new HashMap<>();
+                headers.put("Accept", "application/json");
+                HttpResponse r = httpClient.getWithRetry(base + path, headers, RetryPolicy.ISSUANCE);
+                if (r.isSuccessful()) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> asDoc = (Map<String, Object>) JsonUtils.decode(r.getBody(), Map.class);
+                    if (asDoc != null) {
+                        return asDoc;
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to fetch AS metadata from {}{}: {}", base, path, e.getMessage());
+            }
+        }
+        return null;
     }
     
     /**
@@ -137,8 +182,10 @@ public class IssuerMetadata {
                 throw new OidcException("Failed to fetch issuer metadata: HTTP " + response.getStatusCode());
             }
             
-            // Parse metadata
-            return fromJson(response.getBody());
+            // Parse metadata to JSON and process
+            return new IssuerMetadata(
+                (Map<String, Object>) JsonUtils.decode(response.getBody(), Map.class),
+                httpClient);
             
         } catch (HttpException e) {
             logger.error("HTTP error fetching issuer metadata", e);
@@ -163,7 +210,7 @@ public class IssuerMetadata {
             if (metadataMap == null) {
                 throw new OidcException("Failed to parse issuer metadata JSON");
             }
-            return new IssuerMetadata(metadataMap);
+            return new IssuerMetadata(metadataMap, null);
         } catch (Exception e) {
             logger.error("Failed to parse issuer metadata JSON", e);
             throw new OidcException("Failed to parse issuer metadata JSON: " + e.getMessage(), e);

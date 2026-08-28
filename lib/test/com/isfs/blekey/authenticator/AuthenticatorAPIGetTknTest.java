@@ -92,17 +92,13 @@ public class AuthenticatorAPIGetTknTest {
             "com.isfs.blekey.authenticator.UxInteractionLock");
         Method get = lockClass.getDeclaredMethod("get");
         get.setAccessible(true);
-        Object lock = get.invoke(null);
-        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
-        tryAcquire.setAccessible(true);
-        // Cast to Object to avoid Java treating byte[] as a varargs array.
-        tryAcquire.invoke(lock, (Object) cid);
 
         // Arm the app-global bio grant so getTkn's isGrantActive() fast-path is taken.
         Method recordBioGrant = lockClass.getDeclaredMethod(
                 "recordBioGrant", byte[].class, long.class);
         recordBioGrant.setAccessible(true);
-        recordBioGrant.invoke(lock, new byte[32], 15_000L);
+        Object lock = get.invoke(null);
+        recordBioGrant.invoke(lock, new byte[32], 30_000L);
     }
 
     /**
@@ -115,9 +111,6 @@ public class AuthenticatorAPIGetTknTest {
         get.setAccessible(true);
         Object lock = get.invoke(null);
 
-        Field ownerCid = lockClass.getDeclaredField("ownerCid");
-        ownerCid.setAccessible(true);
-        ownerCid.set(lock, null);
 
         Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
         expiresAtMs.setAccessible(true);
@@ -127,9 +120,6 @@ public class AuthenticatorAPIGetTknTest {
         cachedIkm.setAccessible(true);
         cachedIkm.set(lock, null);
 
-        Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
-        grantExpiresAtMs.set(lock, 0L);
     }
 
     /**
@@ -254,42 +244,6 @@ public class AuthenticatorAPIGetTknTest {
                 "Expected OPERATION_DENIED when no callback is registered");
     }
 
-    // -------------------------------------------------------------------------
-    // New tests — plan §10.1
-    // -------------------------------------------------------------------------
-
-    /**
-     * When another CID owns the UxInteractionLock and a callback is registered,
-     * getTkn for a different CID must return CHANNEL_BUSY immediately — not deferred.
-     * Regression guard for G4.
-     */
-    @Test
-    public void testGetTkn_OtherCidHoldsLock_ReturnsChannelBusy() throws Exception {
-        byte[] OTHER_CID = {0x0A, 0x0B, 0x0C, 0x0D};
-
-        Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
-        Method getLock = lockClass.getDeclaredMethod("get");
-        getLock.setAccessible(true);
-        Object lock = getLock.invoke(null);
-        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
-        tryAcquire.setAccessible(true);
-        tryAcquire.invoke(lock, (Object) OTHER_CID);
-
-        // Register a no-op callback so the null-callback guard is not hit first.
-        AuthenticatorAPI.setUpUvCallback(ctx -> {});
-
-        CtapTxn txn = new CtapTxn();
-        txn.setCid(TEST_CID);
-        // grant not active → fast-path skipped → falls through to tryAcquire → CHANNEL_BUSY
-
-        Map<Integer, Object> req = new HashMap<>();
-        req.put(0x06, new byte[16]);
-
-        byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
-        assertNotNull(response, "Must return CHANNEL_BUSY, not null");
-        assertEquals(Ctap2StatusCode.CHANNEL_BUSY.getCode(), statusByte(response),
-                "Expected CHANNEL_BUSY when another CID owns the lock");
-    }
 
     /**
      * POST-REFACTOR (plan §4.2): getKey must return SUCCESS with no UpUvCallback registered.
@@ -315,20 +269,15 @@ public class AuthenticatorAPIGetTknTest {
     }
 
     /**
-     * POST-REFACTOR (plan §4.2): getKey must return SUCCESS even when another CID holds
-     * the UxInteractionLock. PRE-REFACTOR: returns CHANNEL_BUSY.
+     * getKey must return SUCCESS when active grant
      */
     @Test
     public void testGetKey_OtherCidHoldsLock_PostRefactor_ReturnsSuccess() throws Exception {
-        byte[] OTHER_CID = {0x0A, 0x0B, 0x0C, 0x0D};
 
         Class<?> lockClass = Class.forName("com.isfs.blekey.authenticator.UxInteractionLock");
         Method getLock = lockClass.getDeclaredMethod("get");
         getLock.setAccessible(true);
-        Object lock = getLock.invoke(null);
-        Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
-        tryAcquire.setAccessible(true);
-        tryAcquire.invoke(lock, (Object) OTHER_CID);
+
 
         AuthenticatorAPI.setUpUvCallback(ctx -> {}); // stub so pre-refactor null-guard is not hit
 

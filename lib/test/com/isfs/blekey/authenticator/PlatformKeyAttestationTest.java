@@ -4,7 +4,6 @@
 package com.isfs.blekey.authenticator;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 import java.io.File;
 import java.lang.reflect.Method;
@@ -93,31 +92,12 @@ public class PlatformKeyAttestationTest {
         resetUpLock();
     }
 
-    /**
-     * Pre-acquires the UxInteractionLock for {@code cid} so that the tryAcquire
-     * guard in commands like makeCredential does not reject the request.
-     */
-    private static void preAcquireLock(byte[] cid) throws Exception {
-        Class<?> lockClass = Class.forName(
-            "com.isfs.blekey.authenticator.UxInteractionLock");
-        java.lang.reflect.Method get = lockClass.getDeclaredMethod("get");
-        get.setAccessible(true);
-        Object lock = get.invoke(null);
-        java.lang.reflect.Method tryAcquire = lockClass.getDeclaredMethod("tryAcquire", byte[].class);
-        tryAcquire.setAccessible(true);
-        tryAcquire.invoke(lock, (Object) cid);
-    }
-
     private static void resetUpLock() throws Exception {
         Class<?> lockClass = Class.forName(
             "com.isfs.blekey.authenticator.UxInteractionLock");
         java.lang.reflect.Method get = lockClass.getDeclaredMethod("get");
         get.setAccessible(true);
         Object lock = get.invoke(null);
-
-        java.lang.reflect.Field ownerCid = lockClass.getDeclaredField("ownerCid");
-        ownerCid.setAccessible(true);
-        ownerCid.set(lock, null);
 
         java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
         expiresAtMs.setAccessible(true);
@@ -127,9 +107,6 @@ public class PlatformKeyAttestationTest {
         cachedIkm.setAccessible(true);
         cachedIkm.set(lock, null);
 
-        java.lang.reflect.Field grantExpiresAtMs = lockClass.getDeclaredField("grantExpiresAtMs");
-        grantExpiresAtMs.setAccessible(true);
-        grantExpiresAtMs.set(lock, 0L);
     }
 
 
@@ -238,10 +215,6 @@ public class PlatformKeyAttestationTest {
         recordBioGrant.setAccessible(true);
         recordBioGrant.invoke(lock, testPlatformKeyPair.getPrivate().getEncoded(), 15_000L);
 
-        // Pre-acquire the UP lock. With grant active, makeCredential takes the synchronous
-        // fast-path (returns directly) rather than the deferred UpUvCallback path, so capture
-        // the direct return value; fall back to capturedResponse for any deferred path.
-        preAcquireLock(testCid);
         byte[] response = MakeCredentialHandler.makeCredential(txn, req);
         if (response == null) response = capturedResponse.get();
         assertNotNull(response, "Response must not be null");

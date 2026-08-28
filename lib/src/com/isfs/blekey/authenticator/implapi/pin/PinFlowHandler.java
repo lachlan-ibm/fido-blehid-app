@@ -99,6 +99,12 @@ public class PinFlowHandler {
             case GETTKN:
                 logger.debug("PinFlowHandler: Processing GETTKN");
                 return getTkn(txn, req);
+            case GETTKNUV:
+                logger.debug("PinFlowHandler: Processing GETTKNUV");
+                return getTknBuiltIn(txn, req);
+            case GETUVRETRY:
+                logger.debug("PinFlowHandler: Processing GETUVRETRY");
+                return uvRty(txn, req);
             default:
                 logger.debug("PinFlowHandler: Invalid PIN subcommand: {}", cmd);
                 return CtapResponse.error(Ctap2StatusCode.INVALID_COMMAND);
@@ -188,12 +194,102 @@ public class PinFlowHandler {
     }
 
     // -------------------------------------------------------------------------
+    // getTknBuiltIn — GETTKNUV (0x06): built-in UV via in-app PIN Activity
+    // -------------------------------------------------------------------------
+
+    /**
+     * Handles {@code getPinUvAuthTokenUsingUvWithPermissions} (subCommand 0x06).
+     * If a prior ceremony is {@code IN_PROGRESS}, waits on the latch (ASYNC) before
+     * triggering the in-app PIN Activity.
+     */
+    private static byte[] getTknBuiltIn(CtapTxn txn, Map<Integer, Object> req) {
+        if (txn == null) {
+            logger.warn("getTknBuiltIn: null txn — OPERATION_DENIED");
+            return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
+        if (PinSessionRegistry.getUvRetries() == 0) {
+            logger.warn("getTknBuiltIn: uvRetries exhausted — UV_BLOCKED");
+            return CtapResponse.error(Ctap2StatusCode.UV_BLOCKED);
+        }
+
+        logger.debug("getTknBuiltIn: req keys={} passkey={} pinHash={} ecdhKeyPair={}",
+                req.keySet(),
+                txn.getPasskey() != null ? txn.getPasskey().getFileName() : "null",
+                txn.getPinHash() != null ? txn.getPinHash().length + "bytes" : "null",
+                txn.getEcdhKeyPair() != null ? "present" : "null");
+
+        byte[] result = UpUvGate.await(
+            txn,
+            "getTknBuiltIn",
+            null,
+            UpUvGate.LatchStrategy.ASYNC,
+            UpUvRequestCtx.CeremonyType.GET_TKN_UV,
+            () -> generateUvToken(txn, req)
+        );
+        logger.debug("getTknBuiltIn: UpUvGate.await returned {}", result == null ? "null (deferred)" : result.length + "bytes, status=0x" + String.format("%02x", result[0]));
+        return result;
+    }
+
+    /**
+     * Generates the UV token: ECDH + random 32-byte nonce encrypted with the shared
+     * secret, committed to the CID session via
+     * {@link PinSessionRegistry#updateAuthenticationState}.
+     *
+     * <p>Requires that {@code GETKEY} has already been called on this CID so that
+     * {@code txn.getEcdhKeyPair()} is non-null.</p>
+     */
+    static byte[] generateUvToken(CtapTxn txn, Map<Integer, ?> req) {
+        logger.debug("generateUvToken: passkey={} pinHash={} ecdhKeyPair={}",
+                txn.getPasskey() != null ? txn.getPasskey().getFileName() : "null",
+                txn.getPinHash() != null ? txn.getPinHash().length + "bytes" : "null",
+                txn.getEcdhKeyPair() != null ? "present" : "null");
+        PublicKey clientKey = extractClientPublicKey(req);
+        if (clientKey == null) {
+            logger.warn("generateUvToken: clientKey null — MISSING_PARAMETER");
+            return CtapResponse.error(Ctap2StatusCode.MISSING_PARAMETER);
+        }
+        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        if (sharedSecret == null) {
+            logger.warn("generateUvToken: sharedSecret null — OTHER");
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
+        }
+        try {
+            byte[] uvToken = new byte[PIN_TOKEN_SIZE];
+            SECURE_RANDOM.nextBytes(uvToken);
+            byte[] encryptedUvToken = performAesCbc(Cipher.ENCRYPT_MODE, uvToken, sharedSecret);
+            PinSessionRegistry.updateAuthenticationState(txn, txn.getPasskey(), uvToken, txn.getPinHash());
+            PinSessionRegistry.resetUvRetries();
+            byte[] response = new PinTokenResponseBuilder().withPinToken(encryptedUvToken).build();
+            logger.debug("generateUvToken: sending {} bytes, status=0x{}", response.length, String.format("%02x", response[0]));
+            return response;
+        } catch (GeneralSecurityException e) {
+            int remaining = PinSessionRegistry.decrementUvRetries();
+            logger.error("generateUvToken: crypto failure, uvRetries remaining: {}", remaining, e);
+            return handleCryptographicException(e);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // pinRty
     // -------------------------------------------------------------------------
 
     private static byte[] pinRty(CtapTxn txn, Map<Integer, Object> req) {
         Map<Integer, Object> rsp = Map.of(0x03, PinSessionRegistry.getPinRetries());
         PinSessionRegistry.decrementRetries();
+        return CtapResponse.success(Cbor.encode(rsp));
+    }
+
+    // -------------------------------------------------------------------------
+    // uvRty — GETUVRETRY (0x07)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the number of built-in UV retries remaining (CBOR map key {@code 0x05}).
+     * Does not decrement — the counter decrements only on a failed UV attempt.
+     */
+    private static byte[] uvRty(CtapTxn txn, Map<Integer, Object> req) {
+        Map<Integer, Object> rsp = Map.of(0x05, PinSessionRegistry.getUvRetries());
         return CtapResponse.success(Cbor.encode(rsp));
     }
 

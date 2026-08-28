@@ -42,13 +42,12 @@ jobs:
           KEYSTORE_PATH: release-keystore.jks
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew :app:assembleRelease \
             -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/release-keystore.jks" \
             -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEYSTORE_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+            -Pandroid.injected.signing.key.alias="$KEYSTORE_ALIAS" #\
+            #-Pandroid.injected.signing.key.password="$KEY_PASSWORD"
 
       - name: Rename APK with version tag
         run: |

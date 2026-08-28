@@ -11,6 +11,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.isfs.blekey.ctap.CtapBle;
+import com.isfs.blekey.ctap.CtapHidCmd;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -186,6 +187,9 @@ public class KeepaliveManager {
             Log.d(TAG, "Updated keepalive status for key=" + key +
                        " to 0x" + String.format("%02X", status));
         }
+        else {
+            Log.d(TAG, "Failed to find active session");
+        }
     }
 
     /**
@@ -203,6 +207,8 @@ public class KeepaliveManager {
             keepaliveHandler.removeCallbacksAndMessages(session);
             long duration = System.currentTimeMillis() - session.startTime;
             Log.d(TAG, "Stopped keepalive for key=" + key + ", duration=" + duration + "ms");
+        } else {
+            Log.d(TAG, "Failed to find session");
         }
     }
 
@@ -260,7 +266,7 @@ public class KeepaliveManager {
         try {
             byte[] keepaliveData  = new byte[]{ session.currentStatus };
             byte[] keepaliveFrame = new CtapBle().frameResponse(
-                CtapBle.CMD_KEEPALIVE, keepaliveData);
+                (byte) CtapHidCmd.KEEP_ALIVE.getValue(), keepaliveData);
 
             sender.send(keepaliveFrame);
 

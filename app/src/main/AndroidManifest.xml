@@ -93,9 +93,15 @@
         <activity
             android:name="com.isfs.blekey.activity.QRScannerActivity"
             android:exported="false"
-            android:screenOrientation="portrait"
+            android:screenOrientation="fullSensor"
             android:theme="@style/AppTheme.NoActionBar" />
             
+        <!-- UV PIN Entry Activity (GET_TKN_UV / built-in UV) -->
+        <activity
+            android:name="com.isfs.blekey.activity.UvPinEntryActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
+
         <!-- Advanced Configuration Activity -->
         <activity
             android:name=".activity.AdvancedConfigActivity"

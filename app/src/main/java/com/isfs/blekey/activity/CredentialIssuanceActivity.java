@@ -400,9 +400,11 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
                 public void onAuthenticationSucceeded(
                         androidx.biometric.BiometricPrompt.AuthenticationResult result) {
                     Log.i(TAG, "Biometric authentication succeeded, proceeding with credential issuance");
-                    setUiStateForProcessing(true);
-                    // TEE window is open — safe to process the credential offer.
-                    executorService.execute(CredentialIssuanceActivity.this::processCredentialOffer);
+                    runOnUiThread(() -> {
+                        setUiStateForProcessing(true);
+                        // TEE window is open — safe to process the credential offer.
+                        executorService.execute(CredentialIssuanceActivity.this::processCredentialOffer);
+                    });
                 }
 
                 @Override

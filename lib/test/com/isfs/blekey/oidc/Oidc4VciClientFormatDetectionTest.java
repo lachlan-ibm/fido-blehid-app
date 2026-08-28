@@ -4,6 +4,8 @@
 package com.isfs.blekey.oidc;
 
 import com.isfs.blekey.credential.DigitalCredentialFormat;
+import com.isfs.blekey.util.http.HttpClient;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
@@ -50,7 +52,7 @@ class Oidc4VciClientFormatDetectionTest {
         
         // Create metadata with ldp_vc format
         Map<String, Object> metadataMap = createMetadataMap("ldp_vc");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -69,7 +71,7 @@ class Oidc4VciClientFormatDetectionTest {
         
         // Create metadata with jwt_vc_json-ld format
         Map<String, Object> metadataMap = createMetadataMap("jwt_vc_json-ld");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -88,7 +90,7 @@ class Oidc4VciClientFormatDetectionTest {
         
         // Create metadata with mso_mdoc format
         Map<String, Object> metadataMap = createMetadataMap("mso_mdoc");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -107,7 +109,7 @@ class Oidc4VciClientFormatDetectionTest {
         
         // Create metadata with jwt_vc_json format
         Map<String, Object> metadataMap = createMetadataMap("jwt_vc_json");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -126,7 +128,7 @@ class Oidc4VciClientFormatDetectionTest {
         
         // Create metadata with vc+sd-jwt format
         Map<String, Object> metadataMap = createMetadataMap("vc+sd-jwt");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -145,7 +147,7 @@ class Oidc4VciClientFormatDetectionTest {
         
         // Create metadata with unknown format
         Map<String, Object> metadataMap = createMetadataMap("unknown_format");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -167,7 +169,7 @@ class Oidc4VciClientFormatDetectionTest {
         metadataMap.put("credential_issuer", "https://issuer.example.com");
         metadataMap.put("credential_endpoint", "https://issuer.example.com/credential");
         metadataMap.put("token_endpoint", "https://issuer.example.com/token");
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format
         DigitalCredentialFormat format = (DigitalCredentialFormat) 
@@ -205,7 +207,7 @@ class Oidc4VciClientFormatDetectionTest {
         credentialsSupported.add(cred2);
         
         metadataMap.put("credentials_supported", credentialsSupported);
-        IssuerMetadata metadata = new IssuerMetadata(metadataMap);
+        IssuerMetadata metadata = new IssuerMetadata(metadataMap, new HttpClient());
         
         // Detect format - should select first one
         DigitalCredentialFormat format = (DigitalCredentialFormat) 

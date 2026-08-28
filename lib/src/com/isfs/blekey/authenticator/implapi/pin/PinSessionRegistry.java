@@ -26,11 +26,20 @@ public class PinSessionRegistry {
     /** Maximum number of PIN attempts before lockout. */
     public static final int MAX_PIN_RETRIES = 5;
 
+    /**
+     * Maximum number of built-in UV attempts before UV lockout.
+     * CTAP2.3 spec §6.5.5.7.3 allows 1–25; we use 8.
+     */
+    public static final int MAX_UV_RETRIES = 8;
+
     /** Map of channel IDs to their authenticated passkeys. */
     private static Map<byte[], Passkey> openKeys = new HashMap<>();
 
     /** Number of PIN retry attempts remaining before lockout. */
     private static int pinRetries = MAX_PIN_RETRIES;
+
+    /** Number of built-in UV (in-app PIN) retry attempts remaining before UV lockout. */
+    private static int uvRetries = MAX_UV_RETRIES;
 
     private PinSessionRegistry() {}
 
@@ -50,6 +59,28 @@ public class PinSessionRegistry {
     public static int decrementRetries() {
         pinRetries = Math.max(0, pinRetries - 1);
         return pinRetries;
+    }
+
+    // -------------------------------------------------------------------------
+    // UV retries (built-in UV / in-app PIN Activity)
+    // -------------------------------------------------------------------------
+
+    /** Returns the number of built-in UV retry attempts remaining. */
+    public static int getUvRetries() { return uvRetries; }
+
+    /** Resets the UV retry counter to the maximum value (call on successful UV). */
+    public static void resetUvRetries() {
+        uvRetries = MAX_UV_RETRIES;
+        logger.info("UV retry counter reset to maximum ({})", MAX_UV_RETRIES);
+    }
+
+    /**
+     * Decrements the UV retry counter (floor 0) on a failed built-in UV attempt.
+     * Returns the remaining count after decrement.
+     */
+    public static int decrementUvRetries() {
+        uvRetries = Math.max(0, uvRetries - 1);
+        return uvRetries;
     }
 
     /**

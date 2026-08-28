@@ -4,7 +4,6 @@
 package com.isfs.blekey.ctap;
 
 import java.security.KeyPair;
-import java.util.concurrent.CountDownLatch;
 
 import com.isfs.blekey.data.Passkey;
 

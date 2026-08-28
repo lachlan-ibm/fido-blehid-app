@@ -4,8 +4,10 @@
 package com.isfs.blekey.authenticator.implapi;
 
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
+import com.isfs.blekey.authenticator.KeepaliveManager;
 import com.isfs.blekey.authenticator.UpUvRequestCtx;
 import com.isfs.blekey.authenticator.UxInteractionLock;
+import com.isfs.blekey.authenticator.UpUvRequestCtx.CeremonyType;
 import com.isfs.blekey.authenticator.implapi.pin.PinFlowHandler;
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapTxn;
@@ -75,15 +77,10 @@ public final class UpUvGate {
             UpUvRequestCtx.CeremonyType ceremonyType,
             ExecuteAction action) {
 
-        // Branch 1 — UPUV session active.
-        if (UxInteractionLock.get().isGrantActive()) {
+        // Branch 1 — UPUV session active and not asking for built-in UV token.
+        if (UxInteractionLock.get().isGrantActive() && ceremonyType != CeremonyType.GET_TKN_UV) {
             logger.debug("{}: grant active, no UP prompt", cmdLabel);
-            try {
-                return action.execute();
-            } catch (Exception e) {
-                logger.error("{} fast-path failed", cmdLabel, e);
-                return CtapResponse.error(Ctap2StatusCode.OTHER);
-            }
+            return safeExecute(cmdLabel, action);
         }
         UxInteractionLock lock = UxInteractionLock.get();
         // Branch 2 — UPUV session denied.
@@ -97,42 +94,29 @@ public final class UpUvGate {
             if (latchStrategy == LatchStrategy.SYNC) {
                 logger.debug("{}: UX in progress — waiting on latch (max {}ms)",
                         cmdLabel, UP_WAIT_TIMEOUT_MS);
-                boolean completed = UxInteractionLock.get().awaitLatch(UP_WAIT_TIMEOUT_MS);
-                if (!completed || UxInteractionLock.get().isUserDenied()) {
+                boolean completed = lock.awaitLatch(UP_WAIT_TIMEOUT_MS);
+                if (!completed || lock.isUserDenied()) {
                     logger.warn("{}: UX latch timeout or denied — OPERATION_DENIED", cmdLabel);
                     return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
                 }
                 logger.debug("{}: latch-wait path — latch fired, UX APPROVED", cmdLabel);
-                try {
-                    return action.execute();
-                } catch (Exception e) {
-                    logger.error("{} post-latch failed", cmdLabel, e);
-                    return CtapResponse.error(Ctap2StatusCode.OTHER);
-                }
+                return safeExecute(cmdLabel, action);
             } else {
                 // ASYNC — spawn a background thread so the BLE handler thread is not blocked.
+                // Start keepalive immediately — spec requires within 100 ms of command acceptance,
+                // not after the latch fires (which can be 2+ seconds later).
                 logger.debug("{}: UX in progress — registering deferred latch listener", cmdLabel);
+                KeepaliveManager km = AuthenticatorAPI.getKeepaliveManager();
+                if (km != null) km.startKeepalive(txn, kaStatus(ceremonyType));
                 Thread latchWaiter = new Thread(() -> {
                     boolean completed = UxInteractionLock.get().awaitLatch(UP_WAIT_TIMEOUT_MS);
-                    byte[] response;
                     if (!completed || UxInteractionLock.get().isUserDenied()) {
                         logger.warn("{}: latch timeout or denied — OPERATION_DENIED", cmdLabel);
-                        response = CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+                        sendDeferred(txn, CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED), cmdLabel);
+                        if (km != null) km.stopKeepalive(txn);
                     } else {
                         logger.debug("{}: latch fired APPROVED — processing", cmdLabel);
-                        try {
-                            response = action.execute();
-                        } catch (Exception e) {
-                            logger.error("{} async latch-wait execute failed", cmdLabel, e);
-                            response = CtapResponse.error(Ctap2StatusCode.OTHER);
-                        }
-                    }
-                    AuthenticatorAPI.DeferredResponseSender sender =
-                        AuthenticatorAPI.getDeferredResponseSender();
-                    if (sender != null) {
-                        sender.send(txn, response);
-                    } else {
-                        logger.error("{}: no DeferredResponseSender — response dropped", cmdLabel);
+                        afterLatchApproved(cmdLabel, rpId, ceremonyType, txn, action);
                     }
                 }, cmdLabel + "-latch-waiter");
                 latchWaiter.setDaemon(true);
@@ -142,20 +126,7 @@ public final class UpUvGate {
         }
 
         // Branch 4 — no prior UX started (platform skipped getInfo/getKey)
-        AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
-        if (cb == null) {
-            logger.warn("{}: no UpUvCallback — OPERATION_DENIED", cmdLabel);
-            return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
-        }
-        UxInteractionLock.get().setStateInProgress();
-        cb.onUpUvRequired(
-            new UpUvRequestCtx(rpId, txn,
-                List.of((chainCb) -> dispatchApproved(chainCb, txn, cmdLabel, action)),
-                true,  // requiresBiometric
-                ceremonyType
-            )
-        );
-        return null; // deferred
+        return fireUpUvRequired(cmdLabel, rpId, ceremonyType, txn, action);
     }
 
     /**
@@ -172,20 +143,88 @@ public final class UpUvGate {
             String cmdLabel,
             ExecuteAction action) {
         if (txn != null) txn.setUserPresent(true);
-        byte[] response;
-        try {
-            response = action.execute();
-        } catch (Exception e) {
-            logger.error("{} chain action failed", cmdLabel, e);
-            response = CtapResponse.error(Ctap2StatusCode.OTHER);
-        }
-        AuthenticatorAPI.DeferredResponseSender sender =
-            AuthenticatorAPI.getDeferredResponseSender();
-        if (sender != null) sender.send(txn, response);
+        sendDeferred(txn, safeExecute(cmdLabel, action), cmdLabel);
         chainCb.done(null);
     }
 
+    /**
+     * Executes {@code action} and returns its response bytes, or an
+     * {@code OTHER} error response if it throws.
+     */
+    private static byte[] safeExecute(String cmdLabel, ExecuteAction action) {
+        try {
+            return action.execute();
+        } catch (Exception e) {
+            logger.error("{} execute failed", cmdLabel, e);
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
+        }
+    }
 
+    /**
+     * Sends {@code response} via {@link AuthenticatorAPI#getDeferredResponseSender()}.
+     */
+    private static void sendDeferred(CtapTxn txn, byte[] response, String cmdLabel) {
+        AuthenticatorAPI.DeferredResponseSender sender =
+            AuthenticatorAPI.getDeferredResponseSender();
+        if (sender != null) {
+            sender.send(txn, response);
+        } else {
+            logger.error("{}: no DeferredResponseSender — response dropped", cmdLabel);
+        }
+    }
+
+    /**
+     * Called by the Branch 3 ASYNC latch-waiter after the latch fires APPROVED.
+     *
+     * <p>For {@link UpUvRequestCtx.CeremonyType#GET_TKN_UV} the biometric latch
+     * only confirms connection acceptance; a PIN still needs to be collected.
+     * Re-arms the lock and fires {@code onUpUvRequired} via {@link #fireUpUvRequired}.
+     *
+     * <p>All other ceremony types treat biometric APPROVED as sufficient and
+     * dispatch immediately via {@link #dispatchApproved}.
+     */
+    private static void afterLatchApproved(
+            String cmdLabel,
+            String rpId,
+            UpUvRequestCtx.CeremonyType ceremonyType,
+            CtapTxn txn,
+            ExecuteAction action) {
+
+        if (ceremonyType == UpUvRequestCtx.CeremonyType.GET_TKN_UV) {
+            byte[] err = fireUpUvRequired(cmdLabel, rpId, ceremonyType, txn, action);
+            if (err != null) sendDeferred(txn, err, cmdLabel);
+            return;
+        }
+
+        dispatchApproved(chainCb -> {}, txn, cmdLabel, action);
+    }
+
+    /**
+     * Arms the lock, resolves {@code requiresBiometric}, and fires {@code onUpUvRequired}.
+     * Returns {@code null} on success (deferred) or an error response if no callback is registered.
+     */
+    private static byte[] fireUpUvRequired(
+            String cmdLabel,
+            String rpId,
+            UpUvRequestCtx.CeremonyType ceremonyType,
+            CtapTxn txn,
+            ExecuteAction action) {
+        AuthenticatorAPI.UpUvCallback cb = AuthenticatorAPI.getUpUvCallback();
+        if (cb == null) {
+            logger.warn("{}: no UpUvCallback — OPERATION_DENIED", cmdLabel);
+            return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+        // GET_TKN_UV collects a PIN; biometric was already satisfied by the prior ceremony.
+        boolean requiresBiometric = ceremonyType != UpUvRequestCtx.CeremonyType.GET_TKN_UV;
+        UxInteractionLock.get().setStateInProgress();
+        cb.onUpUvRequired(new UpUvRequestCtx(rpId, txn,
+            List.of((chainCb) -> dispatchApproved(chainCb, txn, cmdLabel, action)),
+            requiresBiometric,
+            ceremonyType));
+        KeepaliveManager km = AuthenticatorAPI.getKeepaliveManager();
+        if (km != null) km.startKeepalive(txn, kaStatus(ceremonyType));
+        return null; // deferred
+    }
 
     /**
      * Acquires the {@link UxInteractionLock}, transitions to
@@ -200,6 +239,11 @@ public final class UpUvGate {
      * @param ctxBuilder supplier of the {@link UpUvRequestCtx} to pass to the callback
      * @return {@code true} if the callback was fired; {@code false} if skipped
      */
+    private static byte kaStatus(UpUvRequestCtx.CeremonyType ceremonyType) {
+        return ceremonyType == UpUvRequestCtx.CeremonyType.GET_TKN_UV
+            ? KeepaliveManager.STATUS_PROCESSING : KeepaliveManager.STATUS_UP_NEEDED;
+    }
+
     public static boolean fireIfIdle(CtapTxn txn,
                                      Supplier<UpUvRequestCtx> ctxBuilder) {
         if (UxInteractionLock.get().isGrantActive()) return false;
