@@ -29,6 +29,8 @@ import androidx.core.content.ContextCompat;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
 import com.isfs.blekey.ctap.CtapBle;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.transport.CtapTransportType;
+import com.isfs.blekey.transport.ICtapTransport;
 import com.isfs.blekey.util.BleUtils;
 import com.isfs.blekey.util.Cbor;
 
@@ -55,9 +57,10 @@ import java.util.concurrent.Executors;
  * The service handles BLE framing, connection management, and routes messages
  * to the CtapBle processor for CTAP protocol handling.
  */
-public class FIDOBLEService {
+public class FIDOBLEService implements ICtapTransport {
 
     private static final String TAG = FIDOBLEService.class.getCanonicalName();
+
 
     /**
      * FIDO service connection state for a device.
@@ -130,10 +133,12 @@ public class FIDOBLEService {
     /**
      * Creates a new FIDO BLE Service.
      *
-     * @param context Application context
+     * @param context          Application context
+     * @param keepaliveManager BLE keepalive manager constructed and owned by the service layer
      * @throws UnsupportedOperationException if BLE is not supported or permissions not granted
      */
-    public FIDOBLEService(@NonNull Context context) throws UnsupportedOperationException {
+    public FIDOBLEService(@NonNull Context context, @NonNull KeepaliveManager keepaliveManager)
+            throws UnsupportedOperationException {
         this.applicationContext = context.getApplicationContext();
         this.handler = new Handler(applicationContext.getMainLooper());
 
@@ -186,14 +191,7 @@ public class FIDOBLEService {
         
         this.ctapBle = new CtapBle();
         this.connectionManager = new BLEConnectionManager();
-        this.keepaliveManager = new KeepaliveManager(
-            frame -> {
-                // Deliver keepalive frame to the most-recently-connected device.
-                // At most one BLE device is active at a time in the BLE FIDO path.
-                if (!connectedDevices.isEmpty()) {
-                    sendResponse(connectedDevices.values().iterator().next(), frame);
-                }
-            });
+        this.keepaliveManager = keepaliveManager;
         this.ctapExecutor = Executors.newSingleThreadExecutor();
         
         Log.d(TAG, "FIDO BLE Service initialized with CTAP integration");
@@ -206,6 +204,7 @@ public class FIDOBLEService {
      * to enforce LE Security Mode 1, Level 3 (authenticated pairing with MITM protection)
      * per CTAP spec §11.4.2.
      */
+    @SuppressLint("MissingPermission")
     private void setupFidoService() {
         final BluetoothGattService fidoService = new BluetoothGattService(
             BleUtils.SERVICE_FIDO,
@@ -339,6 +338,36 @@ public class FIDOBLEService {
         });
     }
 
+    // -------------------------------------------------------------------------
+    // ICtapTransport
+    // -------------------------------------------------------------------------
+
+    /**
+     * Sends a fully-framed CTAP BLE response to the most-recently-connected device.
+     * The BLE path has at most one active device at a time; the transport is responsible
+     * for selecting the target.
+     *
+     * @param framedResponse Fully-framed BLE CTAP response bytes.
+     */
+    @Override
+    public void sendResponse(byte[] framedResponse) {
+        if (connectedDevices.isEmpty()) {
+            Log.w(TAG, "sendResponse: no connected devices, dropping frame");
+            return;
+        }
+        sendResponse(connectedDevices.values().iterator().next(), framedResponse);
+    }
+
+    @Override
+    public boolean isReady() {
+        return !connectedDevices.isEmpty() && gattServer != null;
+    }
+
+    @Override
+    public CtapTransportType getType() {
+        return CtapTransportType.BLE_GATT;
+    }
+
     /**
      * Closes the FIDO BLE service and releases resources.
      */
@@ -441,6 +470,7 @@ public class FIDOBLEService {
         }
 
         @Override
+        @SuppressLint("MissingPermission")
         public void onCharacteristicReadRequest(
                 BluetoothDevice device,
                 int requestId,
@@ -487,6 +517,7 @@ public class FIDOBLEService {
         }
 
         @Override
+        @SuppressLint("MissingPermission")
         public void onCharacteristicWriteRequest(
                 BluetoothDevice device,
                 int requestId,
@@ -533,6 +564,7 @@ public class FIDOBLEService {
         }
 
         @Override
+        @SuppressLint("MissingPermission")
         public void onDescriptorWriteRequest(
                 BluetoothDevice device,
                 int requestId,
@@ -568,6 +600,7 @@ public class FIDOBLEService {
         }
 
         @Override
+        @SuppressLint("MissingPermission")
         public void onDescriptorReadRequest(
                 BluetoothDevice device,
                 int requestId,
@@ -708,6 +741,7 @@ public class FIDOBLEService {
         
         BroadcastReceiver bondStateReceiver = new BroadcastReceiver() {
             @Override
+            @SuppressLint("MissingPermission")
             public void onReceive(Context context, Intent intent) {
                 if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) {
                     return;

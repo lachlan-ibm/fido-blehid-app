@@ -23,33 +23,27 @@ public class PinSessionRegistry {
 
     private static final Logger logger = LoggerFactory.getLogger(PinSessionRegistry.class);
 
-    /** Maximum number of PIN attempts before lockout. */
+    /** Maximum number of attempts (PIN or UV) before lockout. */
     public static final int MAX_PIN_RETRIES = 5;
 
-    /**
-     * Maximum number of built-in UV attempts before UV lockout.
-     * CTAP2.3 spec §6.5.5.7.3 allows 1–25; we use 8.
-     */
-    public static final int MAX_UV_RETRIES = 8;
+    /** Alias kept so callers using the UV name compile without change. */
+    public static final int MAX_UV_RETRIES = MAX_PIN_RETRIES;
 
     /** Map of channel IDs to their authenticated passkeys. */
     private static Map<byte[], Passkey> openKeys = new HashMap<>();
 
-    /** Number of PIN retry attempts remaining before lockout. */
+    /** Single shared retry counter for both PIN and UV attempts. */
     private static int pinRetries = MAX_PIN_RETRIES;
-
-    /** Number of built-in UV (in-app PIN) retry attempts remaining before UV lockout. */
-    private static int uvRetries = MAX_UV_RETRIES;
 
     private PinSessionRegistry() {}
 
-    /** Returns the number of PIN retry attempts remaining. */
+    /** Returns the number of retry attempts remaining. */
     public static int getPinRetries() { return pinRetries; }
 
-    /** Resets the PIN retry counter to the maximum value. */
+    /** Resets the retry counter to the maximum value. */
     public static void resetPinRetries() {
         pinRetries = MAX_PIN_RETRIES;
-        logger.info("PIN retry counter reset to maximum ({})", MAX_PIN_RETRIES);
+        logger.info("Retry counter reset to maximum ({})", MAX_PIN_RETRIES);
     }
 
     /**
@@ -62,25 +56,23 @@ public class PinSessionRegistry {
     }
 
     // -------------------------------------------------------------------------
-    // UV retries (built-in UV / in-app PIN Activity)
+    // UV retries — delegated to the single shared counter
     // -------------------------------------------------------------------------
 
-    /** Returns the number of built-in UV retry attempts remaining. */
-    public static int getUvRetries() { return uvRetries; }
+    /** Returns the number of retry attempts remaining (same counter as PIN). */
+    public static int getUvRetries() { return pinRetries; }
 
-    /** Resets the UV retry counter to the maximum value (call on successful UV). */
+    /** Resets the shared retry counter (call on successful UV). */
     public static void resetUvRetries() {
-        uvRetries = MAX_UV_RETRIES;
-        logger.info("UV retry counter reset to maximum ({})", MAX_UV_RETRIES);
+        resetPinRetries();
     }
 
     /**
-     * Decrements the UV retry counter (floor 0) on a failed built-in UV attempt.
+     * Decrements the shared retry counter (floor 0) on a failed UV attempt.
      * Returns the remaining count after decrement.
      */
     public static int decrementUvRetries() {
-        uvRetries = Math.max(0, uvRetries - 1);
-        return uvRetries;
+        return decrementRetries();
     }
 
     /**
@@ -112,7 +104,7 @@ public class PinSessionRegistry {
     public static void updateAuthenticationState(CtapTxn txn, Passkey pkeyFile,
                                                   byte[] pinToken, byte[] pinHash) {
         openKeys.put(txn.getCid(), pkeyFile);
-        pinRetries = MAX_PIN_RETRIES;
+        resetPinRetries();
         txn.setPinAuthTkn(pinToken);
         txn.setPinHash(pinHash);
         txn.setPasskey(pkeyFile);

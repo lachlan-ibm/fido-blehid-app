@@ -4,8 +4,6 @@
 package com.isfs.blekey.activity;
 
 import com.isfs.blekey.BootReceiver;
-import com.isfs.blekey.hidsvc.BTHIDService;
-import com.isfs.blekey.hidsvc.HIDForegroundService;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -16,7 +14,11 @@ import java.util.Set;
 import java.util.HashSet;
 
 import com.isfs.blekey.R;
+import com.isfs.blekey.bthid.BTHIDService;
+import com.isfs.blekey.bthid.DeviceStateManager;
+import com.isfs.blekey.service.BluetoothCtapService;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
@@ -55,7 +57,6 @@ import androidx.appcompat.app.AlertDialog.Builder;
 
 import com.isfs.blekey.util.FileUtils;
 import com.isfs.blekey.util.BiometricAuthHelper;
-import com.isfs.blekey.hidsvc.DeviceStateManager;
 
 import androidx.annotation.Nullable;
 
@@ -65,15 +66,15 @@ import androidx.annotation.Nullable;
  *
  * <p>UP state (pending context, keepalive, wake lock, timeout) is owned by
  * {@link HIDForegroundService}.  This fragment is a pure UI responder: it
- * receives {@link HIDForegroundService.UpActivityDelegate#showUpDialog} on the
+ * receives {@link BluetoothCtapService.UpActivityDelegate#showUpDialog} on the
  * main thread, shows the dialog, and calls back via the service's
  * {@code deliverUp*()} methods.</p>
  */
 public class ServerFragment extends Fragment
-        implements HIDForegroundService.UpActivityDelegate,
-                   HIDForegroundService.BiometricDelegate,
-                   HIDForegroundService.CancelListener,
-                   HIDForegroundService.TimeoutListener {
+        implements BluetoothCtapService.UpActivityDelegate,
+                   BluetoothCtapService.BiometricDelegate,
+                   BluetoothCtapService.CancelListener,
+                   BluetoothCtapService.TimeoutListener {
 
     private final String TAG = ServerFragment.class.getCanonicalName();
 
@@ -328,7 +329,7 @@ public class ServerFragment extends Fragment
     private BTHIDService passkeyService;
 
     /** Reference to the bound foreground service. */
-    private HIDForegroundService foregroundService;
+    private BluetoothCtapService foregroundService;
     private boolean serviceBound = false;
 
     /** Manager for persistent device state storage. */
@@ -365,7 +366,7 @@ public class ServerFragment extends Fragment
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             Log.d(TAG, "Service connected");
-            HIDForegroundService.LocalBinder binder = (HIDForegroundService.LocalBinder) service;
+            BluetoothCtapService.LocalBinder binder = (BluetoothCtapService.LocalBinder) service;
             foregroundService = binder.getService();
             serviceBound = true;
 
@@ -622,7 +623,7 @@ public class ServerFragment extends Fragment
     private void startHIDForegroundService() {
         if (serviceBound) return;
 
-        Intent serviceIntent = new Intent(requireContext(), HIDForegroundService.class);
+        Intent serviceIntent = new Intent(requireContext(), BluetoothCtapService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             requireActivity().startForegroundService(serviceIntent);
         } else {
@@ -630,14 +631,6 @@ public class ServerFragment extends Fragment
         }
         BootReceiver.enableAutoStart(requireContext());
         requireActivity().bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
-    }
-
-    private void stopHIDForegroundService() {
-        unbindFromService();
-        BootReceiver.disableAutoStart(requireContext());
-        Intent serviceIntent = new Intent(requireContext(), HIDForegroundService.class);
-        requireActivity().stopService(serviceIntent);
-        appendLog("Service stopped");
     }
 
     private void unbindFromService() {
@@ -696,6 +689,7 @@ public class ServerFragment extends Fragment
         appendLog(logPrefix + name + ": " + status);
     }
 
+    @SuppressLint("MissingPermission")
     private DeviceCollectionResult collectCurrentDevices(BluetoothManager bluetoothManager) {
         Set<BluetoothDevice> bondedDevices = passkeyService.getBondedDevices();
         Set<String> bondedAddresses = new HashSet<>();
@@ -1206,10 +1200,6 @@ public class ServerFragment extends Fragment
     // -------------------------------------------------------------------------
     // UP dialog helpers
     // -------------------------------------------------------------------------
-
-    private void showUserPresenceDialog() {
-        showUserPresenceDialog(null);
-    }
 
     private void showUserPresenceDialog(@Nullable String rpId) {
         dismissDialogIfShowing();

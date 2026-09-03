@@ -1,7 +1,7 @@
 /*
  * Copyright IBM 2025
  */
-package com.isfs.blekey.hidsvc;
+package com.isfs.blekey.bthid;
 
 import android.annotation.SuppressLint;
 import android.bluetooth.le.AdvertiseCallback;

@@ -2,7 +2,10 @@
  * Copyright IBM 2025
  */
 
-package com.isfs.blekey.hidsvc;
+package com.isfs.blekey.bthid;
+
+import com.isfs.blekey.transport.CtapTransportType;
+import com.isfs.blekey.transport.ICtapTransport;
 
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
@@ -31,7 +34,7 @@ import java.util.concurrent.Executor;
  * Classic Bluetooth HID Device Service.
  * Replaces BLE GATT server with BluetoothHidDevice API.
  */
-public class BTHIDService implements IHIDTransport {
+public class BTHIDService implements ICtapTransport {
     
     private static final String TAG = BTHIDService.class.getSimpleName();
     
@@ -193,6 +196,7 @@ public class BTHIDService implements IHIDTransport {
         }
         
         @Override
+        @SuppressLint("MissingPermission")
         public void onGetReport(BluetoothDevice device, byte type, byte id, int bufferSize) {
             Log.d(TAG, "onGetReport: type=" + type + " id=" + id);
             if (hidDevice != null) {
@@ -501,10 +505,16 @@ public class BTHIDService implements IHIDTransport {
         return isBluetoothAvailable(context);
     }
     
-    // IHIDTransport interface implementation
+    // ICtapTransport interface implementation
+
     @Override
-    public void sendInputReport(byte[] report) {
-        addInputReport(report);
+    public void sendResponse(byte[] framedResponse) {
+        addInputReport(framedResponse);
+    }
+
+    @Override
+    public CtapTransportType getType() {
+        return CtapTransportType.HID;
     }
 }
 

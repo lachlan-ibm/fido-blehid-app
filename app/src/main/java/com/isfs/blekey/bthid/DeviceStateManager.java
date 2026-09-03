@@ -2,7 +2,7 @@
  * Copyright IBM 2025
  */
 
-package com.isfs.blekey.hidsvc;
+package com.isfs.blekey.bthid;
 
 import android.content.Context;
 import android.content.SharedPreferences;

@@ -176,31 +176,14 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <LinearLayout
+            <TextView
+                android:id="@+id/pinRetriesValue"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:orientation="horizontal"
-                android:gravity="center">
-
-                <TextView
-                    android:id="@+id/pinRetriesValue"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textSize="22sp"
-                    android:textStyle="bold"
-                    android:textColor="@color/ibm_black"
-                    android:paddingEnd="16dp" />
-
-                <TextView
-                    android:id="@+id/uvRetriesValue"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textSize="22sp"
-                    android:textStyle="bold"
-                    android:textColor="@color/ibm_black" />
-
-            </LinearLayout>
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:textColor="@color/ibm_black" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/resetPinRetriesButton"

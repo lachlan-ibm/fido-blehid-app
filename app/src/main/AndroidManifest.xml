@@ -33,6 +33,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Full-screen intent: required on Android 14+ to show UP prompt over lock screen -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Vibration feedback for QR code scanning -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Camera permissions for QR code scanning -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -142,9 +144,9 @@
             </intent-filter>
         </activity>
             
-        <!-- HID Foreground Service for persistent classic Bluetooth HID device -->
+        <!-- Single CTAP foreground service — owns both HID and BLE GATT transports -->
         <service
-            android:name=".hidsvc.HIDForegroundService"
+            android:name=".service.BluetoothCtapService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
@@ -159,13 +161,6 @@
                 android:name="android.credentials.provider"
                 android:resource="@xml/digital_credential_provider" />
         </service>
-
-        <!-- FIDO BLE Service for CTAP2 over BLE (FIDO GATT) -->
-        <service
-            android:name=".fidoble.FIDOBLEService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
 
         <!-- Boot receiver to auto-start service on device boot and Bluetooth state changes.
              android:exported="true" is required on Android 14+ (API 34+): the system delivers

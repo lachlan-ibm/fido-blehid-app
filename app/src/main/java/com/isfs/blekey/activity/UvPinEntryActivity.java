@@ -19,9 +19,9 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.isfs.blekey.R;
 import com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry;
+import com.isfs.blekey.service.BluetoothCtapService;
 import com.isfs.blekey.ctap.CtapTxn;
 import com.isfs.blekey.data.Passkey;
-import com.isfs.blekey.hidsvc.HIDForegroundService;
 import com.isfs.blekey.util.KeyUtils;
 
 import java.util.concurrent.ExecutorService;
@@ -30,12 +30,12 @@ import java.util.concurrent.Executors;
 /**
  * PIN-entry Activity for the {@code getPinUvAuthTokenUsingUvWithPermissions} (0x06) ceremony.
  *
- * <p>Shown when {@link HIDForegroundService}'s UP handler receives a
+ * <p>Shown when {@link BluetoothCtapService}'s UP handler receives a
  * {@link com.isfs.blekey.authenticator.UpUvRequestCtx.CeremonyType#GET_TKN_UV} context.
  * The user enters their PIN; we hash it with SHA-256 via {@link KeyUtils#getPinHash},
  * open the {@link Passkey} locally, store it on the pending transaction, and call
- * {@link HIDForegroundService#deliverUpApproved()} to complete the chain.
- * Cancel or wrong-PIN paths call {@link HIDForegroundService#deliverUpDenied()}.</p>
+ * {@link BluetoothCtapService#deliverUpApproved()} to complete the chain.
+ * Cancel or wrong-PIN paths call {@link BluetoothCtapService#deliverUpDenied()}.</p>
  */
 public class UvPinEntryActivity extends AppCompatActivity {
 
@@ -45,7 +45,7 @@ public class UvPinEntryActivity extends AppCompatActivity {
     private TextView  errorText;
     private Button    submitButton;
 
-    private HIDForegroundService hidService;
+    private BluetoothCtapService hidService;
     private boolean              bound = false;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -53,7 +53,7 @@ public class UvPinEntryActivity extends AppCompatActivity {
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            hidService = ((HIDForegroundService.LocalBinder) service).getService();
+            hidService = ((BluetoothCtapService.LocalBinder) service).getService();
             bound = true;
         }
 
@@ -76,7 +76,7 @@ public class UvPinEntryActivity extends AppCompatActivity {
         submitButton.setOnClickListener(v -> onSubmit());
         findViewById(R.id.uvPinCancelButton).setOnClickListener(v -> onCancel());
 
-        Intent svcIntent = new Intent(this, HIDForegroundService.class);
+        Intent svcIntent = new Intent(this, BluetoothCtapService.class);
         bindService(svcIntent, connection, Context.BIND_AUTO_CREATE);
     }
 

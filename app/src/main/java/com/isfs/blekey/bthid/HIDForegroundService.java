@@ -2,8 +2,9 @@
  * Copyright IBM 2025
  */
 
-package com.isfs.blekey.hidsvc;
+package com.isfs.blekey.bthid;
 
+import android.annotation.SuppressLint;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -505,7 +506,7 @@ public class HIDForegroundService extends Service {
             if (hidService == null) return;
             byte[] cid = hexToBytes(session.key);
             if (cid == null) return;
-            hidService.sendInputReport(CtapHid.buildHidKeepaliveFrame(cid, session.status));
+            hidService.sendResponse(CtapHid.buildHidKeepaliveFrame(cid, session.status));
         }
 
         private String cidHex(CtapTxn txn) {
@@ -745,6 +746,7 @@ public class HIDForegroundService extends Service {
         return pendingContext.getRpId();
     }
 
+    @SuppressLint("MissingPermission")
     private void postUpNotification() {
         Intent tapIntent = new Intent(this, com.isfs.blekey.MainActivity.class)
             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT

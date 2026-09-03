@@ -136,36 +136,25 @@ public class AuthenticatorAPI {
     }
 
     // -------------------------------------------------------------------------
-    // PIN / UV retry accessors (delegated to PinSessionRegistry)
+    // Retry counter accessors (single shared counter for PIN and UV)
     // -------------------------------------------------------------------------
 
-    /** Returns the number of PIN retry attempts remaining before lockout. */
+    /** Returns the number of retry attempts remaining before lockout. */
     public static int getPinRetries() {
         return PinSessionRegistry.getPinRetries();
     }
 
-    /** Returns the maximum number of PIN attempts allowed before lockout. */
+    /** Returns the maximum number of attempts allowed before lockout. */
     public static int getMaxPinRetries() {
         return PinSessionRegistry.MAX_PIN_RETRIES;
     }
 
-    /** Returns the number of built-in UV retry attempts remaining before lockout. */
-    public static int getUvRetries() {
-        return PinSessionRegistry.getUvRetries();
-    }
-
-    /** Returns the maximum number of built-in UV attempts allowed before lockout. */
-    public static int getMaxUvRetries() {
-        return PinSessionRegistry.MAX_UV_RETRIES;
-    }
-
     /**
-     * Resets both the PIN and UV retry counters to their maximum values.
+     * Resets the shared retry counter to its maximum value.
      * Call only from an operator-authenticated UI gesture.
      */
     public static void resetPinRetries() {
         PinSessionRegistry.resetPinRetries();
-        PinSessionRegistry.resetUvRetries();
     }
 
     // -------------------------------------------------------------------------
@@ -207,7 +196,7 @@ public class AuthenticatorAPI {
 
     /**
      * Builds the full CTAP2 getInfo response.
-     * Advertises FIDO_2_1 and FIDO_2_0, includes PIN/UV Auth Protocol 1 and clientPin.
+     * Advertises FIDO_2_1 and FIDO_2_0, includes PIN/UV Auth Protocol 1, uv and clientPin.
      */
     static byte[] buildGetInfoCtap2Response() {
         LinkedHashMap<String, Boolean> capabilities = new LinkedHashMap<>();

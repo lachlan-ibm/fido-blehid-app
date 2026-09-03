@@ -4,6 +4,8 @@
 
 package com.isfs.blekey;
 
+import com.isfs.blekey.service.BluetoothCtapService;
+
 import android.bluetooth.BluetoothAdapter;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -12,7 +14,6 @@ import android.content.SharedPreferences;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.util.Log;
-import com.isfs.blekey.hidsvc.HIDForegroundService;
 
 /**
  * BroadcastReceiver that starts the HID foreground service on device boot,
@@ -135,7 +136,7 @@ public class BootReceiver extends BroadcastReceiver {
      */
     private void startHIDService(Context context) {
         try {
-            Intent serviceIntent = new Intent(context, HIDForegroundService.class);
+            Intent serviceIntent = new Intent(context, BluetoothCtapService.class);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent);
             } else {

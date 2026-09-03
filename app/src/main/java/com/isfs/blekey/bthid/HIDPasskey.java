@@ -2,11 +2,12 @@
  * Copyright IBM 2025
  */
 
-package com.isfs.blekey.hidsvc;
+package com.isfs.blekey.bthid;
 
 import com.isfs.blekey.ctap.Ctap2StatusCode;
 import com.isfs.blekey.ctap.CtapHid;
 import com.isfs.blekey.ctap.CtapTxn;
+import com.isfs.blekey.transport.ICtapTransport;
 
 import java.util.Arrays;
 
@@ -21,9 +22,9 @@ import org.slf4j.LoggerFactory;
 public class HIDPasskey {
 
     /**
-     * Reference to the HID transport layer (BLE or Classic BT).
+     * Reference to the HID transport layer.
      */
-    private IHIDTransport _transport;
+    private ICtapTransport _transport;
 
     /**
      * Logger for debugging and error reporting.
@@ -37,7 +38,7 @@ public class HIDPasskey {
      *
      * @param transport The HID transport that will handle communication (BLE or Classic BT)
      */
-    public HIDPasskey(IHIDTransport transport) {
+    public HIDPasskey(ICtapTransport transport) {
         this._transport = transport;
     }
 
@@ -149,7 +150,7 @@ public class HIDPasskey {
                         frameCount++;
                         logger.info("=== SENDING RESPONSES: Frame #{}, length: {}", frameCount, rspFrame.length);
                         if (_transport != null) {
-                            _transport.sendInputReport(rspFrame);
+                            _transport.sendResponse(rspFrame);
                             logger.info("=== SENDING RESPONSES: Frame #{} sent successfully", frameCount);
                         } else {
                             logger.error("=== SENDING RESPONSES: _transport is NULL! Cannot send frame #{}", frameCount);
@@ -189,7 +190,7 @@ public class HIDPasskey {
                          java.util.Arrays.toString(txn.getCid()));
             // Send CTAPHID_ERROR(ERR_OTHER) so the platform knows the transaction is dead.
             if (_transport != null) {
-                _transport.sendInputReport(
+                _transport.sendResponse(
                     CtapHid.buildHidErrorFrame(txn.getCid(), Ctap2StatusCode.OTHER));
             } else {
                 logger.error("sendDeferredResponse: _transport is also NULL — " +
@@ -206,7 +207,7 @@ public class HIDPasskey {
             while ((frame = cmd.getResponseSegment()) != null) {
                 frameCount++;
                 if (_transport != null) {
-                    _transport.sendInputReport(frame);
+                    _transport.sendResponse(frame);
                     logger.info("=== DEFERRED RESPONSE: Frame #{} sent successfully", frameCount);
                 } else {
                     logger.error("sendDeferredResponse: _transport is NULL — cannot send frame");

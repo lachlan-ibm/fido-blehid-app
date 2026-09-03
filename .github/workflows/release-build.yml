@@ -37,28 +37,28 @@ jobs:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: echo "$KEYSTORE_B64" | base64 -d > release-keystore.jks
 
-      - name: Build release APK
+      - name: Build release bundle
         env:
           KEYSTORE_PATH: release-keystore.jks
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          ./gradlew :app:assembleRelease \
+          ./gradlew :app:bundleRelease \
             -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/release-keystore.jks" \
             -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$KEYSTORE_ALIAS" #\
             #-Pandroid.injected.signing.key.password="$KEY_PASSWORD"
 
-      - name: Rename APK with version tag
+      - name: Rename bundle with version tag
         run: |
-          mv app/build/outputs/apk/release/app-release.apk \
-             app/build/outputs/apk/release/fido-blehid-0.1.${{ github.run_number }}.apk
+          mv app/build/outputs/bundle/release/app-release.aab \
+             app/build/outputs/bundle/release/fido-blehid-0.1.${{ github.run_number }}.aab
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "0.1.${{ github.run_number }}"
           name: "Release 0.1.${{ github.run_number }}"
-          files: app/build/outputs/apk/release/fido-blehid-0.1.${{ github.run_number }}.apk
+          files: app/build/outputs/bundle/release/fido-blehid-0.1.${{ github.run_number }}.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

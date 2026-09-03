@@ -23,7 +23,7 @@ import com.isfs.blekey.MainActivity;
 import com.isfs.blekey.R;
 import com.isfs.blekey.data.AppConfig;
 import com.isfs.blekey.authenticator.AuthenticatorAPI;
-import com.isfs.blekey.hidsvc.HIDForegroundService;
+import com.isfs.blekey.service.BluetoothCtapService;
 import com.isfs.blekey.util.BiometricAuthHelper;
 import com.isfs.blekey.util.KeyUtils;
 
@@ -66,7 +66,6 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     private SwitchCompat      autoStartSwitch;
     private SwitchCompat      ctap1CompatSwitch;
     private TextView          pinRetriesValue;
-    private TextView          uvRetriesValue;
 
     private TextInputLayout   upBackgroundTimeoutLayout;
     private TextInputEditText upBackgroundTimeoutEdit;
@@ -143,11 +142,11 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         upBioTimeoutEdit          = findViewById(R.id.upBioTimeoutEdit);
 
         int backgroundMs = prefs.getInt(PREFS_KEY_UP_BACKGROUND_TIMEOUT,
-                HIDForegroundService.UP_BACKGROUND_TIMEOUT_MS);
+                BluetoothCtapService.UP_BACKGROUND_TIMEOUT_MS);
         int dialogMs     = prefs.getInt(PREFS_KEY_UP_DIALOG_TIMEOUT,
-                HIDForegroundService.UP_DIALOG_TIMEOUT_MS);
+                BluetoothCtapService.UP_DIALOG_TIMEOUT_MS);
         int bioMs        = prefs.getInt(PREFS_KEY_UP_BIO_TIMEOUT,
-                HIDForegroundService.UP_BIO_TIMEOUT_MS);
+                BluetoothCtapService.UP_BIO_TIMEOUT_MS);
         upBackgroundTimeoutEdit.setText(String.valueOf(backgroundMs));
         upDialogTimeoutEdit.setText(String.valueOf(dialogMs));
         upBioTimeoutEdit.setText(String.valueOf(bioMs));
@@ -160,7 +159,6 @@ public class AdvancedConfigActivity extends AppCompatActivity {
         findViewById(R.id.resetPlatformKeyButton).setOnClickListener(v -> onResetPlatformKeyClicked());
 
         pinRetriesValue = findViewById(R.id.pinRetriesValue);
-        uvRetriesValue  = findViewById(R.id.uvRetriesValue);
         refreshPinRetriesDisplay();
         findViewById(R.id.resetPinRetriesButton).setOnClickListener(v -> onResetPinRetriesClicked());
     }
@@ -361,15 +359,12 @@ public class AdvancedConfigActivity extends AppCompatActivity {
     private void refreshPinRetriesDisplay() {
         pinRetriesValue.setText(getString(R.string.adv_config_pin_retries_value,
                 AuthenticatorAPI.getPinRetries(), AuthenticatorAPI.getMaxPinRetries()));
-        uvRetriesValue.setText(getString(R.string.adv_config_uv_retries_value,
-                AuthenticatorAPI.getUvRetries(), AuthenticatorAPI.getMaxUvRetries()));
     }
 
     private void onResetPinRetriesClicked() {
         new AlertDialog.Builder(this)
                 .setTitle(R.string.adv_config_pin_retries_reset_confirm_title)
-                .setMessage(getString(
-                        R.string.adv_config_pin_retries_reset_confirm_message,
+                .setMessage(getString(R.string.adv_config_pin_retries_reset_confirm_message,
                         AuthenticatorAPI.getMaxPinRetries()))
                 .setPositiveButton(R.string.ok, (dialog, which) -> {
                     AuthenticatorAPI.resetPinRetries();
