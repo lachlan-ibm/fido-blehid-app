@@ -16,8 +16,10 @@ import android.widget.EditText;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
 
 import com.isfs.blekey.R;
+import com.isfs.blekey.util.InsetsHelper;
 import com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry;
 import com.isfs.blekey.service.BluetoothCtapService;
 import com.isfs.blekey.ctap.CtapTxn;
@@ -66,8 +68,12 @@ public class UvPinEntryActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_uv_pin_entry);
+
+        // No toolbar — apply bottom inset to root so buttons clear the nav bar
+        InsetsHelper.applyBottomInset(findViewById(android.R.id.content));
 
         pinInput    = findViewById(R.id.uvPinInput);
         errorText   = findViewById(R.id.uvPinErrorText);

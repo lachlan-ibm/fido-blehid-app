@@ -3,7 +3,8 @@ name: Release Build
 
 on:
   push:
-    branches: [ push ]
+    branches:
+      - '**'
   workflow_dispatch:
 
 jobs:
@@ -42,6 +43,7 @@ jobs:
           KEYSTORE_PATH: release-keystore.jks
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD:  ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew :app:bundleRelease \
             -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/release-keystore.jks" \
@@ -49,16 +51,32 @@ jobs:
             -Pandroid.injected.signing.key.alias="$KEYSTORE_ALIAS" #\
             #-Pandroid.injected.signing.key.password="$KEY_PASSWORD"
 
-      - name: Rename bundle with version tag
+      - name: Build release apk
+        env:
+          KEYSTORE_PATH: release-keystore.jks
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          ./gradlew :app:assembleRelease \
+            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/release-keystore.jks" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEYSTORE_ALIAS" #\
+
+      - name: Rename artifacts with version tag
         run: |
           mv app/build/outputs/bundle/release/app-release.aab \
-             app/build/outputs/bundle/release/fido-blehid-0.1.${{ github.run_number }}.aab
+             app/build/outputs/bundle/release/fido-blehid-0.3.${{ github.run_number }}.aab
+          mv app/build/outputs/apk/release/app-release.apk \
+             app/build/outputs/apk/release/fido-blehid-0.3.${{ github.run_number }}.apk
 
       - name: Create GitHub release
+        if: github.ref == 'refs/heads/release'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "0.1.${{ github.run_number }}"
           name: "Release 0.1.${{ github.run_number }}"
-          files: app/build/outputs/bundle/release/fido-blehid-0.1.${{ github.run_number }}.aab
+          files: |
+            app/build/outputs/bundle/release/fido-blehid-0.1.${{ github.run_number }}.aab
+            app/build/outputs/apk/release/fido-blehid-0.1.${{ github.run_number }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

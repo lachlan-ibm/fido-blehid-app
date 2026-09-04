@@ -14,8 +14,10 @@ import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.view.WindowCompat;
 
 import android.widget.TextView;
+import com.isfs.blekey.util.InsetsHelper;
 
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
@@ -79,8 +81,12 @@ public class AdvancedConfigActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_advanced_config);
+
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
+        InsetsHelper.applyBottomInset(findViewById(R.id.scrollView));
 
         biometricHelper = new BiometricAuthHelper(this);
 

@@ -22,6 +22,9 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
+
+import com.isfs.blekey.util.InsetsHelper;
 
 import com.google.android.material.card.MaterialCardView;
 
@@ -182,6 +185,7 @@ public class ManageActivity extends AppCompatActivity {
     
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_manage);
         
@@ -498,19 +502,18 @@ public class ManageActivity extends AppCompatActivity {
      * Sets up the custom toolbar with back button and home button functionality.
      */
     private void setupToolbar() {
-        // Find the back button in the custom toolbar
         ImageButton backButton = findViewById(R.id.backButton);
         if (backButton != null) {
-            // Set click listener to handle back navigation
             backButton.setOnClickListener(v -> handleBackNavigation());
         }
         
-        // Find the home button in the custom toolbar
         ImageButton homeButton = findViewById(R.id.homeButton);
         if (homeButton != null) {
-            // Set click listener to navigate to MainActivity
             homeButton.setOnClickListener(v -> navigateToHome());
         }
+
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar_layout));
+        InsetsHelper.applyBottomInset(findViewById(R.id.credentialOptionsSection));
     }
     
     /**
@@ -753,6 +756,14 @@ public class ManageActivity extends AppCompatActivity {
     }
     
     private void passkeyUXVisible() {
+        // Restore list section to fill available space when passkeys are present.
+        android.view.ViewGroup.LayoutParams lp = passkeysListSection.getLayoutParams();
+        lp.height = 0;
+        if (lp instanceof android.widget.LinearLayout.LayoutParams) {
+            ((android.widget.LinearLayout.LayoutParams) lp).weight = 1;
+        }
+        passkeysListSection.setLayoutParams(lp);
+
         // Create a custom adapter that displays the filename without extension
         ArrayAdapter<File> adapter = new ArrayAdapter<File>(
             this,
@@ -796,14 +807,23 @@ public class ManageActivity extends AppCompatActivity {
     private void passkeyUXHidden() {
         passkeysListView.setVisibility(View.GONE);
         noPasskeysText.setVisibility(View.VISIBLE);
-        
+
+        // Collapse the list section so it wraps the empty-state text only,
+        // allowing the button section to float up naturally.
+        android.view.ViewGroup.LayoutParams lp = passkeysListSection.getLayoutParams();
+        lp.height = android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
+        if (lp instanceof android.widget.LinearLayout.LayoutParams) {
+            ((android.widget.LinearLayout.LayoutParams) lp).weight = 0;
+        }
+        passkeysListSection.setLayoutParams(lp);
+
         // Make sure the create button is visible even when no passkeys exist
         createButton.setVisibility(View.VISIBLE);
-        
+
         // Hide update and delete buttons when no passkeys exist
         manageButton.setVisibility(View.GONE);
         deleteButton.setVisibility(View.GONE);
-        
+
         credentialOptionsSection.setVisibility(View.VISIBLE);
     }
     /**

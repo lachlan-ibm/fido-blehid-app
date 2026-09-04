@@ -22,6 +22,9 @@ import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.view.WindowCompat;
+
+import com.isfs.blekey.util.InsetsHelper;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.zxing.BarcodeFormat;
@@ -64,9 +67,13 @@ public class QRScannerActivity extends AppCompatActivity {
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_qr_scanner);
-        
+
+        // Apply bottom inset to root so the flashlight FAB clears the nav bar
+        InsetsHelper.applyBottomInset(findViewById(R.id.barcode_scanner).getRootView());
+
         // Set up toolbar with back button
         setupToolbar();
         
@@ -99,11 +106,13 @@ public class QRScannerActivity extends AppCompatActivity {
     private void setupToolbar() {
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
-        
+
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayShowTitleEnabled(false);
         }
-        
+
+        InsetsHelper.applyTopInsetToToolbar(toolbar);
+
         ImageButton backButton = toolbar.findViewById(R.id.backButton);
         backButton.setOnClickListener(v -> {
             setResult(RESULT_SCAN_CANCELLED);

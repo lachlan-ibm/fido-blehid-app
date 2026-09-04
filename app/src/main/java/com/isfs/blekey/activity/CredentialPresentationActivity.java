@@ -15,11 +15,13 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.isfs.blekey.R;
 import com.isfs.blekey.credential.VerifiableCredential;
+import com.isfs.blekey.util.InsetsHelper;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.oidc.Oidc4VpHandler;
 import com.isfs.blekey.oidc.OidcException;
@@ -68,9 +70,13 @@ public class CredentialPresentationActivity extends AppCompatActivity {
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_credential_presentation);
-        
+
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
+        InsetsHelper.applyBottomInset(findViewById(R.id.contentLayout));
+
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
         
         // Set up home button to navigate to MainActivity

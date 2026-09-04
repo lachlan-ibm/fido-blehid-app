@@ -11,8 +11,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
 
 import com.isfs.blekey.R;
+import com.isfs.blekey.util.InsetsHelper;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.util.AndroidKeystoreManager;
 import com.isfs.blekey.util.KeyUtils;
@@ -46,6 +48,7 @@ public class CreatePasskeyActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_create_passkey);
 
@@ -64,9 +67,12 @@ public class CreatePasskeyActivity extends AppCompatActivity {
         // Set up create button click listener
         createButton.setOnClickListener(view -> createPasskey());
 
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
+        InsetsHelper.applyBottomInset(findViewById(R.id.createButtonFrame));
+
         // Set up back button in toolbar
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
-        
+
         // Set up home button to navigate to MainActivity
         findViewById(R.id.homeButton).setOnClickListener(view -> {
             android.content.Intent intent = new android.content.Intent(this, com.isfs.blekey.MainActivity.class);

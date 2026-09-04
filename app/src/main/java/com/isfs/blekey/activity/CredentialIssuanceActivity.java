@@ -10,8 +10,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
 
 import com.isfs.blekey.R;
+import com.isfs.blekey.util.InsetsHelper;
 import com.isfs.blekey.credential.VerifiableCredential;
 import com.isfs.blekey.data.Passkey;
 import com.isfs.blekey.oidc.CredentialOffer;
@@ -62,13 +64,17 @@ public class CredentialIssuanceActivity extends AppCompatActivity {
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_credential_issuance);
         
         initializeFido2Home();
         
         biometricAuthHelper = new BiometricAuthHelper(this);
-        
+
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
+        InsetsHelper.applyBottomInset(findViewById(R.id.contentLayout));
+
         findViewById(R.id.backButton).setOnClickListener(view -> {
             setResult(RESULT_CANCELED);
             finish();

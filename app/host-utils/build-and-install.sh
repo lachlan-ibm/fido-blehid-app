@@ -7,8 +7,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-APK_PATH="$PROJECT_ROOT/app/build/outputs/apk/release/app-debug.apk"
-#APK_PATH="$PROJECT_ROOT/app/build/outputs/apk/debug/app-debug.apk"
+#APK_PATH="$PROJECT_ROOT/app/build/outputs/apk/release/app-debug.apk"
+APK_PATH="$PROJECT_ROOT/app/build/outputs/apk/debug/app-debug.apk"
 PACKAGE_NAME="com.isfs.blekey"
 
 echo "=== FIDO BLE HID App - Build and Install ==="

@@ -8,6 +8,7 @@ import android.view.View;
 import android.content.Intent;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AlertDialog;
+import androidx.core.view.WindowCompat;
 import android.util.Log;
 import android.widget.Toast;
 import android.widget.Button;
@@ -16,6 +17,7 @@ import com.isfs.blekey.activity.ManageActivity;
 import com.isfs.blekey.activity.ServerFragment;
 import com.isfs.blekey.activity.QRScannerActivity;
 import com.isfs.blekey.util.AndroidKeystoreManager;
+import com.isfs.blekey.util.InsetsHelper;
 import com.isfs.blekey.util.KeyUtils;
 import com.isfs.blekey.util.CameraPermissionHelper;
 
@@ -31,6 +33,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         
@@ -40,11 +43,13 @@ public class MainActivity extends AppCompatActivity {
     }
     
     /**
-     * Configures the toolbar by hiding back and home buttons to center the logo.
+     * Configures the toolbar by hiding back and home buttons to center the logo,
+     * and applies the top system inset so content clears the status bar / cutout.
      */
     private void setupToolbar() {
         findViewById(R.id.backButton).setVisibility(View.GONE);
         findViewById(R.id.homeButton).setVisibility(View.GONE);
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
     }
     
     /**

@@ -11,6 +11,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.WindowCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -24,6 +25,7 @@ import com.google.android.material.tabs.TabLayoutMediator;
 import com.isfs.blekey.R;
 import com.isfs.blekey.credential.VerifiableCredential;
 import com.isfs.blekey.data.Passkey;
+import com.isfs.blekey.util.InsetsHelper;
 
 import android.widget.FrameLayout;
 import android.widget.Toast;
@@ -56,6 +58,7 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_resident_credentials);
 
@@ -64,6 +67,9 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             passwordHash = intent.getByteArrayExtra("passkey");
             fileName = intent.getStringExtra("file");
         }
+
+        InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
+        InsetsHelper.applyBottomInset(findViewById(R.id.deleteButton));
 
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
 
