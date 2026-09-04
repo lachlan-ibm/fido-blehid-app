@@ -1,0 +1,34 @@
+# Privacy Policy
+
+**Last updated:** 2025-01-01
+
+## Overview
+
+This Privacy Policy describes how the FIDO BLE HID application ("the App") handles your information.
+
+## Information We Collect
+
+The App collects account information solely for the purpose of authentication and login. This may include:
+
+- Account credentials (e.g., usernames, public key material)
+- FIDO/passkey registration data associated with your accounts
+
+## How Your Data Is Stored
+
+All data collected by the App is stored **locally on your device only**. No data is transmitted to, or stored on, any remote server operated by the developers of this App.
+
+## Data Deletion
+
+All data stored by the App is permanently deleted when you uninstall the App from your device. No residual data is retained after uninstallation.
+
+## Third-Party Access
+
+We do not sell, share, or transfer your data to any third parties.
+
+## Changes to This Policy
+
+We may update this Privacy Policy from time to time. Any changes will be reflected by updating the "Last updated" date above.
+
+## Contact
+
+If you have questions about this Privacy Policy, please open an issue in the project repository.
