@@ -10,6 +10,8 @@ on:
 jobs:
   lib-test:
     uses: ./.github/workflows/lib-tests.yml
+  copyright-check:
+    uses: .github/workflows/copyright-check.yml
 
   build-release-apk:
     runs-on: ubuntu-latest
