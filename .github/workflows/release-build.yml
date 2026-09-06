@@ -40,7 +40,7 @@ jobs:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
           echo "$KEYSTORE_B64" | base64 -d > release.keystore
-
+          wc -c release.keystore
       - name: Build release bundle
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
