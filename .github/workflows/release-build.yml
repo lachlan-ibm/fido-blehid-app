@@ -41,7 +41,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           echo -n "$KEYSTORE_B64" | base64 -d > release.keystore
-          keytool --list --keystore release.keystore -storepass $KEYSTORE_PASSWORD | grep "Certificate fingerprint"
+          keytool -list -keystore release.keystore -storepass $KEYSTORE_PASSWORD | grep "Certificate fingerprint"
       - name: Build release bundle
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
@@ -49,7 +49,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          keytool --list --keystore release.keystore -storepass $KEYSTORE_PASSWORD | grep "Certificate fingerprint"
+          keytool -list -keystore $KEYSTORE_PATH -storepass $KEYSTORE_PASSWORD | grep "Certificate fingerprint"
           ./gradlew :app:bundleRelease
 
       - name: Build release apk
@@ -59,7 +59,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          keytool --list --keystore release.keystore -storepass $KEYSTORE_PASSWORD | grep "Certificate fingerprint"
+          keytool -list -keystore $KEYSTORE_PATH -storepass $KEYSTORE_PASSWORD | grep "Certificate fingerprint"
           ./gradlew :app:assembleRelease
 
       - name: Rename artifacts with version tag
