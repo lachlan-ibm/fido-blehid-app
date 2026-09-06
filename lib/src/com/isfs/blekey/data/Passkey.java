@@ -386,28 +386,34 @@ public class Passkey {
     }
 
 
-    private static boolean validatePinHash(byte[] pinHash, File passkeyFile) {
+    /**
+     * Returns the full 32-byte PIN hash, reconstructing it from the stash file when only
+     * the 16-byte lower half is provided. Returns the original value unchanged if it is
+     * already 32 bytes (or null). Returns {@code null} on reconstruction failure.
+     */
+    private static byte[] resolvePinHash(byte[] pinHash, File passkeyFile) {
         // If we only have 16 bytes (lower hash), reconstruct the full 32-byte PIN hash
         // by reading the cached upper hash from the companion .stash file
-        if (pinHash != null && pinHash.length == 16) {
+        if (pinHash != null && pinHash.length == HALF_HASH) {
             logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
             try {
                 byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(passkeyFile));
                 byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashEnc);
-                
+
                 if (upperHash != null && upperHash.length == HALF_HASH) {
-                    pinHash = getCachedPinHash(upperHash, pinHash);
-                    logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", pinHash.length);
+                    byte[] full = getCachedPinHash(upperHash, pinHash);
+                    logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", full.length);
+                    return full;
                 } else {
                     logger.error("writeKey: Failed to decrypt upper hash from stash file");
-                    return false;
+                    return null;
                 }
             } catch (Exception e) {
                 logger.error("writeKey: Error reconstructing PIN hash from stash file", e);
-                return false;
+                return null;
             }
         }
-        return true;
+        return pinHash;
     }
 
     /**
@@ -428,11 +434,10 @@ public class Passkey {
      */
     public static boolean writeKey(Passkey passkey, byte[] pinHash, File passkeyFile) {
         try {
-            if (!validatePinHash(pinHash, passkeyFile)) {
-                return false;
-            }
-            
-            // Validate inputs (now with potentially reconstructed 32-byte hash)
+            // Resolve to the full 32-byte hash (reconstructing from stash if needed)
+            pinHash = resolvePinHash(pinHash, passkeyFile);
+
+            // Validate inputs (now with the full 32-byte hash)
             if (!validateWriteInputs(passkey, pinHash)) {
                 return false;
             }

@@ -31,8 +31,8 @@ android {
         applicationId "com.isfs.blekey"
         minSdkVersion 33
         targetSdkVersion 36
-        versionCode 3
-        versionName "Aye.Bt.Key Alpha Release"
+        versionCode 4
+        versionName "Aye.Bt.Key Beta Release"
         vectorDrawables.useSupportLibrary = true
     }
 
