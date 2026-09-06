@@ -43,10 +43,7 @@ jobs:
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         run: |
           echo "$KEYSTORE_B64" | base64 -d > release.keystore
-          wc -c release.keystore
-          echo "KEYSTORE_ALIAS length: ${#KEYSTORE_ALIAS}"
-          echo "KEYSTORE_PASSWORD length: ${#KEYSTORE_PASSWORD}"
-          echo "KEY_PASSWORD length: ${#KEY_PASSWORD}"
+
       - name: Build release bundle
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
