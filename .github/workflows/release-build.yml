@@ -38,11 +38,13 @@ jobs:
       - name: Decode keystore
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
-        run: echo "$KEYSTORE_B64" | base64 -d > release-keystore.jks
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > release.keystore
+          wc -c release.keystore
 
       - name: Build release bundle
         env:
-          KEYSTORE_PATH: ${{ github.workspace }}/release-keystore.jks
+          KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
           KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
