@@ -496,7 +496,7 @@ public class Passkey {
         X509Certificate cert = passkey.getCertificate();
         byte[] p12_bytes = KeyUtils.writePKCS12(key, cert, pinHash);
 
-        ECPublicKey pub = KeyUtils.publicFromPrivate(key);
+        ECPublicKey pub = KeyUtils.getPubKey(key);
         byte[] encResCreds = KeyUtils.ecdhEncrypt(Cbor.encode(passkey.getResCreds()), pub);
         ByteBuffer buffer = ByteBuffer.allocate(4);
         buffer.order(ByteOrder.LITTLE_ENDIAN);

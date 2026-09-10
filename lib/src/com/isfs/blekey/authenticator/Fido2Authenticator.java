@@ -606,11 +606,12 @@ public class Fido2Authenticator implements java.io.Serializable {
             rp = "https://" + (String) ((Map<String, Object>) publicKey.get("rp")).get("id");
             type = "webauthn.create";
         }
-        JsonObject clientDataJSON = Json.createObjectBuilder().add("origin", rp)
+        JsonObject clientDataJSON = Json.createObjectBuilder().add("type", type)
                 .add("challenge",
-                        new String(Base64.getUrlEncoder()
-                                .encode((byte[]) publicKey.get("challenge"))))
-                .add("type", type).build();
+                        Base64.getUrlEncoder().withoutPadding()
+                                .encodeToString((byte[]) publicKey.get("challenge")))
+                .add("origin", rp)
+                .add("crossOrigin", false).build();
         return clientDataJSON;
     }
 

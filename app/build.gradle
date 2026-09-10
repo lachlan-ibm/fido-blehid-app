@@ -20,7 +20,7 @@ apply plugin: 'com.android.application'
 android {
     namespace = 'com.isfs.blekey'
 
-    compileSdkVersion 34
+    compileSdkVersion 35
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -136,8 +136,8 @@ dependencies {
     // Android Credential Manager (Phase 4.2)
     // Note: Full Credential Manager API requires Android 14+ (API 34+)
     // These dependencies provide the foundation for future integration
-    implementation 'androidx.credentials:credentials:1.3.0'
-    implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
+    implementation 'androidx.credentials:credentials:1.5.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.5.0'
     
     // Use the lib module directly instead of the published artifact
     implementation project(':lib')
