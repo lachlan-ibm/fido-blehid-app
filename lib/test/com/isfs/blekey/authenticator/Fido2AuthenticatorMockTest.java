@@ -204,6 +204,7 @@ public class Fido2AuthenticatorMockTest {
             when(mockBuilder.add(eq("origin"), anyString())).thenReturn(mockBuilder);
             when(mockBuilder.add(eq("challenge"), anyString())).thenReturn(mockBuilder);
             when(mockBuilder.add(eq("type"), anyString())).thenReturn(mockBuilder);
+            when(mockBuilder.add(eq("crossOrigin"), anyBoolean())).thenReturn(mockBuilder);
             when(mockBuilder.build()).thenReturn(mockClientData);
             
             // Test the method
