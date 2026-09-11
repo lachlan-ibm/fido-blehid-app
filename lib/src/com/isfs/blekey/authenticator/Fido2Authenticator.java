@@ -1343,14 +1343,15 @@ public class Fido2Authenticator implements java.io.Serializable {
 
         JsonObject clientDataJSON = buildClientDataJson(publicKey);
         byte[] clientDataBytes = clientDataJSON.toString().getBytes();
-        String clientDataString = Base64.getUrlEncoder().encodeToString(clientDataBytes);
-        saar.put("clientDataJSON", clientDataString);
+        saar.put("clientDataJSON", Base64.getUrlEncoder().withoutPadding()
+                                        .encodeToString(clientDataBytes));
 
         // Construct Attestation Object https://w3c.github.io/webauthn/#sctn-attestation
         byte[] authData = buildAuthenticatorData(publicKey, "set uv", extensions,
                 extensionResults, kp);
 
-        saar.put("authenticatorData", Base64.getUrlEncoder().encode(authData));
+        saar.put("authenticatorData", Base64.getUrlEncoder().withoutPadding()
+                                        .encodeToString(authData));
 
         // credential information
         byte[] clientDataHash = digest.digest(clientDataBytes);
@@ -1362,10 +1363,11 @@ public class Fido2Authenticator implements java.io.Serializable {
                 : "SHA256withRSA");
         byte[] signature = signData(sigByteStream.toByteArray(), kp.getPrivate(), alg);
 
-        saar.put("signature", Base64.getUrlEncoder().encode(signature));
+        saar.put("signature", Base64.getUrlEncoder().encodeToString(signature));
         saar.put("userHandle", "");
 
-        spkc.put("id", Base64.getUrlEncoder().encodeToString(getCredId()));
+        spkc.put("id", Base64.getUrlEncoder().withoutPadding()
+                            .encodeToString(getCredId()));
         spkc.put("rawId", spkc.get("id"));
         spkc.put("response", saar);
         // type (from Credential defined here:

@@ -11,9 +11,8 @@
     android:minHeight="72dp">
 
     <LinearLayout
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
         android:orientation="vertical"
         android:layout_gravity="center_vertical">
 
@@ -34,16 +33,6 @@
             android:layout_marginTop="4dp"
             android:fontFamily="monospace" />
     </LinearLayout>
-
-    <ImageView
-        android:id="@+id/deleteIcon"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="center_vertical"
-        android:padding="12dp"
-        android:src="@android:drawable/ic_menu_delete"
-        android:contentDescription="Delete credential"
-        android:background="?attr/selectableItemBackgroundBorderless" />
 
 </LinearLayout>
 

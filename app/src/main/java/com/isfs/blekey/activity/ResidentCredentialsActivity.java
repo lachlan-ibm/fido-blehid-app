@@ -25,7 +25,9 @@ import com.google.android.material.tabs.TabLayoutMediator;
 import com.isfs.blekey.R;
 import com.isfs.blekey.credential.VerifiableCredential;
 import com.isfs.blekey.data.Passkey;
+import com.isfs.blekey.util.BiometricAuthHelper;
 import com.isfs.blekey.util.InsetsHelper;
+import com.isfs.blekey.util.KeyUtils;
 
 import android.widget.FrameLayout;
 import android.widget.Toast;
@@ -55,11 +57,13 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
     private TabLayout tabLayout;
     private ViewPager2 viewPager;
     private FrameLayout loadingFrame;
+    private BiometricAuthHelper biometricAuthHelper;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
+
         setContentView(R.layout.activity_resident_credentials);
 
         Intent intent = getIntent();
@@ -69,7 +73,9 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
         }
 
         InsetsHelper.applyTopInsetToToolbar(findViewById(R.id.toolbar));
-        InsetsHelper.applyBottomInset(findViewById(R.id.deleteButton));
+        InsetsHelper.applyBottomInset(findViewById(R.id.updatePinButton));
+        biometricAuthHelper = new BiometricAuthHelper(this);
+        findViewById(R.id.updatePinButton).setOnClickListener(view -> showUpdatePinDialog());
 
         findViewById(R.id.backButton).setOnClickListener(view -> finish());
 
@@ -92,6 +98,7 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
     }
 
     private void loadPasskey() {
+        Log.d(TAG, "loadPasskey");
         if (fileName == null || passwordHash == null) {
             Toast.makeText(this, "Failed to open passkey", Toast.LENGTH_SHORT).show();
             return;
@@ -118,9 +125,17 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
                     Toast.makeText(this, "Failed to open passkey", Toast.LENGTH_SHORT).show();
                 } else {
                     passkey = result;
+                    Log.d(TAG, "loadPasskey: resCreds size after reload = " + (passkey.getResCreds() == null ? "null" : passkey.getResCreds().size()));
                     tabLayout.setVisibility(View.VISIBLE);
                     viewPager.setVisibility(View.VISIBLE);
                     setupTabs();
+                    // If the fragment was already created (e.g. after a rotation-triggered
+                    // recreate), it will have called loadPasskeys() before the background
+                    // thread finished and found passkey==null. Tell it to reload now.
+                    Fragment f = getSupportFragmentManager().findFragmentByTag("f0");
+                    if (f instanceof PasskeysFragment) {
+                        ((PasskeysFragment) f).reload();
+                    }
                 }
             });
             exec.shutdown();
@@ -196,6 +211,11 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             return view;
         }
         
+        public void reload() {
+            if (recyclerView == null) return;
+            loadPasskeys();
+        }
+
         private void loadPasskeys() {
             ResidentCredentialsActivity activity = (ResidentCredentialsActivity) getActivity();
             if (activity == null || activity.passkey == null) {
@@ -295,7 +315,7 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
         @Override
         public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
             View view = LayoutInflater.from(parent.getContext())
-                    .inflate(android.R.layout.simple_list_item_2, parent, false);
+                    .inflate(R.layout.passkey_list_item, parent, false);
             return new ViewHolder(view);
         }
         
@@ -304,14 +324,14 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             Map<String, byte[]> cred = passkeys.get(position);
             try {
                 String rpId = new String(cred.get("rp.id"), "UTF-8");
-                holder.text1.setText("Credential: " + rpId);
+                holder.text1.setText(rpId);
                 
                 // Display user_handle as hex (first 16 bytes, or 13 + "..." if longer)
                 byte[] userHandle = cred.get("user.id");
-                String userHandleDisplay = formatUserHandle(userHandle);
-                holder.text2.setText("User: " + userHandleDisplay);
-                
-                holder.itemView.setOnClickListener(v -> showDeleteDialog(cred.get("rp.id"), rpId));
+                holder.text2.setText("ID: " + formatUserHandle(userHandle));
+
+                final byte[] rpIdBytes = cred.get("rp.id");
+                holder.deleteIcon.setOnClickListener(v -> showDeleteDialog(rpIdBytes, rpId));
             } catch (Exception e) {
                 holder.text1.setText("Credential: [Encoding Error]");
                 holder.text2.setText("");
@@ -341,7 +361,7 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             // Convert to hex
             StringBuilder hex = new StringBuilder();
             for (int i = 0; i < bytesToShow; i++) {
-                hex.append(String.format("%02x", userHandle[i]));
+                hex.append(String.format("%x", userHandle[i]).toUpperCase());
             }
             
             if (truncated) {
@@ -389,11 +409,13 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
         static class ViewHolder extends RecyclerView.ViewHolder {
             TextView text1;
             TextView text2;
-            
+            ImageView deleteIcon;
+
             ViewHolder(View view) {
                 super(view);
                 text1 = view.findViewById(android.R.id.text1);
                 text2 = view.findViewById(android.R.id.text2);
+                deleteIcon = view.findViewById(R.id.deleteIcon);
             }
         }
     }
@@ -552,6 +574,92 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
                 associatedPasskey = view.findViewById(R.id.associatedPasskey);
             }
         }
+    }
+
+    private void showUpdatePinDialog() {
+        android.widget.EditText newPinInput = new android.widget.EditText(this);
+        newPinInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        newPinInput.setHint("New PIN (min 8 chars)");
+
+        android.widget.EditText confirmPinInput = new android.widget.EditText(this);
+        confirmPinInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        confirmPinInput.setHint("Confirm new PIN");
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int px = (int) (16 * getResources().getDisplayMetrics().density);
+        layout.setPadding(px, px, px, 0);
+        layout.addView(newPinInput);
+        layout.addView(confirmPinInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.update_pin)
+                .setView(layout)
+                .setPositiveButton(R.string.update, (dialog, which) -> {
+                    String newPin = newPinInput.getText().toString();
+                    String confirm = confirmPinInput.getText().toString();
+                    if (newPin.length() < 8) {
+                        Toast.makeText(this, R.string.password_length_policy, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (!newPin.equals(confirm)) {
+                        Toast.makeText(this, R.string.password_verify_policy, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    performPinUpdate(newPin);
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void performPinUpdate(String newPin) {
+        if (passkey == null || fileName == null) {
+            Toast.makeText(this, R.string.update_pin_failed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        biometricAuthHelper.authenticate(
+                getString(R.string.bio_prompt_title),
+                getString(R.string.update_pin),
+                new BiometricAuthHelper.AuthenticationCallback() {
+                    @Override
+                    public void onAuthenticationSucceeded(
+                            androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                        ExecutorService exec = Executors.newSingleThreadExecutor();
+                        exec.execute(() -> {
+                            byte[] newHash = KeyUtils.getPinHash(newPin);
+                            File passkeyFile = new File(getFilesDir(), fileName);
+                            boolean ok = Passkey.writeKey(passkey, newHash, passkeyFile);
+                            if (ok) {
+                                passwordHash = newHash;
+                            }
+                            runOnUiThread(() -> {
+                                if (ok) {
+                                    Toast.makeText(ResidentCredentialsActivity.this,
+                                            R.string.update_pin_success, Toast.LENGTH_SHORT).show();
+                                } else {
+                                    Toast.makeText(ResidentCredentialsActivity.this,
+                                            R.string.update_pin_failed, Toast.LENGTH_SHORT).show();
+                                }
+                            });
+                            exec.shutdown();
+                        });
+                    }
+
+                    @Override
+                    public void onAuthenticationFailed(String errorMessage) {
+                        runOnUiThread(() -> Toast.makeText(ResidentCredentialsActivity.this,
+                                R.string.authentication_required, Toast.LENGTH_SHORT).show());
+                    }
+
+                    @Override
+                    public void onAuthenticationCancelled() {
+                        runOnUiThread(() -> Toast.makeText(ResidentCredentialsActivity.this,
+                                R.string.cancel, Toast.LENGTH_SHORT).show());
+                    }
+                });
     }
 }
 

@@ -100,7 +100,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="64dp"
-            android:text="@string/create_passkey_wallet"
+            android:text="@string/create_wallet"
             android:backgroundTint="@color/ibm_blue"
             android:textColor="@color/ibm_white"
             android:textSize="18sp"

@@ -724,6 +724,9 @@ public class ManageActivity extends AppCompatActivity {
     
     /**
      * Sets up the delete button click listener.
+     * Biometric authentication is required before the wallet file is removed — this
+     * prevents anyone with unlocked-screen access from silently destroying keys.
+     * The platform key is requested purely as a presence gate; the result is not used.
      */
     private void setupDeleteButtonListener() {
         deleteButton.setOnClickListener(view -> {
@@ -731,9 +734,32 @@ public class ManageActivity extends AppCompatActivity {
                 Toast.makeText(this, getString(R.string.no_passkey_wallet_selected), Toast.LENGTH_SHORT).show();
                 return;
             }
-            deleteCredential();
-            showPasskeysList();
-            loadPasskeys(); // Refresh the list
+            biometricAuthHelper.authenticate(
+                getString(R.string.bio_prompt_title),
+                getString(R.string.bio_prompt_delete_subtitle),
+                new BiometricAuthHelper.AuthenticationCallback() {
+                    @Override
+                    public void onAuthenticationSucceeded(
+                            androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                        runOnUiThread(() -> {
+                            deleteCredential();
+                            loadPasskeys();
+                            showPasskeysList();
+                        });
+                    }
+
+                    @Override
+                    public void onAuthenticationFailed(String errorMessage) {
+                        runOnUiThread(() -> Toast.makeText(ManageActivity.this,
+                            R.string.authentication_required, Toast.LENGTH_LONG).show());
+                    }
+
+                    @Override
+                    public void onAuthenticationCancelled() {
+                        runOnUiThread(() -> Toast.makeText(ManageActivity.this,
+                            getString(R.string.cancel), Toast.LENGTH_SHORT).show());
+                    }
+                });
         });
     }
     /**
@@ -767,13 +793,13 @@ public class ManageActivity extends AppCompatActivity {
         // Create a custom adapter that displays the filename without extension
         ArrayAdapter<File> adapter = new ArrayAdapter<File>(
             this,
-            R.layout.passkey_list_item,
+            R.layout.wallet_list_item,
             FileUtils.listPasskeys()) {
                 @Override
                 public View getView(int position, View convertView, ViewGroup parent) {
                     View view = convertView;
                     if (view == null) {
-                        view = getLayoutInflater().inflate(R.layout.passkey_list_item, parent, false);
+                        view = getLayoutInflater().inflate(R.layout.wallet_list_item, parent, false);
                     }
                     
                     TextView text = (TextView) view.findViewById(android.R.id.text1);

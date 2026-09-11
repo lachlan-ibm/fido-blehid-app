@@ -1055,7 +1055,7 @@ public class ServerFragment extends Fragment
         alertDialog.setTitle(requireContext().getString(R.string.no_passkey_wallets));
         alertDialog.setMessage(requireContext().getString(R.string.create_passkey_wallet_first));
         alertDialog.setButton(AlertDialog.BUTTON_POSITIVE,
-                requireContext().getString(R.string.create_passkey_wallet),
+                requireContext().getString(R.string.create),
                 (dialog, which) -> onCreatePasskeyClicked(dialog));
         alertDialog.setButton(AlertDialog.BUTTON_NEGATIVE,
                 requireContext().getString(R.string.cancel),

@@ -96,7 +96,7 @@ public class CreatePasskeyActivity extends AppCompatActivity {
 
     private void hideCreateSpinner() {
         createProgress.setVisibility(View.GONE);
-        createButton.setText(R.string.create_passkey_wallet);
+        createButton.setText(R.string.create);
         createButton.setEnabled(true);
     }
 

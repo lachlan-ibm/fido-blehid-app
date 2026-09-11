@@ -137,17 +137,46 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="48dp">
 
-        <TextView
-            android:id="@+id/mainTitleText"
+        <!-- Header row: title + inline create button -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/available_wallets"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="16dp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
 
+            <TextView
+                android:id="@+id/mainTitleText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/available_wallets"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/createCredential"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/create"
+                android:drawableStart="@android:drawable/ic_input_add"
+                android:drawablePadding="6dp"
+                android:backgroundTint="@color/ibm_blue"
+                android:textColor="@color/ibm_white"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:paddingVertical="16dp"
+                android:paddingHorizontal="28dp"
+                android:elevation="2dp"
+                android:stateListAnimator="@null"
+                style="@android:style/Widget.Material.Button" />
+
+        </LinearLayout>
         <!-- Passkeys list section -->
         <LinearLayout
             android:id="@+id/passkeysListSection"
@@ -264,7 +293,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginBottom="8dp">
+                android:layout_marginTop="16dp">
 
                 <Button
                     android:id="@+id/deleteButton"
@@ -305,22 +334,6 @@
                     style="@android:style/Widget.Material.Button" />
             </LinearLayout>
 
-            <Button
-                android:id="@+id/createCredential"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="80dp"
-                android:text="@string/create_passkey_wallet"
-                android:backgroundTint="@color/ibm_blue"
-                android:textColor="@color/ibm_white"
-                android:textSize="20sp"
-                android:textStyle="bold"
-                android:paddingVertical="24dp"
-                android:paddingHorizontal="24dp"
-                android:letterSpacing="0.02"
-                android:elevation="4dp"
-                android:stateListAnimator="@null"
-                style="@android:style/Widget.Material.Button" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

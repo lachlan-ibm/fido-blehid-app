@@ -48,7 +48,8 @@
     <string name="enter_password">Enter password</string>
     <string name="confirm_password">Confirm Password:</string>
     <string name="confirm_password_hint">Confirm password</string>
-    <string name="create_passkey_wallet">Create Passkey Wallet</string>
+    <string name="create">Create</string>
+    <string name="create_wallet">Create Wallet</string>
     <string name="passkey_wallet_exists_error">A passkey wallet with this name already exists.</string>
     
     <!-- Validation messages -->
@@ -192,6 +193,7 @@
     <!-- Biometric prompt for TEE-gated platform key -->
     <string name="bio_prompt_title">Confirm your identity</string>
     <string name="bio_prompt_subtitle">Required to access your passkey</string>
+    <string name="bio_prompt_delete_subtitle">Verify your identity to permanently delete this wallet</string>
 
     <!-- AdvancedConfigActivity biometric subtitles -->
     <string name="adv_config_bio_subtitle_load">Required to decrypt the HKDF configuration</string>
@@ -199,4 +201,9 @@
     <string name="adv_config_bio_subtitle_reset">Required to delete and regenerate the platform key</string>
     <string name="adv_config_decrypt_failed">Failed to decrypt HKDF info — showing default</string>
     <string name="adv_config_load_hkdf_button">Load Current Value</string>
+
+    <!-- ResidentCredentialsActivity PIN update strings -->
+    <string name="update_pin">Update PIN</string>
+    <string name="update_pin_success">PIN updated successfully</string>
+    <string name="update_pin_failed">Failed to update PIN</string>
 </resources>
