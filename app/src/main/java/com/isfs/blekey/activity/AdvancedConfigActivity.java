@@ -52,10 +52,10 @@ import java.security.interfaces.ECPublicKey;
 public class AdvancedConfigActivity extends AppCompatActivity {
 
     private static final String TAG = AdvancedConfigActivity.class.getCanonicalName();
-    private static final String PREFS_NAME              = "HIDServicePrefs";
-    private static final String PREFS_KEY_HKDF_INFO     = "hkdf_info";
-    private static final String PREFS_KEY_AUTO_START    = "auto_start_enabled";
-    private static final String PREFS_KEY_CTAP1_COMPAT  = "ctap1_compat_mode";
+    public static final String PREFS_NAME                       = "HIDServicePrefs";
+    private static final String PREFS_KEY_HKDF_INFO             = "hkdf_info";
+    public static final String PREFS_KEY_AUTO_START             = "auto_start_enabled";
+    private static final String PREFS_KEY_CTAP1_COMPAT          = "ctap1_compat_mode";
     private static final String PREFS_KEY_UP_DIALOG_TIMEOUT     = "up_dialog_timeout_ms";
     private static final String PREFS_KEY_UP_BIO_TIMEOUT        = "up_bio_timeout_ms";
     private static final String PREFS_KEY_UP_BACKGROUND_TIMEOUT = "up_background_timeout_ms";
@@ -117,7 +117,12 @@ public class AdvancedConfigActivity extends AppCompatActivity {
             }
             Log.d(TAG, "Auto-start set to: " + isChecked);
         });
-
+        findViewById(R.id.restartBtAdvertiseButton).setOnClickListener(v -> {
+            Intent restartIntent = new Intent(this, BluetoothCtapService.class);
+            restartIntent.setAction(BluetoothCtapService.ACTION_RESTART_HID);
+            startService(restartIntent);
+            Toast.makeText(this, R.string.adv_config_restart_bt_advertise_desc, Toast.LENGTH_SHORT).show();
+        });
         // Load and wire CTAP1 compat toggle — persists immediately and applies live
         ctap1CompatSwitch.setChecked(
                 prefs.getBoolean(PREFS_KEY_CTAP1_COMPAT, AppConfig.DEFAULT_CTAP1_COMPAT));

@@ -351,21 +351,12 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             }
             
             // Determine how many bytes to show
-            int bytesToShow = Math.min(userHandle.length, 16);
-            boolean truncated = userHandle.length > 16;
-            
-            if (truncated) {
-                bytesToShow = 13; // Show 13 bytes + "..." if truncated
-            }
+            int bytesToShow = Math.min(userHandle.length, 11);
             
             // Convert to hex
             StringBuilder hex = new StringBuilder();
             for (int i = 0; i < bytesToShow; i++) {
-                hex.append(String.format("%x", userHandle[i]).toUpperCase());
-            }
-            
-            if (truncated) {
-                hex.append("...");
+                hex.append(String.format("%02X ", userHandle[i]));
             }
             
             return hex.toString();

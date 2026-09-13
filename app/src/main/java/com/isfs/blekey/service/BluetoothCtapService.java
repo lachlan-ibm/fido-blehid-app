@@ -71,6 +71,7 @@ public class BluetoothCtapService extends Service {
     private static final int MIN_BATTERY_LEVEL = 15;
     private static final int LOW_BATTERY_LEVEL = 10;
 
+    public static final String ACTION_RESTART_HID = BluetoothCtapService.class.getPackageName() + "RESTART_SERVICE";
     // -------------------------------------------------------------------------
     // UP constants
     // -------------------------------------------------------------------------
@@ -192,6 +193,10 @@ public class BluetoothCtapService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "onStartCommand");
 
+        if (ACTION_RESTART_HID.equals(intent != null ? intent.getAction() : null)) {
+                restartHidTransport();
+                return START_STICKY;
+            }
         Notification notification = createNotification();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification,
@@ -283,6 +288,23 @@ public class BluetoothCtapService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "FIDOBLEService unexpected error: " + e.getMessage(), e);
             return false;
+        }
+    }
+
+    /**
+     * Tears down the current HID transport registration and re-registers it.
+     * Used by the "Restart BT Advertise" button in AdvancedConfigActivity.
+     */
+    private void restartHidTransport() {
+        Log.i(TAG, "restartHidTransport: re-registering HID app on existing transport");
+        if (hidService != null) {
+            hidService.reRegisterHidApp();
+        } else {
+            Log.w(TAG, "restartHidTransport: no hidService, attempting fresh start");
+            startHidTransport();
+            if (keepaliveManager != null) {
+                AuthenticatorAPI.setKeepaliveManager(keepaliveManager);
+            }
         }
     }
 

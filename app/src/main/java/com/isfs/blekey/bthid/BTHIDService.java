@@ -134,6 +134,29 @@ public class BTHIDService implements ICtapTransport {
     }
     
     /**
+     * Unregisters the current HID app registration and re-registers it on the
+     * same profile proxy. The result of the re-registration
+     * is delivered asynchronously via {@link Callback#onAppStatusChanged}.
+     */
+    @SuppressLint("MissingPermission")
+    public void reRegisterHidApp() {
+        Log.i(TAG, "reRegisterHidApp()");
+        if (hidDevice == null) {
+            Log.w(TAG, "reRegisterHidApp: no proxy open, falling back to full registerHidDevice()");
+            registerHidDevice();
+            return;
+        }
+        if (isAppRegistered) {
+            hidDevice.unregisterApp();
+            isAppRegistered = false;
+        }
+        connectedDevices.clear();
+        deviceStates.clear();
+        // registerApp() is called on the still-open proxy — no getProfileProxy() round-trip needed.
+        registerApp();
+    }
+
+    /**
      * Callback for HID device events
      */
     private final BluetoothHidDevice.Callback hidDeviceCallback = new BluetoothHidDevice.Callback() {

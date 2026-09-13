@@ -27,7 +27,8 @@
     <string name="available_wallets">Available Wallets</string>
     <string name="ble_server_status">BLE Server Status</string>
     <string name="ble_server_status_text">Server is advertising...</string>
-    <string name="auto_start_on_boot">Auto-start BLE Advertise</string>
+    <string name="bluetooth_service">Bluetooth Service:</string>
+    <string name="adv_config_restart_bt_advertise_desc">Restart bluetooth service running in the app</string>
     <string name="no_devices_connected">No devices connected</string>
     <string name="pair_device">Pair Device (BT/BLE)</string>
     <string name="passkey_connectivity_controls">Passkey Connectivity Controls</string>
@@ -140,7 +141,7 @@
     <!-- Advanced Configuration strings -->
     <string name="adv_config_title">Advanced Configuration</string>
     <string name="adv_config_button_desc">Open advanced configuration</string>
-    <string name="adv_config_hkdf_info_label">HKDF Domain Separation String (info)</string>
+    <string name="adv_config_hkdf_info_label">System Passkey Nonce (KDF)</string>
     <string name="adv_config_hkdf_info_hint">e.g. FIDO2-PASSKEY-SEED</string>
     <string name="adv_config_hkdf_warning">⚠ Changing this value invalidates all existing credentials. All relying parties must be re-enrolled after saving.</string>
     <string name="adv_config_hkdf_info_too_short">Info string must be at least %1$d characters</string>

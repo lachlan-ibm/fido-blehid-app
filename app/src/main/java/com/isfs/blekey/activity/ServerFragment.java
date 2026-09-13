@@ -37,6 +37,7 @@ import android.os.IBinder;
 import android.provider.Settings;
 import android.util.Log;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -575,8 +576,12 @@ public class ServerFragment extends Fragment
 
     private void checkBluetoothAndStart() {
         if (!BTHIDService.isBluetoothEnabled(requireContext())) {
-            Log.d(TAG, "Bluetooth is not enabled, requesting user to enable it");
-            enableBtLauncher.launch(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE));
+            Log.d(TAG, "Bluetooth is not enabled — BT features unavailable");
+            SharedPreferences prefs = requireContext()
+                    .getSharedPreferences(AdvancedConfigActivity.PREFS_NAME, Context.MODE_PRIVATE);
+            if (prefs.getBoolean(AdvancedConfigActivity.PREFS_KEY_AUTO_START, true)) {
+                Toast.makeText(requireContext(), R.string.requires_bl_enabled, Toast.LENGTH_LONG).show();
+            }
             return;
         }
 
@@ -605,7 +610,7 @@ public class ServerFragment extends Fragment
         alertDialog.setOnDismissListener(new OnDismissListener() {
             @Override
             public void onDismiss(final DialogInterface dialog) {
-                requireActivity().finish();
+                // BT unsupported — credential-manager feature still accessible.
             }
         });
         alertDialog.show();
@@ -707,6 +712,9 @@ public class ServerFragment extends Fragment
         }
 
         Set<String> connectedAddresses = new HashSet<>();
+        for (BluetoothDevice device : connectedDevices) {
+            connectedAddresses.add(device.getAddress());
+        }
         return new DeviceCollectionResult(bondedAddresses, connectedAddresses,
                                          connectedDevices, canQueryHidProfile);
     }
