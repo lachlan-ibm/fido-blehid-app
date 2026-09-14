@@ -74,6 +74,8 @@ jobs:
     if: github.event_name == 'release'
     needs: build-release-apk
     environment: actions
+    permissions:
+      contents: write
     steps:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
