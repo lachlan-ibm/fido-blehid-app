@@ -254,6 +254,13 @@ public class ManageActivity extends AppCompatActivity {
             }
         }
         loadPasskeys();
+        // Guard: if the previously selected file no longer exists (e.g. after a rename),
+        // reset the selection so the UI does not hold a stale reference.
+        if (selectedPasskeyFile != null && !selectedPasskeyFile.exists()) {
+            selectedPasskeyFile = null;
+            selectedPosition = -1;
+            rpId = null;
+        }
     }
     
     @Override

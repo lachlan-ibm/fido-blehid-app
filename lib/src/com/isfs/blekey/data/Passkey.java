@@ -689,6 +689,15 @@ public class Passkey {
     }
 
     /**
+     * Updates the in-memory file name of this passkey after a rename.
+     *
+     * @param fileName The new file name (without path)
+     */
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    /**
      * Adds a resident credential to this passkey.
      *
      * @param rpId The relying party ID as a byte array

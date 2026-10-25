@@ -40,7 +40,6 @@
     <string name="delete_selected_credential">Delete selected credential</string>
     <string name="no_resident_credentials_found">No resident credentials found on this device</string>
 
-    
     <!-- CreatePasskeyActivity strings -->
     <string name="passkey_wallet_name_description">Enter a name for your passkey wallet. This must only contain letters and numbers.</string>
     <string name="passkey_wallet_name">Passkey Wallet Name:</string>
@@ -207,4 +206,13 @@
     <string name="update_pin">Update PIN</string>
     <string name="update_pin_success">PIN updated successfully</string>
     <string name="update_pin_failed">Failed to update PIN</string>
+
+    <!-- Wallet rename strings -->
+    <string name="wallet_label">Wallet: %1$s</string>
+    <string name="rename_wallet">Rename wallet</string>
+    <string name="rename_wallet_hint">New wallet name</string>
+    <string name="rename">Rename</string>
+    <string name="wallet_renamed">Wallet renamed to %1$s</string>
+    <string name="wallet_rename_failed">Failed to rename wallet</string>
+
 </resources>

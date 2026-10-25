@@ -32,6 +32,8 @@ import com.isfs.blekey.util.KeyUtils;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 import android.widget.ImageView;
+import android.widget.EditText;
+import android.widget.LinearLayout;
 
 import java.io.File;
 import java.time.Instant;
@@ -58,6 +60,8 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
     private ViewPager2 viewPager;
     private FrameLayout loadingFrame;
     private BiometricAuthHelper biometricAuthHelper;
+    private LinearLayout walletNameRow;
+    private TextView walletNameText;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -90,6 +94,9 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
         tabLayout = findViewById(R.id.tabLayout);
         viewPager = findViewById(R.id.viewPager);
         loadingFrame = findViewById(R.id.loadingFrame);
+        walletNameRow = findViewById(R.id.walletNameRow);
+        walletNameText = findViewById(R.id.walletNameText);
+        findViewById(R.id.renameWalletButton).setOnClickListener(v -> showRenameDialog());
 
         // Hide tabs until passkey is loaded; loadPasskey() calls setupTabs() on completion
         tabLayout.setVisibility(View.GONE);
@@ -105,6 +112,12 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
         }
 
         loadingFrame.setVisibility(View.VISIBLE);
+
+        walletNameText.setText(getString(R.string.wallet_label,
+                fileName.endsWith(".passkey")
+                        ? fileName.substring(0, fileName.length() - 8)
+                        : fileName));
+        walletNameRow.setVisibility(View.VISIBLE);
 
         ExecutorService exec = Executors.newSingleThreadExecutor();
         exec.execute(() -> {
@@ -287,6 +300,11 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
             emptyStateView.setVisibility(View.GONE);
         }
         
+        public void reload() {
+            if (recyclerView == null) return;
+            loadDigitalCredentials();
+        }
+
         private void refreshCredentials() {
             swipeRefresh.setRefreshing(false);
             Toast.makeText(getContext(), "Status refresh not yet implemented", Toast.LENGTH_SHORT).show();
@@ -604,6 +622,75 @@ public class ResidentCredentialsActivity extends AppCompatActivity {
                 .setNegativeButton(R.string.cancel, null)
                 .show();
     }
+
+    private void showRenameDialog() {
+        if (fileName == null) return;
+
+        String currentBase = fileName.endsWith(".passkey")
+                ? fileName.substring(0, fileName.length() - 8)
+                : fileName;
+
+        EditText nameInput = new EditText(this);
+        nameInput.setHint(getString(R.string.rename_wallet_hint));
+        nameInput.setText(currentBase);
+        nameInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        int px = (int) (16 * getResources().getDisplayMetrics().density);
+        nameInput.setPadding(px, px, px, px);
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.rename_wallet)
+                .setView(nameInput)
+                .setPositiveButton(R.string.rename, (dialog, which) -> {
+                    String newName = nameInput.getText().toString().trim();
+                    if (newName.isEmpty()) {
+                        Toast.makeText(this, R.string.prompt_passkey_wallet_name, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (!newName.matches("^[a-zA-Z0-9]+$")) {
+                        Toast.makeText(this, R.string.prompt_passkey_wallet_alphanumeric, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (newName.equals(currentBase)) {
+                        return; // no-op
+                    }
+                    performRename(newName);
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void performRename(String newBaseName) {
+        if (passkey == null || fileName == null) {
+            Toast.makeText(this, R.string.wallet_rename_failed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        ExecutorService exec = Executors.newSingleThreadExecutor();
+        exec.execute(() -> {
+            File appDataDir = getFilesDir();
+            File oldFile = new File(appDataDir, fileName);
+            File newFile = com.isfs.blekey.util.FileUtils.renamePasskey(oldFile, newBaseName);
+            runOnUiThread(() -> {
+                if (newFile == null) {
+                    Toast.makeText(this, R.string.wallet_rename_failed, Toast.LENGTH_SHORT).show();
+                } else {
+                    String newFileName = newFile.getName();
+                    fileName = newFileName;
+                    passkey.setFileName(newFileName);
+                    walletNameText.setText(getString(R.string.wallet_label, newBaseName));
+                    Toast.makeText(this, getString(R.string.wallet_renamed, newBaseName), Toast.LENGTH_SHORT).show();
+                    // Reload the Digital Credentials tab so associatedPasskey label updates
+                    Fragment f = getSupportFragmentManager().findFragmentByTag("f1");
+                    if (f instanceof DigitalCredentialsFragment) {
+                        ((DigitalCredentialsFragment) f).reload();
+                    }
+                }
+            });
+            exec.shutdown();
+        });
+    }
+
 
     private void performPinUpdate(String newPin) {
         if (passkey == null || fileName == null) {

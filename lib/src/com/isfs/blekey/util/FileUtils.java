@@ -105,6 +105,66 @@ public class FileUtils {
         return new File(stashPath);
     }
 
+    /**
+     * Renames a passkey wallet by moving its {@code .passkey} and {@code .stash} files
+     * to a new base name in the same directory.
+     *
+     * <p>The rename is crash-safe: the commit point is the {@link File#renameTo} of the
+     * {@code .passkey} file (step 5). Before that point the wallet remains intact under
+     * the old name; after it, under the new name. A stray {@code newBase.stash} from a
+     * previous crashed attempt is harmless and will be overwritten.
+     *
+     * @param passkeyFile  The current {@code .passkey} file
+     * @param newBaseName  The desired base name (letters and digits only, no extension)
+     * @return The new {@code .passkey} {@link File} on success, {@code null} on failure
+     * @throws IllegalArgumentException if {@code newBaseName} is null or empty
+     */
+    public static File renamePasskey(File passkeyFile, String newBaseName) {
+        if (newBaseName == null || newBaseName.isEmpty()) {
+            throw new IllegalArgumentException("newBaseName must not be empty");
+        }
+
+        File dir = passkeyFile.getParentFile();
+        File newPasskey = new File(dir, newBaseName + ".passkey");
+        File oldStash   = getStashFile(passkeyFile);
+        File newStash   = getStashFile(newPasskey);
+
+        if (newPasskey.exists()) {
+            logger.error("renamePasskey: target already exists: {}", newPasskey.getAbsolutePath());
+            return null;
+        }
+
+        if (!passkeyFile.exists()) {
+            logger.error("renamePasskey: source passkey missing: {}", passkeyFile.getAbsolutePath());
+            return null;
+        }
+        if (!oldStash.exists()) {
+            logger.error("renamePasskey: source stash missing: {}", oldStash.getAbsolutePath());
+            return null;
+        }
+
+        try {
+            Files.copy(oldStash.toPath(), newStash.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            logger.error("renamePasskey: failed to copy stash", e);
+            newStash.delete();
+            return null;
+        }
+
+        if (!passkeyFile.renameTo(newPasskey)) {
+            logger.error("renamePasskey: renameTo failed");
+            newStash.delete();
+            return null;
+        }
+
+        if (!oldStash.delete()) {
+            logger.warn("renamePasskey: could not delete old stash: {}", oldStash.getAbsolutePath());
+        }
+
+        return newPasskey;
+    }
+
     public static List<File> listPasskeys() {
         String fidoHomeStr = getFido2Home();
         if (fidoHomeStr == null || fidoHomeStr.isEmpty()) {
