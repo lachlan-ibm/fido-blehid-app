@@ -63,7 +63,7 @@ public class HolderBindingKeyManager {
      */
     public static void setKeystoreManager(KeystoreManager manager) {
         keystoreManager = manager;
-        logger.info("HolderBindingKeyManager: KeystoreManager set");
+        logger.debug("HolderBindingKeyManager: KeystoreManager set");
     }
     
     /**

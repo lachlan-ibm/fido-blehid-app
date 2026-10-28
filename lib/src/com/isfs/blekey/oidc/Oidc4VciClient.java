@@ -119,17 +119,17 @@ public class Oidc4VciClient {
                                                PrivateKey masterKey,
                                                DigitalCredentialFormat format) throws OidcException {
         try {
-            logger.info("Starting credential issuance flow");
+            logger.debug("Starting credential issuance flow");
             
             // Step 1: Parse credential offer
             logger.debug("Step 1: Parsing credential offer");
             CredentialOffer offer = CredentialOffer.fromUri(credentialOfferUri);
-            logger.info("Credential offer parsed: {}", offer);
+            logger.debug("Credential offer parsed: {}", offer);
             
             // Step 2: Fetch issuer metadata
             logger.debug("Step 2: Fetching issuer metadata");
             IssuerMetadata metadata = IssuerMetadata.fetch(offer.getCredentialIssuer(), httpClient);
-            logger.info("Issuer metadata fetched: {}", metadata);
+            logger.debug("Issuer metadata fetched: {}", metadata);
             
             // Validate metadata
             if (metadata.getTokenEndpoint() == null) {
@@ -139,7 +139,7 @@ public class Oidc4VciClient {
             // Step 3: Request access token
             logger.debug("Step 3: Requesting access token");
             OidcTokenResponse tokenResponse = requestAccessToken(offer, metadata);
-            logger.info("Access token obtained: expiresIn={}, hasCNonce={}", 
+            logger.debug("Access token obtained: expiresIn={}, hasCNonce={}", 
                        tokenResponse.getExpiresIn(), tokenResponse.hasCNonce());
             
             // Step 4: Generate credential seed and derive holder binding key
@@ -147,7 +147,7 @@ public class Oidc4VciClient {
             byte[] credentialSeed = HolderBindingKeyManager.generateSeed();
             KeyPair holderBindingKeyPair = HolderBindingKeyManager.deriveBindingKey(
                 credentialSeed, credentialId, issuerId, credentialType, masterKey);
-            logger.info("Holder binding key generated");
+            logger.debug("Holder binding key generated");
             
             // Step 5: Create key proof JWT
             logger.debug("Step 5: Creating key proof JWT");
@@ -157,13 +157,13 @@ public class Oidc4VciClient {
                 metadata.getCredentialIssuer(),
                 tokenResponse.getCNonce()
             );
-            logger.info("Key proof JWT created");
+            logger.debug("Key proof JWT created");
             
             // Determine format if not specified
             if (format == null) {
                 format = detectCredentialFormat(offer, metadata);
             }
-            logger.info("Credential format: {}", format);
+            logger.debug("Credential format: {}", format);
             
             // Step 6: Request credential with proof
             logger.debug("Step 6: Requesting credential");
@@ -175,7 +175,7 @@ public class Oidc4VciClient {
                 format,
                 metadata
             );
-            logger.info("Credential received");
+            logger.debug("Credential received");
             
             // Step 7: Validate and parse credential based on format
             logger.debug("Step 7: Validating credential");
@@ -190,7 +190,7 @@ public class Oidc4VciClient {
                 credential = validateCredential((String) credentialResponse,
                                                holderBindingKeyPair.getPublic());
             }
-            logger.info("Credential validated successfully");
+            logger.debug("Credential validated successfully");
             
             // Store credential seed with credential
             credential.setHolderBindingKeySeed(credentialSeed);
@@ -288,7 +288,7 @@ public class Oidc4VciClient {
                     String format = (String) formatObj;
                     DigitalCredentialFormat detected = mapFormatString(format);
                     if (detected != null) {
-                        logger.info("Detected format from metadata: {} -> {}", format, detected);
+                        logger.debug("Detected format from metadata: {} -> {}", format, detected);
                         return detected;
                     }
                 }
@@ -304,7 +304,7 @@ public class Oidc4VciClient {
                 String format = (String) formatObj;
                 DigitalCredentialFormat detected = mapFormatString(format);
                 if (detected != null) {
-                    logger.info("Detected format from first supported credential: {} -> {}", format, detected);
+                    logger.debug("Detected format from first supported credential: {} -> {}", format, detected);
                     return detected;
                 }
             }
@@ -575,7 +575,7 @@ public class Oidc4VciClient {
             // Store the raw CBOR as encrypted data
             mdlCredential.setEncryptedData(mdlCbor);
             
-            logger.info("mDL credential validated: docType={}, validUntil={}",
+            logger.debug("mDL credential validated: docType={}, validUntil={}",
                        mso.getDocType(), mso.getValidUntil());
             
             return mdlCredential;
@@ -674,7 +674,7 @@ public class Oidc4VciClient {
                 metadata.setExpiresAt(jsonLdCred.getExpirationDate());
             }
             
-            logger.info("JSON-LD credential validated: type={}, issuer={}",
+            logger.debug("JSON-LD credential validated: type={}, issuer={}",
                        metadata.getCredentialType(),
                        metadata.getIssuerDid() != null ? metadata.getIssuerDid() : metadata.getIssuerUrl());
             

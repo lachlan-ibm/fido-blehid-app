@@ -31,6 +31,11 @@ public class PinSessionRegistry {
 
     /** Map of channel IDs to their authenticated passkeys. */
     private static Map<byte[], Passkey> openKeys = new HashMap<>();
+    /**
+     * Bit values: mc=0x01, ga=0x02, cm=0x04, be=0x08, lbw=0x10, acfg=0x20.
+     * CTAP 2.3 §6.5.5.7.
+     */
+    private static Map<byte[], Integer> tokenPermissions = new HashMap<>();
 
     /** Single shared retry counter for both PIN and UV attempts. */
     private static int pinRetries = MAX_PIN_RETRIES;
@@ -43,7 +48,7 @@ public class PinSessionRegistry {
     /** Resets the retry counter to the maximum value. */
     public static void resetPinRetries() {
         pinRetries = MAX_PIN_RETRIES;
-        logger.info("Retry counter reset to maximum ({})", MAX_PIN_RETRIES);
+        logger.debug("Retry counter reset to maximum ({})", MAX_PIN_RETRIES);
     }
 
     /**
@@ -98,20 +103,41 @@ public class PinSessionRegistry {
 
     /**
      * Commits a successful PIN verification into the session registry and the live txn.
-     * Resets the retry counter, stores the PIN token and hash on the txn, marks UP
-     * as collected, and propagates the updated txn to {@link CtapHid}.
+     * Resets the retry counter, stores the PIN token, hash, and permissions on the txn,
+     * marks UP as collected, and propagates the updated txn to {@link CtapHid}.
+     *
      */
     public static void updateAuthenticationState(CtapTxn txn, Passkey pkeyFile,
-                                                  byte[] pinToken, byte[] pinHash) {
+                                                  byte[] pinToken, byte[] pinHash,
+                                                  int permissions) {
         openKeys.put(txn.getCid(), pkeyFile);
+        tokenPermissions.put(txn.getCid(), permissions);
         resetPinRetries();
         txn.setPinAuthTkn(pinToken);
         txn.setPinHash(pinHash);
         txn.setPasskey(pkeyFile);
         txn.setUserPresent(true);
-        logger.debug("PIN token stored in transaction, size: {} bytes",
-                     pinToken != null ? pinToken.length : 0);
+        logger.debug("PIN token stored in transaction, size: {} bytes, permissions=0x{}",
+                     pinToken != null ? pinToken.length : 0,
+                     Integer.toHexString(permissions));
         CtapHid.updateCidTransaction(txn.getCid(), txn);
         logger.debug("Updated CID transaction with authenticated passkey");
+    }
+
+    /**
+     * Returns the permissions bitmask for the active PIN session on the given CID, or
+     * {@code 0} if no authenticated session exists for that CID.
+     *
+     * <p>A return value of {@code 0} means no PIN token was issued on this channel —
+     * permission checks should be skipped in that case (platform-key path).</p>
+     *
+     * @param cid channel identifier
+     * @return permissions bitmask (CTAP 2.3 §6.5.5.7), or {@code 0} if none
+     */
+    public static int getPermissions(byte[] cid) {
+        for (Map.Entry<byte[], Integer> entry : tokenPermissions.entrySet()) {
+            if (Arrays.equals(entry.getKey(), cid)) return entry.getValue();
+        }
+        return 0;
     }
 }

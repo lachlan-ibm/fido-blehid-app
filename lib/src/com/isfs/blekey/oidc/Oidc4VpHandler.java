@@ -90,7 +90,7 @@ public class Oidc4VpHandler {
                                    Set<String> selectedClaims,
                                    PrivateKey masterKey) throws OidcException {
         try {
-            logger.info("Starting credential presentation flow");
+            logger.debug("Starting credential presentation flow");
             
             AuthorizationRequest authReq = parseRequest(authorizationRequest);
             PresentationDefinition presentationDef = validatePresentationDefinition(authReq);
@@ -99,7 +99,7 @@ public class Oidc4VpHandler {
             String vpToken = assembleVpToken(sdJwtPresentation, keyBindingJwt);
             String response = submitPresentation(authReq, presentationDef, vpToken);
             
-            logger.info("Credential presentation completed successfully");
+            logger.debug("Credential presentation completed successfully");
             return response;
             
         } catch (SdJwtException e) {
@@ -126,7 +126,7 @@ public class Oidc4VpHandler {
     private AuthorizationRequest parseRequest(String authorizationRequest) throws OidcException, IOException, URISyntaxException {
         logger.debug("Parsing authorization request");
         AuthorizationRequest authReq = parseAuthorizationRequest(authorizationRequest);
-        logger.info("Authorization request parsed: responseUri={}", authReq.getResponseUri());
+        logger.debug("Authorization request parsed: responseUri={}", authReq.getResponseUri());
         
         if (authReq.getRequestUri() != null) {
             logger.debug("Fetching request object by reference");

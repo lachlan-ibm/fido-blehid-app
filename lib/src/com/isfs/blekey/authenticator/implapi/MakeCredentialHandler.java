@@ -42,7 +42,7 @@ public class MakeCredentialHandler {
      * @return response bytes, {@code null} (deferred), or an error
      */
     public static byte[] makeCredential(CtapTxn txn, Map<Integer, Object> req) {
-        logger.info("makeCredential: starting credential creation");
+        logger.debug("makeCredential: starting credential creation");
 
         if (!PinSessionRegistry.loadAuthenticatedSession(txn)) {
             logger.debug("makeCredential: no PIN session for CID — using platform key");
@@ -87,8 +87,19 @@ public class MakeCredentialHandler {
         } else {
             pinUvResult = PinUvAuthResult.NO_VERIFICATION;
         }
-        logger.info("executeMakeCredential: req.uv={}; user verified={}",
+        logger.debug("executeMakeCredential: req.uv={}; user verified={}",
                     options.uv, pinUvResult.userVerified);
+
+        if (pinUvResult.userVerified) {
+            int permissions = PinSessionRegistry.getPermissions(txn.getCid());
+            if ((permissions & 0x01) == 0) {
+                logger.error("executeMakeCredential: pinUvAuthToken missing mc permission, "
+                           + "permissions=0x{}", Integer.toHexString(permissions));
+                return CtapResponse.error(Ctap2StatusCode.UNAUTHORIZED_PERMISSION);
+            }
+            logger.debug("executeMakeCredential: mc permission verified, permissions=0x{}",
+                         Integer.toHexString(permissions));
+        }
 
         AttestationMaterial attestation =
             AttestationBuilder.loadAttestationMaterial(validation.type, txn);

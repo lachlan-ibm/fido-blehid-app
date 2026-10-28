@@ -16,7 +16,9 @@ public enum PinSubCmd {
     CHANGEPIN(0x04),
     GETTKN(0x05),
     GETTKNUV(0x06),
-    GETUVRETRY(0x07);
+    GETUVRETRY(0x07),
+    GETTKNPIN_PERMS(0x09),
+    GETTKNUV_PERMS(0x0A);
 
     private final int value;
 

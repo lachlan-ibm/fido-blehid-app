@@ -76,7 +76,7 @@ public class SelectiveDisclosureBuilder {
                 presentation.append(SEPARATOR).append(disclosure);
             }
             
-            logger.info("Built SD-JWT presentation with {} disclosures", selectedDisclosures.size());
+            logger.debug("Built SD-JWT presentation with {} disclosures", selectedDisclosures.size());
             return presentation.toString();
             
         } catch (SdJwtException e) {

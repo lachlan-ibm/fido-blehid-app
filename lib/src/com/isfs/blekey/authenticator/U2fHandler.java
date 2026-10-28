@@ -71,7 +71,7 @@ public class U2fHandler {
      * @return response bytes (registration body + 90 00), or SW error bytes on failure
      */
     public static byte[] u2fRegister(CtapTxn txn, byte[] challengeParam, byte[] appParam) {
-        logger.info("u2fRegister: starting");
+        logger.debug("u2fRegister: entry");
 
         PrivateKey platformKey = KeyUtils.getPlatformKey();
         if (platformKey == null) {
@@ -131,7 +131,7 @@ public class U2fHandler {
             body.write(0x90);
             body.write(0x00);
 
-            logger.info("u2fRegister: success, key handle {} bytes, response {} bytes",
+            logger.debug("u2fRegister: success, key handle {} bytes, response {} bytes",
                 keyHandle.length, body.size());
             return body.toByteArray();
         } catch (Exception e) {
@@ -156,7 +156,7 @@ public class U2fHandler {
      */
     public static byte[] u2fAuthenticate(CtapTxn txn, byte[] challengeParam, byte[] appParam,
                                           byte[] keyHandle, boolean requireUP) {
-        logger.info("u2fAuthenticate: requireUP={}", requireUP);
+        logger.debug("u2fAuthenticate entry: requireUP={}", requireUP);
 
         PrivateKey platformKey = KeyUtils.getPlatformKey();
         if (platformKey == null) return SW_WRONG_DATA;
@@ -200,7 +200,7 @@ public class U2fHandler {
             body.write(0x90);
             body.write(0x00);
 
-            logger.info("u2fAuthenticate: success, counter={}", counter);
+            logger.debug("u2fAuthenticate: success, counter={}", counter);
             return body.toByteArray();
         } catch (Exception e) {
             logger.error("u2fAuthenticate failed", e);

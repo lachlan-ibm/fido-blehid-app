@@ -136,10 +136,10 @@ public class CtapHid {
         int low = byteBuffer.get() & 0xFF; // byte 6
         this.byteCount = (high << 8) | low; // combine to 16-bit int
         
-        logger.info("=== CtapHid NEW COMMAND ===");
-        logger.info("CID: {}", java.util.Arrays.toString(this.cid));
-        logger.info("Command: {} (0x{:02x})", this.messageType, cmdByte);
-        logger.info("Byte count: {}", this.byteCount);
+        logger.debug("=== CtapHid NEW COMMAND ===");
+        logger.debug("CID: {}", java.util.Arrays.toString(this.cid));
+        logger.debug("Command: {} (0x{:02x})", this.messageType, cmdByte);
+        logger.debug("Byte count: {}", this.byteCount);
     }
 
     /**
@@ -174,7 +174,7 @@ public class CtapHid {
     public static void updateCidTransaction(byte[] cid, CtapTxn txn) {
         // Get existing transaction to preserve authentication state
         CtapTxn existingTxn = CtapHid.assignedCids.get(cidKey(cid));
-        logger.info("=== PIN HASH TRACKING: updateCidTransaction called, CID: {}, existing txn: {}, new txn: {}",
+        logger.debug("=== PIN HASH TRACKING: updateCidTransaction called, CID: {}, existing txn: {}, new txn: {}",
                     cid != null ? java.util.Arrays.toString(cid) : "null",
                     existingTxn != null ? existingTxn.hashCode() : "null",
                     txn != null ? txn.hashCode() : "null");
@@ -191,7 +191,7 @@ public class CtapHid {
             }
             if (existingTxn.getPinHash() != null) {
                 txn.setPinHash(existingTxn.getPinHash());
-                logger.info("=== PIN HASH TRACKING: Preserved PIN hash from existing txn, size: {} bytes",
+                logger.debug("=== PIN HASH TRACKING: Preserved PIN hash from existing txn, size: {} bytes",
                             existingTxn.getPinHash().length);
             } else {
                 logger.warn("=== PIN HASH TRACKING: Existing txn has NULL PIN hash!");
@@ -219,7 +219,7 @@ public class CtapHid {
         
         // Verify what was stored
         CtapTxn storedTxn = CtapHid.assignedCids.get(cidKey(cid));
-        logger.info("=== PIN HASH TRACKING: After put, stored txn: {}, has PIN hash: {}",
+        logger.debug("=== PIN HASH TRACKING: After put, stored txn: {}, has PIN hash: {}",
                     storedTxn != null ? storedTxn.hashCode() : "null",
                     storedTxn != null && storedTxn.getPinHash() != null);
     }
@@ -236,7 +236,7 @@ public class CtapHid {
         logger.debug("Processing sequence frame, total frames: {}", this.sequenceFrames.size() + 1);
         this.sequenceFrames.add(segment);
         if(this.hasSufficientBytes()) {
-            logger.info("Sufficient bytes received, processing complete message");
+            logger.debug("Sufficient bytes received, processing complete message");
             try {
                 this.processMessage();
             } catch (Exception e) {
@@ -612,18 +612,18 @@ public class CtapHid {
         // Calculate hash for duplicate detection
         int dataHash = java.util.Arrays.hashCode(data);
         
-        logger.info("=== CBOR REQUEST RECEIVED ===");
-        logger.info("Data size: {} bytes", data.length);
-        logger.info("Data hash: {}", dataHash);
-        logger.info("Full data: {}", java.util.Arrays.toString(data));
-        logger.info("CID: {}", java.util.Arrays.toString(this.cid));
+        logger.debug("=== CBOR REQUEST RECEIVED ===");
+        logger.debug("Data size: {} bytes", data.length);
+        logger.debug("Data hash: {}", dataHash);
+        logger.debug("Full data: {}", java.util.Arrays.toString(data));
+        logger.debug("CID: {}", java.util.Arrays.toString(this.cid));
         
         if(data.length < 1) {
             logger.error("CBOR data too short");
             this.ctapErr(Ctap2StatusCode.INVALID_CBOR);
         } else {
             int api = (int) data[0];
-            logger.info("API command: {} ({})", api,
+            logger.debug("API command: {} ({})", api,
                 api == 1 ? "makeCredential" :
                 api == 2 ? "getAssertion" :
                 api == 4 ? "getInfo" :
@@ -644,9 +644,9 @@ public class CtapHid {
                         return;
                     }
                     cbor = (Map<Integer, Object>) cborObj;
-                    logger.info("CBOR: {}", cbor.toString());
+                    logger.debug("CBOR: {}", cbor.toString());
                 }
-                logger.info("=== END CBOR REQUEST ===");
+                logger.debug("=== END CBOR REQUEST ===");
                 // Set the deferred cmd BEFORE calling process() so
                 // the callback exists when processing the txn.
                 CtapTxn txn = CtapHid.assignedCids.get(cidKey(this.cid));
@@ -666,7 +666,7 @@ public class CtapHid {
                 byte[] response = AuthenticatorAPI.process(txn, api, cbor);
                 if (response == null) {
                     // Deferred (legacy path) — deferredCmd already set on txn above.
-                    logger.info("CBOR response deferred for CID {}", cidKey(this.cid));
+                    logger.debug("CBOR response deferred for CID {}", cidKey(this.cid));
                     return;
                 }
                 // Non-deferred — clear any cmd slot we may have set, then build packets.
@@ -750,7 +750,7 @@ public class CtapHid {
                 // Inject KEEPALIVE_CANCEL into the original deferred command
                 pending.injectDeferredResponse(
                     new byte[]{ (byte) Ctap2StatusCode.KEEPALIVE_CANCEL.getCode() });
-                logger.info("CANCEL: injected KEEPALIVE_CANCEL for CID {}", cidKey(this.getCid()));
+                logger.debug("CANCEL: injected KEEPALIVE_CANCEL for CID {}", cidKey(this.getCid()));
                 // Notify the app layer so it can dismiss any dialog and stop keepalive
                 if (onCancelCallback != null) {
                     onCancelCallback.run();

@@ -355,7 +355,7 @@ public class FileUtils {
                     }
                     
                     // Debug: Log the actual type of object we're getting
-                    logger.info("Encrypted PEM object type: " + object.getClass().getName());
+                    logger.debug("Encrypted PEM object type: " + object.getClass().getName());
                     
                     if (object instanceof PKCS8EncryptedPrivateKeyInfo) {
                         // Handle PKCS#8 encrypted private key from PEM

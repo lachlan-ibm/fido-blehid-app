@@ -57,7 +57,7 @@ public class AttestationBuilder {
         if (credentialType == CredentialType.PASSKEY || credentialType == CredentialType.RESIDENT) {
             PrivateKey passkeyPrivateKey = txn.getPasskey().getPrivateKey();
             PublicKey passkeyPublicKey = KeyUtils.getPubKey((ECPrivateKey) passkeyPrivateKey);
-            logger.info("loadAttestationKeyPair: UV verified — using passkey file key");
+            logger.debug("loadAttestationKeyPair: UV verified — using passkey file key");
             return new KeyPair(passkeyPublicKey, passkeyPrivateKey);
         }
         PrivateKey platformKey = KeyUtils.getPlatformKey();

@@ -105,6 +105,12 @@ public class PinFlowHandler {
             case GETUVRETRY:
                 logger.debug("PinFlowHandler: Processing GETUVRETRY");
                 return uvRty(txn, req);
+            case GETTKNPIN_PERMS:
+                logger.debug("PinFlowHandler: Processing GETTKNPIN_PERMS");
+                return getTknWithPinPermissions(txn, req);
+            case GETTKNUV_PERMS:
+                logger.debug("PinFlowHandler: Processing GETTKNUV_PERMS");
+                return getTknBuiltInWithPermissions(txn, req);
             default:
                 logger.debug("PinFlowHandler: Invalid PIN subcommand: {}", cmd);
                 return CtapResponse.error(Ctap2StatusCode.INVALID_COMMAND);
@@ -258,7 +264,9 @@ public class PinFlowHandler {
             byte[] uvToken = new byte[PIN_TOKEN_SIZE];
             SECURE_RANDOM.nextBytes(uvToken);
             byte[] encryptedUvToken = performAesCbc(Cipher.ENCRYPT_MODE, uvToken, sharedSecret);
-            PinSessionRegistry.updateAuthenticationState(txn, txn.getPasskey(), uvToken, txn.getPinHash());
+            // mc|ga permissions for GETTKNUV.
+            PinSessionRegistry.updateAuthenticationState(txn, txn.getPasskey(), uvToken,
+                txn.getPinHash(), 0x03);
             PinSessionRegistry.resetUvRetries();
             byte[] response = new PinTokenResponseBuilder().withPinToken(encryptedUvToken).build();
             logger.debug("generateUvToken: sending {} bytes, status=0x{}", response.length, String.format("%02x", response[0]));
@@ -266,6 +274,42 @@ public class PinFlowHandler {
         } catch (GeneralSecurityException e) {
             int remaining = PinSessionRegistry.decrementUvRetries();
             logger.error("generateUvToken: crypto failure, uvRetries remaining: {}", remaining, e);
+            return handleCryptographicException(e);
+        }
+    }
+
+    /**
+     * Generates a UV token with requestor-supplied permissions.
+     */
+    static byte[] generateUvTokenWithPermissions(CtapTxn txn, Map<Integer, ?> req, int permissions) {
+        logger.debug("generateUvTokenWithPermissions: permissions=0x{} passkey={} ecdhKeyPair={}",
+                Integer.toHexString(permissions),
+                txn.getPasskey() != null ? txn.getPasskey().getFileName() : "null",
+                txn.getEcdhKeyPair() != null ? "present" : "null");
+        PublicKey clientKey = extractClientPublicKey(req);
+        if (clientKey == null) {
+            logger.warn("generateUvTokenWithPermissions: clientKey null — MISSING_PARAMETER");
+            return CtapResponse.error(Ctap2StatusCode.MISSING_PARAMETER);
+        }
+        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        if (sharedSecret == null) {
+            logger.warn("generateUvTokenWithPermissions: sharedSecret null — OTHER");
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
+        }
+        try {
+            byte[] uvToken = new byte[PIN_TOKEN_SIZE];
+            SECURE_RANDOM.nextBytes(uvToken);
+            byte[] encryptedUvToken = performAesCbc(Cipher.ENCRYPT_MODE, uvToken, sharedSecret);
+            PinSessionRegistry.updateAuthenticationState(txn, txn.getPasskey(), uvToken,
+                txn.getPinHash(), permissions);
+            PinSessionRegistry.resetUvRetries();
+            byte[] response = new PinTokenResponseBuilder().withPinToken(encryptedUvToken).build();
+            logger.debug("generateUvTokenWithPermissions: sending {} bytes, status=0x{}",
+                response.length, String.format("%02x", response[0]));
+            return response;
+        } catch (GeneralSecurityException e) {
+            int remaining = PinSessionRegistry.decrementUvRetries();
+            logger.error("generateUvTokenWithPermissions: crypto failure, uvRetries remaining: {}", remaining, e);
             return handleCryptographicException(e);
         }
     }
@@ -298,7 +342,8 @@ public class PinFlowHandler {
     // -------------------------------------------------------------------------
 
     /**
-     * Core PIN-token logic: validates the PIN hash, performs ECDH, generates the token.
+     * Core PIN-token logic getPinToken: validates the PIN hash, performs ECDH,
+     * generates the token with permissions mc|ga (0x03) per CTAP 2.3 §6.5.5.7.1.
      */
     public static byte[] processTkn(CtapTxn txn, Map<Integer, ?> req) {
         PinHashValidationResult validation = validateAndExtractPinHash(req);
@@ -313,7 +358,104 @@ public class PinFlowHandler {
         if (sharedSecret == null) {
             return CtapResponse.error(Ctap2StatusCode.OTHER);
         }
-        return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret);
+        return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret,
+                0x03 /* mc | ga */);
+    }
+
+    /**
+     * Handles {@code getPinUvAuthTokenUsingPinWithPermissions} (sub-command 0x09).
+     * Reads the {@code permissions} field (CBOR key 0x09) from the request and issues a
+     * token scoped to those permissions only. CTAP 2.3 §6.5.5.7.2.
+     */
+    private static byte[] getTknWithPinPermissions(CtapTxn txn, Map<Integer, Object> req) {
+        if (txn == null) {
+            logger.warn("getTknWithPinPermissions: null txn — OPERATION_DENIED");
+            return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+        Object permObj = req.get(0x09);
+        if (!(permObj instanceof Integer)) {
+            logger.error("getTknWithPinPermissions: missing or invalid permissions parameter");
+            return CtapResponse.error(Ctap2StatusCode.MISSING_PARAMETER);
+        }
+        int permissions = (Integer) permObj;
+        if (permissions == 0) {
+            logger.error("getTknWithPinPermissions: permissions value is 0 — INVALID_PARAMETER");
+            return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
+        }
+
+        if (UxInteractionLock.get().isGrantActive()) {
+            logger.debug("getTknWithPinPermissions: grant active — processing synchronously");
+            txn.setUserPresent(true);
+            return processTknWithPermissions(txn, req, permissions);
+        }
+
+        return UpUvGate.await(
+            txn,
+            "getTknWithPinPermissions",
+            null,
+            UpUvGate.LatchStrategy.ASYNC,
+            UpUvRequestCtx.CeremonyType.GET_TKN,
+            () -> processTknWithPermissions(txn, req, permissions)
+        );
+    }
+
+    /**
+     * Core PIN-token logic for {@code getPinUvAuthTokenUsingPinWithPermissions}.
+     * Identical to {@link #processTkn} except uses the caller-supplied permissions bitmask.
+     */
+    static byte[] processTknWithPermissions(CtapTxn txn, Map<Integer, ?> req, int permissions) {
+        PinHashValidationResult validation = validateAndExtractPinHash(req);
+        if (!validation.isValid()) {
+            return CtapResponse.error(validation.getErrorCode());
+        }
+        PublicKey clientKey = extractClientPublicKey(req);
+        if (clientKey == null) {
+            return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
+        }
+        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        if (sharedSecret == null) {
+            return CtapResponse.error(Ctap2StatusCode.OTHER);
+        }
+        return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret,
+                permissions);
+    }
+
+    /**
+     * Handles {@code getPinUvAuthTokenUsingUvWithPermissions} via sub-command 0x0A.
+     * Reads the {@code permissions} field (CBOR key 0x09) from the request and issues a
+     * UV token scoped to those permissions. Falls back to mc|ga (0x03) if absent.
+     * CTAP 2.3 §6.5.5.7.3.
+     */
+    private static byte[] getTknBuiltInWithPermissions(CtapTxn txn, Map<Integer, Object> req) {
+        if (txn == null) {
+            logger.warn("getTknBuiltInWithPermissions: null txn — OPERATION_DENIED");
+            return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+
+        if (PinSessionRegistry.getUvRetries() == 0) {
+            logger.warn("getTknBuiltInWithPermissions: uvRetries exhausted — UV_BLOCKED");
+            return CtapResponse.error(Ctap2StatusCode.UV_BLOCKED);
+        }
+
+        Object permObj = req.get(0x09 /* permissions */);
+        if (!(permObj instanceof Integer)) {
+            logger.error("getTknBuiltInWithPermissions: missing or invalid permissions parameter");
+            return CtapResponse.error(Ctap2StatusCode.MISSING_PARAMETER);
+        }
+        int permissions = (Integer) permObj;
+        if (permissions == 0) {
+            logger.error("getTknBuiltInWithPermissions: permissions value is 0 — INVALID_PARAMETER");
+            return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
+        }
+
+        return UpUvGate.await(
+            txn,
+            "getTknBuiltInWithPermissions",
+            null,
+            UpUvGate.LatchStrategy.ASYNC,
+            UpUvRequestCtx.CeremonyType.GET_TKN_UV,
+            () -> generateUvTokenWithPermissions(txn, req, permissions)
+        );
     }
 
     private static PinHashValidationResult validateAndExtractPinHash(Map<Integer, ?> req) {
@@ -365,7 +507,8 @@ public class PinFlowHandler {
 
     private static byte[] processPinVerificationAndGenerateToken(CtapTxn txn,
                                                                    byte[] pinHashEnc,
-                                                                   byte[] sharedSecret) {
+                                                                   byte[] sharedSecret,
+                                                                   int permissions) {
         try {
             PinVerificationResult pinVerification = decryptAndVerifyPin(pinHashEnc, sharedSecret);
             if (!pinVerification.isValid()) {
@@ -380,7 +523,7 @@ public class PinFlowHandler {
             byte[] encryptedPinToken = performAesCbc(Cipher.ENCRYPT_MODE, pinToken, sharedSecret);
             logger.debug("Encrypted token: {}", encryptedPinToken);
             PinSessionRegistry.updateAuthenticationState(txn, pinVerification.getPasskey(),
-                pinToken, fullPinHash != null ? fullPinHash : pinHash);
+                pinToken, fullPinHash != null ? fullPinHash : pinHash, permissions);
             return new PinTokenResponseBuilder().withPinToken(encryptedPinToken).build();
 
         } catch (GeneralSecurityException e) {

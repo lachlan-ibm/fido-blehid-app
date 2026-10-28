@@ -146,7 +146,7 @@ public class StatusList2021 {
             // Decompress (GZIP)
             byte[] bitstring = decompress(compressedBits);
             
-            logger.info("Fetched status list: {} bits", bitstring.length * 8);
+            logger.debug("Fetched status list: {} bits", bitstring.length * 8);
             return bitstring;
             
         } catch (HttpException e) {

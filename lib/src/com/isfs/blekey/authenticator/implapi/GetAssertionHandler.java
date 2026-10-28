@@ -100,6 +100,17 @@ public class GetAssertionHandler {
         PrivateKey platformKey = KeyUtils.getPlatformKey();
         if (platformKey == null) return CtapResponse.error(Ctap2StatusCode.OTHER);
 
+        int permissions = PinSessionRegistry.getPermissions(txn.getCid());
+        if ((permissions & 0x02) == 0) {
+            logger.error("executeGetAssertion: pinUvAuthToken missing ga permission, "
+                       + "permissions=0x{}", Integer.toHexString(permissions));
+            return CtapResponse.error(Ctap2StatusCode.UNAUTHORIZED_PERMISSION);
+        }
+        if (permissions != 0) {
+            logger.debug("executeGetAssertion: ga permission verified, permissions=0x{}",
+                         Integer.toHexString(permissions));
+        }
+
         Object rpIdValue = req.get(0x01 /* RPID */);
         byte[] rpIdBytes = CredentialSeedDeriver.extractRpIdBytes(rpIdValue);
         String seed = CredentialSeedDeriver.derivePasskeySeed(

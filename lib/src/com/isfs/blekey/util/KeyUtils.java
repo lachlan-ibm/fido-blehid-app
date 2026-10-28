@@ -118,7 +118,7 @@ public class KeyUtils {
             rootPublicKey = publicKey;
             rootPrivateKey = privateKey;
             stashCipher = null; // invalidate so it rebuilds with new root keys
-            logger.info("Root key pair initialized from file: {}", pkcs8File);
+            logger.debug("Root key pair initialized from file: {}", pkcs8File);
             return true;
         } catch (Exception e) {
             logger.error("Failed to read private key from file: {}", pkcs8File, e);
@@ -178,13 +178,13 @@ public class KeyUtils {
 
     private static void generateAndSaveNewRootKey(String keyPath) {
         try {
-            logger.info("Platform key not found, generating a new one at {}", keyPath);
+            logger.debug("Platform key not found, generating a new one at {}", keyPath);
             KeyPair keyPair = generateKeyPair(ROOT_KEY_ALGORITHM, ROOT_KEY_SIZE);
             FileUtils.writePrivatePEM(keyPair.getPrivate(), new File(keyPath));
             rootPublicKey = keyPair.getPublic();
             rootPrivateKey = keyPair.getPrivate();
             stashCipher = null;
-            logger.info("Generated and saved new platform key at: {}", keyPath);
+            logger.debug("Generated and saved new platform key at: {}", keyPath);
         } catch (java.io.IOException e) {
             logger.error("Failed to write platform key to file: {}", keyPath, e);
             throw new RuntimeException("Failed to write platform key to file: " + keyPath, e);
@@ -235,7 +235,7 @@ public class KeyUtils {
                 throw new RuntimeException("Failed to delete TEE platform key");
             }
             stashCipher = null;
-            logger.info("TEE platform key deleted; new key will be generated on first use");
+            logger.debug("TEE platform key deleted; new key will be generated on first use");
         } else {
             // File-based path
             String keyPath = resolveRootKeyFilePath(null);
@@ -247,7 +247,7 @@ public class KeyUtils {
             rootPrivateKey = null;
             stashCipher    = null;
             generateAndSaveNewRootKey(keyPath);
-            logger.info("File-based platform key regenerated at: {}", keyPath);
+            logger.debug("File-based platform key regenerated at: {}", keyPath);
         }
     }
 

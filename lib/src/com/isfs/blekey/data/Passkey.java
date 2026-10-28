@@ -227,14 +227,14 @@ public class Passkey {
             byte[] remainingData = Arrays.copyOfRange(passkeyData, remainingDataStart, passkeyData.length);
             
             // Reconstruct the full PIN hash
-            logger.info("Reconstructing full PIN hash...");
+            logger.debug("Reconstructing full PIN hash...");
             byte[] pinHash = (lowerHash.length == 32) ? lowerHash : getCachedPinHash(upperHash, lowerHash);
-            logger.info("Full PIN hash length: {}", pinHash.length);
-            logger.info("Full PIN hash (hex): {}", bytesToHex(pinHash));
+            logger.debug("Full PIN hash length: {}", pinHash.length);
+            logger.debug("Full PIN hash (hex): {}", bytesToHex(pinHash));
             
-            logger.info("Attempting to decrypt PKCS12 with reconstructed PIN hash...");
+            logger.debug("Attempting to decrypt PKCS12 with reconstructed PIN hash...");
             KeyStore pki = KeyUtils.readPKCS12(p12Bytes, pinHash);
-            logger.info("PKCS12 decryption successful!");
+            logger.debug("PKCS12 decryption successful!");
             PrivateKey key = (PrivateKey) pki.getKey("1", null);
             X509Certificate cert = (X509Certificate) pki.getCertificate("1");
             
@@ -395,14 +395,14 @@ public class Passkey {
         // If we only have 16 bytes (lower hash), reconstruct the full 32-byte PIN hash
         // by reading the cached upper hash from the companion .stash file
         if (pinHash != null && pinHash.length == HALF_HASH) {
-            logger.info("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
+            logger.debug("writeKey: Received 16-byte PIN hash, reconstructing full 32-byte hash from stash file");
             try {
                 byte[] upperHashEnc = FileUtils.readFileBytes(FileUtils.getStashFile(passkeyFile));
                 byte[] upperHash = KeyUtils.getStashCipher().decrypt(upperHashEnc);
 
                 if (upperHash != null && upperHash.length == HALF_HASH) {
                     byte[] full = getCachedPinHash(upperHash, pinHash);
-                    logger.info("writeKey: Successfully reconstructed full PIN hash: {} bytes", full.length);
+                    logger.debug("writeKey: Successfully reconstructed full PIN hash: {} bytes", full.length);
                     return full;
                 } else {
                     logger.error("writeKey: Failed to decrypt upper hash from stash file");

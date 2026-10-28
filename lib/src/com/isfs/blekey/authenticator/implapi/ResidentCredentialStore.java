@@ -50,7 +50,7 @@ public class ResidentCredentialStore {
             Passkey passkey,
             CtapTxn txn) {
 
-        logger.info("Storing resident credential - CID: {}",
+        logger.debug("Storing resident credential - CID: {}",
                     txn.getCid() != null ? Arrays.toString(txn.getCid()) : "null");
 
         Ctap2StatusCode error = validatePasskeyAndFile(passkey, txn);
@@ -208,7 +208,7 @@ Map<String, Object> authSel = (Map<String, Object>) req.get("authenticatorSelect
             logger.error("Failed to persist passkey to file: {}", passkeyFile.getAbsolutePath());
             return Ctap2StatusCode.OTHER;
         }
-        logger.info("Successfully persisted passkey to file: {}", passkeyFile.getName());
+        logger.debug("Successfully persisted passkey to file: {}", passkeyFile.getName());
         return Ctap2StatusCode.SUCCESS;
     }
 

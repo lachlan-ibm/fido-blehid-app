@@ -160,6 +160,13 @@ public class Ctap2HidRequestTest {
         Map<byte[], Passkey> openKeys =
                 (Map<byte[], Passkey>) openKeysField.get(null);
         openKeys.put(channelId, passkey);
+        java.lang.reflect.Field permsField =
+                com.isfs.blekey.authenticator.implapi.pin.PinSessionRegistry.class
+                        .getDeclaredField("tokenPermissions");
+        permsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<byte[], Integer> perms = (Map<byte[], Integer>) permsField.get(null);
+        perms.put(channelId, 0x03); // mc|ga
     }
     
     @BeforeEach
