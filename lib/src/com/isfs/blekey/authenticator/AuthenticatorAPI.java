@@ -211,7 +211,7 @@ public class AuthenticatorAPI {
         info.put(0x03, new byte[16]);
         info.put(0x04, capabilities);
         info.put(0x05, 4096);
-        info.put(0x06, new int[]{1}); // PIN/UV Auth Protocol 1
+        info.put(0x06, new int[]{2, 1}); // PIN/UV Auth Protocols: 2 preferred, 1 for compatibility
         return success(Cbor.encode(info));
     }
 

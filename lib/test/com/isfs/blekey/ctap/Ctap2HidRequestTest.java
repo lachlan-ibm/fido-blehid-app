@@ -134,6 +134,7 @@ public class Ctap2HidRequestTest {
         // Pre-approve user presence so makeCredential / getAssertion succeed in tests
         // without needing a real UI interaction.
         txn.setUserPresent(true);
+        txn.setPinUvAuthProtocol(1);
         
         // Get the assignedCids field from CtapHid
         if (assignedCidsField == null) {
@@ -301,19 +302,7 @@ public class Ctap2HidRequestTest {
     }
 
     private static void resetUpLock() throws Exception {
-        Class<?> lockClass = Class.forName(
-            "com.isfs.blekey.authenticator.UxInteractionLock");
-        java.lang.reflect.Method get = lockClass.getDeclaredMethod("get");
-        get.setAccessible(true);
-        Object lock = get.invoke(null);
-
-        java.lang.reflect.Field expiresAtMs = lockClass.getDeclaredField("expiresAtMs");
-        expiresAtMs.setAccessible(true);
-        expiresAtMs.set(lock, 0L);
-
-        java.lang.reflect.Field cachedIkm = lockClass.getDeclaredField("cachedIkm");
-        cachedIkm.setAccessible(true);
-        cachedIkm.set(lock, null);
+        UxInteractionLock.get().reset();
     }
 
     /**

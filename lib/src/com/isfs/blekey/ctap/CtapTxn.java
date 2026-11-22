@@ -40,7 +40,10 @@ public class CtapTxn {
      * The PIN authentication token used for this transaction.
      */
     private byte[] pinAuthTkn;
-    
+
+    private int pinUvAuthProtocol = 0;
+
+
     /**
      * The passkey associated with this transaction.
      */
@@ -193,7 +196,10 @@ public class CtapTxn {
     public void setPinAuthTkn(byte[] pinAuthTkn) {
         this.pinAuthTkn = pinAuthTkn != null ? pinAuthTkn.clone() : null;
     }
-    
+   
+    public int getPinUvAuthProtocol() { return pinUvAuthProtocol; }
+    public void setPinUvAuthProtocol(int p) { this.pinUvAuthProtocol = p; }
+
     /**
      * Gets the passkey associated with this transaction.
      *

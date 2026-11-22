@@ -26,13 +26,11 @@ import java.security.KeyPair;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 
-import javax.crypto.Cipher;
 import javax.crypto.NoSuchPaddingException;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Handles the full PIN ceremony flow:
@@ -46,11 +44,11 @@ public class PinFlowHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(PinFlowHandler.class);
 
+    /** id of pinUvAuthProtocol in clientPin requests. */
+    private static final int KEY_PIN_UV_AUTH_PROTOCOL = 0x01;
+
     /** PIN token size in bytes (CTAP2 spec). */
     private static final int PIN_TOKEN_SIZE = 32;
-
-    /** AES block size in bytes. */
-    private static final int AES_BLOCK_SIZE = 16;
 
     /** CBOR map key for encrypted PIN hash in clientPin requests. */
     private static final int KEY_PIN_HASH_ENC = 0x06;
@@ -59,16 +57,6 @@ public class PinFlowHandler {
     private static final int KEY_PLATFORM_KEY_AGREEMENT = 0x03;
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
-    /** ThreadLocal AES-CBC cipher (NoPadding). */
-    private static final ThreadLocal<Cipher> AES_CBC_CIPHER =
-        ThreadLocal.withInitial(() -> {
-            try {
-                return Cipher.getInstance("AES/CBC/NoPadding");
-            } catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
-                throw new RuntimeException("AES/CBC/NoPadding cipher not available", e);
-            }
-        });
 
     private PinFlowHandler() {}
 
@@ -118,15 +106,32 @@ public class PinFlowHandler {
     }
 
     // -------------------------------------------------------------------------
+    // pin auth protocol helpers
+    // -------------------------------------------------------------------------
+
+    private static PinUvAuthProtocol resolveProtocol(Map<Integer, ?> req) {
+        return PinUvAuthProtocol.forId(req.get(KEY_PIN_UV_AUTH_PROTOCOL));
+    }
+
+    private static Ctap2StatusCode protocolError(Map<Integer, ?> req) {
+        return req.get(KEY_PIN_UV_AUTH_PROTOCOL) == null
+            ? Ctap2StatusCode.MISSING_PARAMETER
+            : Ctap2StatusCode.INVALID_PARAMETER;
+    }
+
+    // -------------------------------------------------------------------------
     // getKey
     // -------------------------------------------------------------------------
 
     /**
      * Handles the getKeyAgreement PIN sub-command.
-     * Returns synchronously — no UP/UV prompt, no lock claimed (plan §4.2 / G3).
      */
     private static byte[] getKey(CtapTxn txn, Map<Integer, Object> req) {
-        logger.debug("getKey: synchronous");
+        logger.debug("entry getKey");
+        if (resolveProtocol(req) == null) {
+            logger.warn("pinUvAuthProtocol missing/unsupported");
+            return CtapResponse.error(protocolError(req));
+        }
         return executeGetKey(txn);
     }
 
@@ -135,6 +140,7 @@ public class PinFlowHandler {
      * the COSE key response.
      */
     public static byte[] executeGetKey(CtapTxn txn) {
+        
         // Attempt to start out-of-band UX collection for this CID if it is idle.
         // DO NOT PROMPT FOR UPUV IF A GRANT IS ACTIVE — the bio gate is already in
         // progress or complete; do not start another one. UxTrigger.fireIfIdle()
@@ -179,7 +185,10 @@ public class PinFlowHandler {
             logger.warn("getTkn: null txn — OPERATION_DENIED");
             return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
         }
-
+        if (resolveProtocol(req) == null) {
+            logger.warn("pinUvAuthProtocol missing/unsupported");
+            return CtapResponse.error(protocolError(req));
+        }
         // Grant fast-path: bio done app-wide — no dialog or notification needed.
         // IKM is owned by UxInteractionLock; CredentialSeedDeriver reads from it directly.
         // The fast-path sets userPresent before calling processTkn to match prior behaviour.
@@ -213,7 +222,10 @@ public class PinFlowHandler {
             logger.warn("getTknBuiltIn: null txn — OPERATION_DENIED");
             return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
         }
-
+        if (resolveProtocol(req) == null) {
+            logger.warn("pinUvAuthProtocol missing/unsupported");
+            return CtapResponse.error(protocolError(req));
+        }
         if (PinSessionRegistry.getUvRetries() == 0) {
             logger.warn("getTknBuiltIn: uvRetries exhausted — UV_BLOCKED");
             return CtapResponse.error(Ctap2StatusCode.UV_BLOCKED);
@@ -250,12 +262,13 @@ public class PinFlowHandler {
                 txn.getPasskey() != null ? txn.getPasskey().getFileName() : "null",
                 txn.getPinHash() != null ? txn.getPinHash().length + "bytes" : "null",
                 txn.getEcdhKeyPair() != null ? "present" : "null");
+        PinUvAuthProtocol protocol = resolveProtocol(req);
         PublicKey clientKey = extractClientPublicKey(req);
         if (clientKey == null) {
             logger.warn("generateUvToken: clientKey null — MISSING_PARAMETER");
             return CtapResponse.error(Ctap2StatusCode.MISSING_PARAMETER);
         }
-        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        byte[] sharedSecret = performEcdhKeyAgreement(protocol, clientKey, txn);
         if (sharedSecret == null) {
             logger.warn("generateUvToken: sharedSecret null — OTHER");
             return CtapResponse.error(Ctap2StatusCode.OTHER);
@@ -263,8 +276,9 @@ public class PinFlowHandler {
         try {
             byte[] uvToken = new byte[PIN_TOKEN_SIZE];
             SECURE_RANDOM.nextBytes(uvToken);
-            byte[] encryptedUvToken = performAesCbc(Cipher.ENCRYPT_MODE, uvToken, sharedSecret);
+            byte[] encryptedUvToken = protocol.encrypt(sharedSecret, uvToken);
             // mc|ga permissions for GETTKNUV.
+            txn.setPinUvAuthProtocol(protocol.id());
             PinSessionRegistry.updateAuthenticationState(txn, txn.getPasskey(), uvToken,
                 txn.getPinHash(), 0x03);
             PinSessionRegistry.resetUvRetries();
@@ -286,12 +300,13 @@ public class PinFlowHandler {
                 Integer.toHexString(permissions),
                 txn.getPasskey() != null ? txn.getPasskey().getFileName() : "null",
                 txn.getEcdhKeyPair() != null ? "present" : "null");
+        PinUvAuthProtocol protocol = resolveProtocol(req);
         PublicKey clientKey = extractClientPublicKey(req);
         if (clientKey == null) {
             logger.warn("generateUvTokenWithPermissions: clientKey null — MISSING_PARAMETER");
             return CtapResponse.error(Ctap2StatusCode.MISSING_PARAMETER);
         }
-        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        byte[] sharedSecret = performEcdhKeyAgreement(protocol, clientKey, txn);
         if (sharedSecret == null) {
             logger.warn("generateUvTokenWithPermissions: sharedSecret null — OTHER");
             return CtapResponse.error(Ctap2StatusCode.OTHER);
@@ -299,7 +314,8 @@ public class PinFlowHandler {
         try {
             byte[] uvToken = new byte[PIN_TOKEN_SIZE];
             SECURE_RANDOM.nextBytes(uvToken);
-            byte[] encryptedUvToken = performAesCbc(Cipher.ENCRYPT_MODE, uvToken, sharedSecret);
+            byte[] encryptedUvToken = protocol.encrypt(sharedSecret, uvToken);
+            txn.setPinUvAuthProtocol(protocol.id());
             PinSessionRegistry.updateAuthenticationState(txn, txn.getPasskey(), uvToken,
                 txn.getPinHash(), permissions);
             PinSessionRegistry.resetUvRetries();
@@ -320,7 +336,6 @@ public class PinFlowHandler {
 
     private static byte[] pinRty(CtapTxn txn, Map<Integer, Object> req) {
         Map<Integer, Object> rsp = Map.of(0x03, PinSessionRegistry.getPinRetries());
-        PinSessionRegistry.decrementRetries();
         return CtapResponse.success(Cbor.encode(rsp));
     }
 
@@ -346,6 +361,7 @@ public class PinFlowHandler {
      * generates the token with permissions mc|ga (0x03) per CTAP 2.3 §6.5.5.7.1.
      */
     public static byte[] processTkn(CtapTxn txn, Map<Integer, ?> req) {
+        PinUvAuthProtocol protocol = resolveProtocol(req);
         PinHashValidationResult validation = validateAndExtractPinHash(req);
         if (!validation.isValid()) {
             return CtapResponse.error(validation.getErrorCode());
@@ -354,11 +370,11 @@ public class PinFlowHandler {
         if (clientKey == null) {
             return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
         }
-        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        byte[] sharedSecret = performEcdhKeyAgreement(protocol, clientKey, txn);
         if (sharedSecret == null) {
             return CtapResponse.error(Ctap2StatusCode.OTHER);
         }
-        return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret,
+        return processPinVerificationAndGenerateToken(protocol, txn, validation.getPinHashEnc(), sharedSecret,
                 0x03 /* mc | ga */);
     }
 
@@ -371,6 +387,10 @@ public class PinFlowHandler {
         if (txn == null) {
             logger.warn("getTknWithPinPermissions: null txn — OPERATION_DENIED");
             return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
+        }
+        if (resolveProtocol(req) == null) {
+            logger.warn("pinUvAuthProtocol missing/unsupported");
+            return CtapResponse.error(protocolError(req));
         }
         Object permObj = req.get(0x09);
         if (!(permObj instanceof Integer)) {
@@ -404,6 +424,7 @@ public class PinFlowHandler {
      * Identical to {@link #processTkn} except uses the caller-supplied permissions bitmask.
      */
     static byte[] processTknWithPermissions(CtapTxn txn, Map<Integer, ?> req, int permissions) {
+        PinUvAuthProtocol protocol = resolveProtocol(req);
         PinHashValidationResult validation = validateAndExtractPinHash(req);
         if (!validation.isValid()) {
             return CtapResponse.error(validation.getErrorCode());
@@ -412,11 +433,11 @@ public class PinFlowHandler {
         if (clientKey == null) {
             return CtapResponse.error(Ctap2StatusCode.INVALID_PARAMETER);
         }
-        byte[] sharedSecret = performEcdhKeyAgreement(clientKey, txn);
+        byte[] sharedSecret = performEcdhKeyAgreement(protocol, clientKey, txn);
         if (sharedSecret == null) {
             return CtapResponse.error(Ctap2StatusCode.OTHER);
         }
-        return processPinVerificationAndGenerateToken(txn, validation.getPinHashEnc(), sharedSecret,
+        return processPinVerificationAndGenerateToken(protocol, txn, validation.getPinHashEnc(), sharedSecret,
                 permissions);
     }
 
@@ -431,7 +452,10 @@ public class PinFlowHandler {
             logger.warn("getTknBuiltInWithPermissions: null txn — OPERATION_DENIED");
             return CtapResponse.error(Ctap2StatusCode.OPERATION_DENIED);
         }
-
+        if (resolveProtocol(req) == null) {
+            logger.warn("pinUvAuthProtocol missing/unsupported");
+            return CtapResponse.error(protocolError(req));
+        }
         if (PinSessionRegistry.getUvRetries() == 0) {
             logger.warn("getTknBuiltInWithPermissions: uvRetries exhausted — UV_BLOCKED");
             return CtapResponse.error(Ctap2StatusCode.UV_BLOCKED);
@@ -487,15 +511,21 @@ public class PinFlowHandler {
         return clientKey;
     }
 
-    private static byte[] performEcdhKeyAgreement(PublicKey clientKey, CtapTxn txn) {
+    private static byte[] performEcdhKeyAgreement(PinUvAuthProtocol protocol, PublicKey clientKey, CtapTxn txn) {
         if (txn == null || txn.getEcdhKeyPair() == null) {
             logger.error("performEcdhKeyAgreement: no ECDH key pair on transaction — "
                          + "GETKEY must precede GETTKN on the same CID");
             return null;
         }
-        java.security.PrivateKey priv = txn.getEcdhKeyPair().getPrivate();
-        byte[] sharedSecret = KeyUtils.decapsulate(clientKey, priv);
-        txn.setEcdhKeyPair(null); // erase from memory
+        byte[] sharedSecret;
+        try {
+            sharedSecret = protocol.decapsulate(clientKey, txn.getEcdhKeyPair().getPrivate());
+        } catch (GeneralSecurityException | RuntimeException e) {
+            logger.error("ECDH key agreement failed", e);
+            sharedSecret = null;
+        } finally {
+            txn.setEcdhKeyPair(null); // erase from memory
+        }
         if (sharedSecret != null) {
             logger.debug("ECDH key agreement successful, shared secret size: {} bytes",
                          sharedSecret.length);
@@ -505,12 +535,13 @@ public class PinFlowHandler {
         return sharedSecret;
     }
 
-    private static byte[] processPinVerificationAndGenerateToken(CtapTxn txn,
+    private static byte[] processPinVerificationAndGenerateToken(PinUvAuthProtocol protocol,
+                                                                   CtapTxn txn,
                                                                    byte[] pinHashEnc,
                                                                    byte[] sharedSecret,
                                                                    int permissions) {
         try {
-            PinVerificationResult pinVerification = decryptAndVerifyPin(pinHashEnc, sharedSecret);
+            PinVerificationResult pinVerification = decryptAndVerifyPin(protocol, pinHashEnc, sharedSecret);
             if (!pinVerification.isValid()) {
                 return CtapResponse.error(pinVerification.getErrorCode());
             }
@@ -520,8 +551,9 @@ public class PinFlowHandler {
 
             byte[] pinToken = new byte[PIN_TOKEN_SIZE];
             SECURE_RANDOM.nextBytes(pinToken);
-            byte[] encryptedPinToken = performAesCbc(Cipher.ENCRYPT_MODE, pinToken, sharedSecret);
-            logger.debug("Encrypted token: {}", encryptedPinToken);
+            byte[] encryptedPinToken = protocol.encrypt(sharedSecret, pinToken);
+            logger.debug("Encrypted token: {}", Arrays.toString(encryptedPinToken));
+            txn.setPinUvAuthProtocol(protocol.id());
             PinSessionRegistry.updateAuthenticationState(txn, pinVerification.getPasskey(),
                 pinToken, fullPinHash != null ? fullPinHash : pinHash, permissions);
             return new PinTokenResponseBuilder().withPinToken(encryptedPinToken).build();
@@ -531,10 +563,14 @@ public class PinFlowHandler {
         }
     }
 
-    private static PinVerificationResult decryptAndVerifyPin(byte[] pinHashEnc,
+    private static PinVerificationResult decryptAndVerifyPin(PinUvAuthProtocol protocol,
+                                                              byte[] pinHashEnc,
                                                               byte[] sharedSecret)
             throws GeneralSecurityException {
-        byte[] pinHash = performAesCbc(Cipher.DECRYPT_MODE, pinHashEnc, sharedSecret);
+        byte[] pinHash = protocol.decrypt(sharedSecret, pinHashEnc);
+        if (pinHash.length != 16) {
+            return PinVerificationResult.failure(Ctap2StatusCode.PIN_AUTH_INVALID);
+        }
         Passkey pkeyFile = verifyPinAndOpenPasskey(pinHash);
         if (pkeyFile == null) {
             Ctap2StatusCode errorCode = (PinSessionRegistry.getPinRetries() == 0)
@@ -575,15 +611,6 @@ public class PinFlowHandler {
             logger.warn("reconstructFullPinHash: failed", e);
             return null;
         }
-    }
-
-    private static byte[] performAesCbc(int mode, byte[] data, byte[] sharedSecret)
-            throws GeneralSecurityException {
-        SecretKeySpec keySpec = new SecretKeySpec(sharedSecret, "AES");
-        IvParameterSpec ivSpec = new IvParameterSpec(new byte[AES_BLOCK_SIZE]);
-        Cipher cipher = AES_CBC_CIPHER.get();
-        cipher.init(mode, keySpec, ivSpec);
-        return cipher.doFinal(data);
     }
 
     private static byte[] handleCryptographicException(Exception e) {

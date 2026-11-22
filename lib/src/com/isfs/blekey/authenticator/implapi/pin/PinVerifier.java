@@ -11,15 +11,8 @@ import com.isfs.blekey.util.Cbor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.security.InvalidKeyException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
-
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 
 /**
  * PIN/UV authentication verification — the flattened 2-method form (§6b).
@@ -38,26 +31,13 @@ public class PinVerifier {
 
     private static final Logger logger = LoggerFactory.getLogger(PinVerifier.class);
 
-    /** Supported PIN/UV auth protocol version (CTAP 2.3). */
-    private static final int SUPPORTED_PIN_UV_AUTH_PROTOCOL = 1;
-
-    /** ThreadLocal HmacSHA256 — one instance per thread, no synchronisation needed. */
-    private static final ThreadLocal<Mac> HMAC_SHA256 =
-        ThreadLocal.withInitial(() -> {
-            try {
-                return Mac.getInstance("HmacSHA256");
-            } catch (NoSuchAlgorithmException e) {
-                throw new RuntimeException("HmacSHA256 algorithm not available", e);
-            }
-        });
-
     private PinVerifier() {}
 
     /**
      * Entry point for PIN/UV authentication (flattened §6b).
      *
      * <p>Handles the null-param case inline, validates the protocol version,
-     * then delegates to {@link #verifyHmac} for the pure crypto check.</p>
+     * then delegates to {@link PinUvAuthProtocol#verify} for the pure crypto check.</p>
      *
      * @param req CTAP2 request map (keys 0x08 pinUvAuthParam, 0x09 protocol, 0x01 cdh)
      * @param txn the CTAP transaction holding the pinAuthToken
@@ -85,7 +65,8 @@ public class PinVerifier {
             logger.error("PIN/UV auth protocol not specified");
             return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
         }
-        if (params.pinUvAuthProtocol != SUPPORTED_PIN_UV_AUTH_PROTOCOL) {
+        PinUvAuthProtocol protocol = PinUvAuthProtocol.forId(params.pinUvAuthProtocol);
+        if (protocol == null) {
             logger.error("Unsupported PIN/UV auth protocol: {}", params.pinUvAuthProtocol);
             return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
         }
@@ -105,40 +86,16 @@ public class PinVerifier {
             return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
         }
 
-        PinUvAuthResult result = verifyHmac(pinAuthToken, params.pinUvAuthParam, clientDataHash);
-        if (result.errorCode == null) {
-            logger.debug("PIN/UV auth verification completed successfully");
+        if (txn.getPinUvAuthProtocol() != protocol.id()) {
+            logger.error("PIN auth token was issued under a different PIN/UV auth protocol");
+            return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
         }
+        PinUvAuthResult result = protocol.verify(pinAuthToken, clientDataHash, params.pinUvAuthParam)
+            ? new PinUvAuthResult(true, null)
+            : new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
         return result;
     }
 
-    /**
-     * Pure HMAC-SHA-256 check: verifies that
-     * {@code pinUvAuthParam == HMAC-SHA-256(pinAuthToken, clientDataHash)[0:16]}.
-     * No checked exception declared.
-     *
-     * @param pinAuthToken    symmetric key (full token from transaction)
-     * @param pinUvAuthParam  first 16 bytes of the expected HMAC
-     * @param clientDataHash  the message (32-byte SHA-256 of client data)
-     * @return {@link PinUvAuthResult} — {@code userVerified=true} on success
-     */
-    public static PinUvAuthResult verifyHmac(byte[] pinAuthToken, byte[] pinUvAuthParam,
-                                              byte[] clientDataHash) {
-        logger.debug("Verifying PIN/UV auth token HMAC");
-        try {
-            Mac mac = HMAC_SHA256.get();
-            mac.init(new SecretKeySpec(pinAuthToken, "HmacSHA256"));
-            byte[] expected16 = Arrays.copyOf(mac.doFinal(clientDataHash), 16);
-            if (!MessageDigest.isEqual(pinUvAuthParam, expected16)) {
-                logger.error("PIN/UV auth token verification failed: HMAC mismatch");
-                return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
-            }
-            return new PinUvAuthResult(true, null);
-        } catch (InvalidKeyException e) {
-            logger.error("Invalid key during PIN/UV auth token verification", e);
-            return new PinUvAuthResult(false, Ctap2StatusCode.PIN_AUTH_INVALID);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

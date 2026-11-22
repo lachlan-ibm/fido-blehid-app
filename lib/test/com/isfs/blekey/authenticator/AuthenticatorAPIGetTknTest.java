@@ -166,6 +166,7 @@ public class AuthenticatorAPIGetTknTest {
         setupFastPath(txn, TEST_CID);
 
         Map<Integer, Object> req = new HashMap<>();
+        req.put(0x01, 1);
         req.put(0x06, Integer.valueOf(42)); // wrong type
 
         byte[] response = (byte[]) getTknMethod.invoke(null, txn, req);
@@ -184,6 +185,7 @@ public class AuthenticatorAPIGetTknTest {
         setupFastPath(txn, TEST_CID);
 
         Map<Integer, Object> req = new HashMap<>();
+        req.put(0x01, 1);
         req.put(0x06, new byte[16]); // valid byte[] pinHashEnc
         // 0x03 (keyAgreement) deliberately absent
 
@@ -210,6 +212,7 @@ public class AuthenticatorAPIGetTknTest {
         Map<Integer, Object> clientCoseKey = KeyUtils.toCoseKey(clientKp.getPublic());
 
         Map<Integer, Object> req = new HashMap<>();
+        req.put(0x01, 1);
         req.put(0x06, new byte[16]);          // pinHashEnc
         req.put(0x03, clientCoseKey);          // keyAgreement
 
@@ -235,6 +238,7 @@ public class AuthenticatorAPIGetTknTest {
         txn.setCid(TEST_CID);
 
         Map<Integer, Object> req = new HashMap<>();
+        req.put(0x01, 1);
         req.put(0x06, new byte[16]);
 
         // userPresenceCallback is null (set in setUp)
@@ -260,6 +264,7 @@ public class AuthenticatorAPIGetTknTest {
         pinRequest.setAccessible(true);
 
         Map<Integer, Object> req = new HashMap<>();
+        req.put(0x01, 1);
         req.put(2, 0x02); // subCommand = GETKEY
 
         byte[] response = (byte[]) pinRequest.invoke(null, txn, req);
@@ -289,6 +294,7 @@ public class AuthenticatorAPIGetTknTest {
         pinRequest.setAccessible(true);
 
         Map<Integer, Object> req = new HashMap<>();
+        req.put(0x01, 1);
         req.put(2, 0x02); // GETKEY
 
         byte[] response = (byte[]) pinRequest.invoke(null, txn, req);
